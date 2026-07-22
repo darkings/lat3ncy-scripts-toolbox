@@ -29,13 +29,20 @@ def log(message):
         log_file.write(f"[{timestamp}] {message}\n")
 
 
+def safe_log(message):
+    try:
+        log(message)
+    except Exception:
+        pass
+
+
 def find_tesseract():
     configured = os.environ.get("TESSERACT_CMD")
-    if configured and os.path.exists(configured):
+    if configured and os.path.isfile(configured):
         return configured
 
     for path in COMMON_TESSERACT_PATHS:
-        if os.path.exists(path):
+        if os.path.isfile(path):
             return path
 
     return shutil.which("tesseract")
@@ -223,7 +230,7 @@ def run_tesseract(tesseract_cmd, image_path, output_base, lang, psm):
     )
 
 
-def main():
+def run_ocr():
     try:
         if os.path.exists(LOG_PATH):
             os.remove(LOG_PATH)
@@ -301,6 +308,18 @@ def main():
         notify("OCR 未识别到文字", "请重新框选更清晰的区域")
 
     return 0
+
+
+def main():
+    try:
+        return run_ocr()
+    except Exception as error:
+        error_message = str(error).strip() or error.__class__.__name__
+        safe_log(f"fatal_error={error.__class__.__name__}: {error_message}")
+        if len(error_message) > 120:
+            error_message = error_message[:120] + "..."
+        notify("OCR 失败", error_message)
+        return 1
 
 
 if __name__ == "__main__":

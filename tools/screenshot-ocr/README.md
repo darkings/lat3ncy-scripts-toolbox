@@ -57,3 +57,4 @@ setx TESSERACT_CMD "C:\Program Files\Tesseract-OCR\tesseract.exe"
 - 中文识别失败：确认 `chi_sim.traineddata` 已安装，并检查 `OCR_LANG`。
 - 识别为空或不准：查看两张调试图，重新选择更清晰、更紧凑的区域，或尝试其他 `OCR_PSM`。
 - Tesseract 执行失败：查看 `last_ocr.log` 中的 `stderr` 和实际命令。
+- `TESSERACT_CMD` 无效或 OCR 进程启动异常：工具会尽力写入 `last_ocr.log`、显示“OCR 失败”通知并返回错误状态。

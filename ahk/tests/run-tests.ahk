@@ -23,6 +23,14 @@ AssertContains(haystack, needle, name) {
     }
 }
 
+AssertNotContains(haystack, needle, name) {
+    global resultFile
+    if InStr(haystack, needle) {
+        FileAppend "FAIL: " name "`nUnexpected: " needle "`n", resultFile
+        ExitApp 1
+    }
+}
+
 AssertThrows(callback, expectedMessage, name) {
     global resultFile
     try callback.Call()
@@ -87,6 +95,32 @@ ValidateFeatureHotkey("wildcard", "*^a", identityRegistry)
 AssertEqual("https://example.com/a", OpenSelectedTarget.Normalize("https://example.com/a"), "preserve URL target")
 AssertEqual("url", OpenSelectedTarget.Classify("https://example.com/a"), "classify URL target")
 AssertEqual("hello%20%E4%B8%AD%E6%96%87", SearchSelectedText.UriEncode("hello 中文"), "UTF-8 URI encoding")
+AssertEqual("main.py", OpenSelectedTarget.TargetLabel("D:\Code\main.py"), "open target label")
+AssertEqual("main.py", LocateSelectedTarget.TargetLabel("D:\Code\main.py"), "locate target label")
+for targetClass in [OpenSelectedTarget, LocateSelectedTarget] {
+    AssertEqual("D:\Code\main.py", targetClass.Normalize("file:///D:/Code/main.py"), "existing local file URI")
+    AssertEqual("C:\Program Files\a.txt", targetClass.Normalize("file:///C:/Program%20Files/a.txt"), "escaped local file URI")
+    AssertEqual("\\server\share\a b.txt", targetClass.Normalize("file://server/share/a%20b.txt"), "escaped UNC file URI")
+}
+for featureClass in [SearchSelectedText, OpenSelectedTarget, LocateSelectedTarget] {
+    AssertEqual("BoundFunc", Type(featureClass.HotkeyCallback), "selected action bound hotkey callback")
+    AssertEqual("BoundFunc", Type(featureClass.HideTipCallback), "selected action bound tooltip callback")
+    AssertEqual(true, featureClass.HotkeyCallback == featureClass.HotkeyCallback, "selected action stable hotkey callback")
+    AssertEqual(true, featureClass.HideTipCallback == featureClass.HideTipCallback, "selected action stable tooltip callback")
+    featureClass.HideTipCallback.Call()
+}
+searchSource := FileRead(A_ScriptDir "\..\features\search-selected-text.ahk", "UTF-8")
+openSource := FileRead(A_ScriptDir "\..\features\open-selected-target.ahk", "UTF-8")
+locateSource := FileRead(A_ScriptDir "\..\features\locate-selected-target.ahk", "UTF-8")
+AssertNotContains(searchSource, "OpenSelectedTarget", "search does not depend on open")
+AssertNotContains(searchSource, "LocateSelectedTarget", "search does not depend on locate")
+AssertNotContains(openSource, "SearchSelectedText", "open does not depend on search")
+AssertNotContains(openSource, "LocateSelectedTarget", "open does not depend on locate")
+AssertNotContains(locateSource, "SearchSelectedText", "locate does not depend on search")
+AssertNotContains(locateSource, "OpenSelectedTarget", "locate does not depend on open")
+AssertContains(searchSource, "打开搜索失败", "search Run failure hint")
+AssertContains(openSource, "打开目标失败", "open Run failure hint")
+AssertContains(locateSource, "定位目标失败", "locate Run failure hint")
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

@@ -20,8 +20,12 @@ class SearchSelectedText {
                 return
             }
 
-            Run "https://www.google.com/search?q=" this.UriEncode(selected)
-            this.ShowTip("正在搜索：" this.ShortText(selected))
+            try {
+                Run "https://www.google.com/search?q=" this.UriEncode(selected)
+                this.ShowTip("正在搜索：" this.ShortText(selected))
+            } catch {
+                this.ShowTip("打开搜索失败")
+            }
         } finally {
             A_Clipboard := savedClipboard
         }

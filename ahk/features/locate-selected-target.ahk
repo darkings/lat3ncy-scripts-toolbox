@@ -11,15 +11,53 @@ class LocateSelectedTarget {
                 value := Trim(SubStr(value, 2, -1))
         }
 
-        if RegExMatch(value, "i)^file:///") {
-            value := RegExReplace(value, "i)^file:///+")
-            value := StrReplace(value, "/", "\")
-        }
+        if RegExMatch(value, "i)^file://")
+            value := this.FileUriToPath(value)
 
         if RegExMatch(value, "i)^(?:[A-Z]:\\|\\\\)")
             value := RegExReplace(value, ":\d+(?::\d+)?$")
 
         return value
+    }
+
+    static FileUriToPath(uri) {
+        capacity := 32768
+        pathBuffer := Buffer(capacity * 2, 0)
+        pathLength := capacity
+        try {
+            result := DllCall("Shlwapi\PathCreateFromUrlW"
+                , "Str", uri
+                , "Ptr", pathBuffer.Ptr
+                , "UInt*", &pathLength
+                , "UInt", 0
+                , "Int")
+            if (result = 0)
+                return StrGet(pathBuffer, pathLength, "UTF-16")
+        }
+        return this.FileUriToPathFallback(uri)
+    }
+
+    static FileUriToPathFallback(uri) {
+        if RegExMatch(uri, "i)^file:///")
+            path := RegExReplace(uri, "i)^file:///+")
+        else
+            path := "\\" RegExReplace(uri, "i)^file://+")
+        path := StrReplace(path, "/", "\")
+
+        capacity := StrLen(path) + 1
+        decoded := Buffer(capacity * 2, 0)
+        decodedLength := capacity
+        try {
+            result := DllCall("Shlwapi\UrlUnescapeW"
+                , "Str", path
+                , "Ptr", decoded.Ptr
+                , "UInt*", &decodedLength
+                , "UInt", 0x00040000
+                , "Int")
+            if (result = 0)
+                return StrGet(decoded, decodedLength, "UTF-16")
+        }
+        return path
     }
 
     static Classify(value) {
@@ -65,14 +103,20 @@ class LocateSelectedTarget {
 
         target := this.GetSelected()
         kind := this.Classify(target)
-        if (kind = "file") {
-            Run 'explorer.exe /select,"' target '"'
-            this.ShowTip("正在定位：" this.TargetLabel(target))
-        } else if (kind = "directory") {
-            Run target
-            this.ShowTip("正在定位：" this.TargetLabel(target))
-        } else
+        if (kind != "file" && kind != "directory") {
             this.ShowTip("选中内容不是有效文件或文件夹")
+            return
+        }
+
+        try {
+            if (kind = "file")
+                Run 'explorer.exe /select,"' target '"'
+            else
+                Run target
+            this.ShowTip("正在定位：" this.TargetLabel(target))
+        } catch {
+            this.ShowTip("定位目标失败")
+        }
     }
 
     static ShortText(text, maxLength := 36) {
@@ -84,7 +128,7 @@ class LocateSelectedTarget {
         if RegExMatch(target, "i)^https?://")
             return this.ShortText(target)
         SplitPath target, &name
-        return this.ShortText(name || target)
+        return this.ShortText(name ? name : target)
     }
 
     static ShowTip(message) {

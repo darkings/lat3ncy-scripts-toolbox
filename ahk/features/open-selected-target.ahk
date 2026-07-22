@@ -11,15 +11,53 @@ class OpenSelectedTarget {
                 value := Trim(SubStr(value, 2, -1))
         }
 
-        if RegExMatch(value, "i)^file:///") {
-            value := RegExReplace(value, "i)^file:///+")
-            value := StrReplace(value, "/", "\")
-        }
+        if RegExMatch(value, "i)^file://")
+            value := this.FileUriToPath(value)
 
         if RegExMatch(value, "i)^(?:[A-Z]:\\|\\\\)")
             value := RegExReplace(value, ":\d+(?::\d+)?$")
 
         return value
+    }
+
+    static FileUriToPath(uri) {
+        capacity := 32768
+        pathBuffer := Buffer(capacity * 2, 0)
+        pathLength := capacity
+        try {
+            result := DllCall("Shlwapi\PathCreateFromUrlW"
+                , "Str", uri
+                , "Ptr", pathBuffer.Ptr
+                , "UInt*", &pathLength
+                , "UInt", 0
+                , "Int")
+            if (result = 0)
+                return StrGet(pathBuffer, pathLength, "UTF-16")
+        }
+        return this.FileUriToPathFallback(uri)
+    }
+
+    static FileUriToPathFallback(uri) {
+        if RegExMatch(uri, "i)^file:///")
+            path := RegExReplace(uri, "i)^file:///+")
+        else
+            path := "\\" RegExReplace(uri, "i)^file://+")
+        path := StrReplace(path, "/", "\")
+
+        capacity := StrLen(path) + 1
+        decoded := Buffer(capacity * 2, 0)
+        decodedLength := capacity
+        try {
+            result := DllCall("Shlwapi\UrlUnescapeW"
+                , "Str", path
+                , "Ptr", decoded.Ptr
+                , "UInt*", &decodedLength
+                , "UInt", 0x00040000
+                , "Int")
+            if (result = 0)
+                return StrGet(decoded, decodedLength, "UTF-16")
+        }
+        return path
     }
 
     static Classify(value) {
@@ -66,8 +104,12 @@ class OpenSelectedTarget {
         target := this.GetSelected()
         kind := this.Classify(target)
         if (kind = "url" || kind = "file" || kind = "directory") {
-            Run target
-            this.ShowTip("正在打开：" this.TargetLabel(target))
+            try {
+                Run target
+                this.ShowTip("正在打开：" this.TargetLabel(target))
+            } catch {
+                this.ShowTip("打开目标失败")
+            }
         } else
             this.ShowTip("选中内容不是有效路径或网址")
     }
@@ -81,7 +123,7 @@ class OpenSelectedTarget {
         if RegExMatch(target, "i)^https?://")
             return this.ShortText(target)
         SplitPath target, &name
-        return this.ShortText(name || target)
+        return this.ShortText(name ? name : target)
     }
 
     static ShowTip(message) {

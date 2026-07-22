@@ -135,12 +135,12 @@ AutoHotkey 自动测试覆盖：
 - 默认快捷键及重复快捷键检测。
 - 选中目标规范化、分类和 URL 编码。
 - Caps Lock 状态机和隐藏文件状态转换。
-- Smart Paste 对文本、图片、文件列表及未知类型的分派。
-- Smart Paste 源码包含所需 Windows 剪贴板格式和 PowerShell 边界。
+- Smart Paste 对非图片和文件列表原生粘贴、资源管理器图片保存，以及 VS Code 单目录探测与原生回退的分派。
+- Smart Paste 源码包含所需 Windows 剪贴板格式、可逆剪贴板事务和 PowerShell 边界。
 
 PowerShell 辅助脚本通过 PowerShell AST 解析检查语法。Python 工具通过 `compileall` 检查语法，并验证启动器中不存在原 `D:\Scripts` 或特定 Python 安装路径。
 
-人工验收包括：逐项注释 `main.ahk` 的功能、修改 `shortcuts.ahk` 后热键生效、文本无格式粘贴、资源管理器图片保存、非资源管理器图片粘贴、资源管理器文件粘贴、目标打开与定位、隐藏文件切换、Caps Lock 输入法行为及 OCR 完整流程。
+人工验收包括：逐项注释 `main.ahk` 的功能、修改 `shortcuts.ahk` 后热键生效、非图片和文件列表执行原生 `Ctrl+V`、资源管理器普通目录保存图片、资源管理器虚拟位置显示提示、VS Code 文件栏选中单个已存在目录时保存图片，以及 VS Code 选中文件、多选、编辑器聚焦、探测超时或 Copy Path 绑定不一致时恢复剪贴板并原生回退。还应覆盖目标打开与定位、隐藏文件切换、Caps Lock 输入法行为及 OCR 完整流程。
 
 ## 文档
 

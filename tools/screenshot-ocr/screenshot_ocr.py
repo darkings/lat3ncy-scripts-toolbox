@@ -13,6 +13,7 @@ COMMON_TESSERACT_PATHS = [
     r"C:\Program Files\Tesseract-OCR\tesseract.exe",
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
 ]
+DEFAULT_OCR_LANG = "chi_sim+eng"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_TESSDATA_DIR = os.path.join(SCRIPT_DIR, "tessdata")
@@ -40,8 +41,13 @@ def find_tesseract():
     return shutil.which("tesseract")
 
 
+def normalize_language_spec(lang):
+    return "+".join(token.strip() for token in lang.split("+") if token.strip())
+
+
 def has_complete_local_tessdata(lang, directory=LOCAL_TESSDATA_DIR):
-    languages = [token.strip() for token in lang.split("+") if token.strip()]
+    normalized_lang = normalize_language_spec(lang)
+    languages = normalized_lang.split("+") if normalized_lang else []
     if not languages or not os.path.isdir(directory):
         return False
     return all(
@@ -187,16 +193,19 @@ def preprocess(image):
 
 
 def run_tesseract(tesseract_cmd, image_path, output_base, lang, psm):
+    normalized_lang = normalize_language_spec(lang)
     cmd = [
         tesseract_cmd,
         image_path,
         output_base,
         "-l",
-        lang,
+        normalized_lang,
         "--psm",
         str(psm),
     ]
-    use_local_tessdata = has_complete_local_tessdata(lang, LOCAL_TESSDATA_DIR)
+    use_local_tessdata = has_complete_local_tessdata(
+        normalized_lang, LOCAL_TESSDATA_DIR
+    )
     if use_local_tessdata:
         cmd.extend(["--tessdata-dir", LOCAL_TESSDATA_DIR])
 
@@ -241,7 +250,7 @@ def main():
     image = preprocess(image)
     image.save(LAST_PROCESSED_PATH)
 
-    lang = os.environ.get("OCR_LANG", "chi_sim+eng")
+    lang = normalize_language_spec(os.environ.get("OCR_LANG", "")) or DEFAULT_OCR_LANG
     psm_values = [
         os.environ.get("OCR_PSM", "6"),
         "7",

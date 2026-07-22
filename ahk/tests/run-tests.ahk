@@ -139,6 +139,11 @@ AssertContains(smartPasteHelperSource, '[IO.FileMode]::CreateNew', "image helper
 AssertContains(smartPasteHelperSource, '[IO.File]::Move(', "image helper atomically publishes PNG")
 AssertContains(smartPasteHelperSource, '$stream.Length -le 0', "image helper rejects empty PNG")
 AssertContains(smartPasteHelperSource, '[Text.UTF8Encoding]::new($false)', "image helper writes UTF-8 without BOM")
+AssertContains(smartPasteHelperSource, 'GetDataObject()', "image helper reads clipboard data object")
+AssertContains(smartPasteHelperSource, "GetDataPresent('PNG')", "image helper detects registered PNG data")
+AssertContains(smartPasteHelperSource, "GetData('PNG')", "image helper reads registered PNG data")
+AssertContains(smartPasteHelperSource, '[Drawing.Image]::FromStream', "image helper decodes registered PNG stream")
+AssertNotContains(smartPasteHelperSource, 'Remove-Item -LiteralPath $outputPath', "image helper never removes published output")
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

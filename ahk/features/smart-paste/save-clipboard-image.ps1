@@ -10,20 +10,44 @@ Add-Type -AssemblyName System.Drawing
 if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
     throw 'Destination directory does not exist.'
 }
-if (-not [Windows.Forms.Clipboard]::ContainsImage()) {
-    throw 'Clipboard does not contain an image.'
-}
-
 $image = $null
+$ownedPngStream = $null
 $stream = $null
 $temporaryPath = $null
 $outputPath = $null
-$completed = $false
 
 try {
-    $image = [Windows.Forms.Clipboard]::GetImage()
+    $dataObject = [Windows.Forms.Clipboard]::GetDataObject()
+    if ([Windows.Forms.Clipboard]::ContainsImage()) {
+        $image = [Windows.Forms.Clipboard]::GetImage()
+    } elseif ($dataObject -and $dataObject.GetDataPresent('PNG')) {
+        $pngData = $dataObject.GetData('PNG')
+        if ($pngData -is [byte[]]) {
+            $ownedPngStream = [IO.MemoryStream]::new($pngData, $false)
+        } elseif ($pngData -is [IO.Stream]) {
+            $ownedPngStream = [IO.MemoryStream]::new()
+            $originalPosition = $null
+            if ($pngData.CanSeek) {
+                $originalPosition = $pngData.Position
+                $pngData.Position = 0
+            }
+            try {
+                $pngData.CopyTo($ownedPngStream)
+            } finally {
+                if ($null -ne $originalPosition) {
+                    $pngData.Position = $originalPosition
+                }
+            }
+            $ownedPngStream.Position = 0
+        }
+
+        if ($ownedPngStream) {
+            $image = [Drawing.Image]::FromStream($ownedPngStream)
+        }
+    }
+
     if ($null -eq $image) {
-        throw 'Clipboard image could not be read.'
+        throw 'Clipboard does not contain a readable image.'
     }
 
     $temporaryPath = Join-Path $Destination ('.Clipboard-{0}.tmp' -f [guid]::NewGuid().ToString('N'))
@@ -61,7 +85,6 @@ try {
     }
 
     [IO.File]::WriteAllText($ResultFile, $outputPath, [Text.UTF8Encoding]::new($false))
-    $completed = $true
 } finally {
     if ($stream) {
         $stream.Dispose()
@@ -69,10 +92,10 @@ try {
     if ($image) {
         $image.Dispose()
     }
+    if ($ownedPngStream) {
+        $ownedPngStream.Dispose()
+    }
     if ($temporaryPath -and (Test-Path -LiteralPath $temporaryPath)) {
         Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $completed -and $outputPath -and (Test-Path -LiteralPath $outputPath)) {
-        Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
     }
 }

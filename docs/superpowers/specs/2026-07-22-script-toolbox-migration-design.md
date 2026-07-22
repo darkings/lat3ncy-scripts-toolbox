@@ -93,7 +93,8 @@ lat3ncy-scripts-toolbox/
 ## Smart Paste
 
 > **后续变更：** 本节的 `Ctrl+Shift+V` 与纯文本分支已由
-> `2026-07-22-ctrl-v-image-paste-design.md` 取代；当前行为以该文档为准。
+> [`2026-07-22-ctrl-v-image-paste-design.md`](2026-07-22-ctrl-v-image-paste-design.md)
+> 取代；当前行为以该文档为准。
 
 Smart Paste 先对剪贴板类型和活动窗口分类，再选择行为：
 

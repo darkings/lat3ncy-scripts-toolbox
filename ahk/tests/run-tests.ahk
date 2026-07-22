@@ -84,6 +84,9 @@ ValidateFeatureHotkey("plain", "^a", identityRegistry)
 AssertThrows(() => ValidateFeatureHotkey("tilde", "~^a", identityRegistry), "快捷键冲突", "tilde callback identity")
 AssertThrows(() => ValidateFeatureHotkey("dollar", "$^a", identityRegistry), "快捷键冲突", "dollar callback identity")
 ValidateFeatureHotkey("wildcard", "*^a", identityRegistry)
+AssertEqual("https://example.com/a", OpenSelectedTarget.Normalize("https://example.com/a"), "preserve URL target")
+AssertEqual("url", OpenSelectedTarget.Classify("https://example.com/a"), "classify URL target")
+AssertEqual("hello%20%E4%B8%AD%E6%96%87", SearchSelectedText.UriEncode("hello 中文"), "UTF-8 URI encoding")
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

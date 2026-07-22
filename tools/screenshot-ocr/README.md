@@ -16,7 +16,7 @@ python -m pip install pillow pytesseract
 winget install UB-Mannheim.TesseractOCR
 ```
 
-简体中文识别需要 `chi_sim.traineddata`。可在安装 Tesseract 时选择简体中文语言包，或从 Tesseract 官方 `tessdata` 仓库下载该文件并放入 Tesseract 安装目录的 `tessdata` 文件夹。也可以在本工具目录新建 `tessdata` 文件夹并放入所需 `.traineddata` 文件；这些模型是外部依赖，不纳入本仓库。
+简体中文识别需要 `chi_sim.traineddata`。可在安装 Tesseract 时选择简体中文语言包，或从 Tesseract 官方 `tessdata` 仓库下载该文件并放入 Tesseract 安装目录的 `tessdata` 文件夹。也可以在本工具目录新建 `tessdata` 文件夹并放入所需 `.traineddata` 文件；只有当 `OCR_LANG` 请求的组合语言模型全部存在（例如 `chi_sim+eng` 同时具备两个文件）时才启用本地覆盖，否则继续使用系统 Tesseract 的默认模型目录。这些模型是外部依赖，不纳入本仓库。
 
 ## 启动
 

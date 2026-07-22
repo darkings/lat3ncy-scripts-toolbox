@@ -40,6 +40,16 @@ def find_tesseract():
     return shutil.which("tesseract")
 
 
+def has_complete_local_tessdata(lang, directory=LOCAL_TESSDATA_DIR):
+    languages = [token.strip() for token in lang.split("+") if token.strip()]
+    if not languages or not os.path.isdir(directory):
+        return False
+    return all(
+        os.path.isfile(os.path.join(directory, f"{language}.traineddata"))
+        for language in languages
+    )
+
+
 def copy_to_clipboard(text):
     root = tk.Tk()
     root.withdraw()
@@ -186,11 +196,12 @@ def run_tesseract(tesseract_cmd, image_path, output_base, lang, psm):
         "--psm",
         str(psm),
     ]
-    if os.path.isdir(LOCAL_TESSDATA_DIR):
+    use_local_tessdata = has_complete_local_tessdata(lang, LOCAL_TESSDATA_DIR)
+    if use_local_tessdata:
         cmd.extend(["--tessdata-dir", LOCAL_TESSDATA_DIR])
 
     env = os.environ.copy()
-    if os.path.isdir(LOCAL_TESSDATA_DIR):
+    if use_local_tessdata:
         env["TESSDATA_PREFIX"] = LOCAL_TESSDATA_DIR
 
     log("Running: " + " ".join(f'"{part}"' if " " in part else part for part in cmd))

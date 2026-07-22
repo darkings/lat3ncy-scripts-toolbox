@@ -74,6 +74,7 @@ class FakeSmartPasteClipboard {
         this.waitResult := waitResult
         this.throwOnWait := throwOnWait
         this.events := IsSet(events) ? events : []
+        this.waitTimeout := unset
         this.restored := false
         this.restoredValue := ""
     }
@@ -92,7 +93,8 @@ class FakeSmartPasteClipboard {
         return this.copyValue
     }
 
-    Wait(*) {
+    Wait(timeoutSeconds) {
+        this.waitTimeout := timeoutSeconds
         this.events.Push("Wait")
         if this.throwOnWait
             throw Error("simulated clipboard failure")
@@ -176,6 +178,7 @@ try {
         "Capture->Clear->Send->Wait->ReadText->Restore",
         EventSequence(successEvents),
         "VS Code success clipboard order")
+    AssertEqual(0.75, successClipboard.waitTimeout, "VS Code success wait timeout")
 
     timeoutEvents := []
     timeoutClipboard := FakeSmartPasteClipboard(vsCodeTestRoot, false, false, timeoutEvents)
@@ -186,6 +189,7 @@ try {
         "Capture->Clear->Send->Wait->Restore",
         EventSequence(timeoutEvents),
         "VS Code timeout skips clipboard read")
+    AssertEqual(0.75, timeoutClipboard.waitTimeout, "VS Code timeout wait timeout")
 
     errorEvents := []
     errorClipboard := FakeSmartPasteClipboard(vsCodeTestRoot, true, true, errorEvents)
@@ -199,6 +203,7 @@ try {
         "Capture->Clear->Send->Wait->Restore",
         EventSequence(errorEvents),
         "VS Code exception restores after failed wait")
+    AssertEqual(0.75, errorClipboard.waitTimeout, "VS Code exception wait timeout")
 } finally {
     FileDelete vsCodeTestFile
     DirDelete vsCodeTestRoot

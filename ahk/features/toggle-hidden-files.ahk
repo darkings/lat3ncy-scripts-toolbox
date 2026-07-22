@@ -7,7 +7,10 @@ class ToggleHiddenFiles {
         return {value: 1, visible: true}
     }
 
-    static Toggle(*) {
+    static Toggle(_hotkeyName := "", receiverProbe := unset) {
+        if IsSet(receiverProbe)
+            return receiverProbe.Call(this)
+
         registryKey := "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
 
         try {
@@ -45,8 +48,8 @@ class ToggleHiddenFiles {
 
     static ShowTip(message) {
         ToolTip message
-        SetTimer ToggleHiddenFiles.HideTip, 0
-        SetTimer ToggleHiddenFiles.HideTip, -1500
+        SetTimer ToggleHiddenFiles.HideTipCallback, 0
+        SetTimer ToggleHiddenFiles.HideTipCallback, -1500
     }
 
     static HideTip() {
@@ -54,5 +57,8 @@ class ToggleHiddenFiles {
     }
 }
 
+ToggleHiddenFiles.HotkeyCallback := ObjBindMethod(ToggleHiddenFiles, "Toggle")
+ToggleHiddenFiles.HideTipCallback := ObjBindMethod(ToggleHiddenFiles, "HideTip")
+
 if !IsToolboxTestMode()
-    RegisterFeatureHotkey("显示隐藏文件", Shortcuts.ToggleHiddenFiles, ToggleHiddenFiles.Toggle)
+    RegisterFeatureHotkey("显示隐藏文件", Shortcuts.ToggleHiddenFiles, ToggleHiddenFiles.HotkeyCallback)

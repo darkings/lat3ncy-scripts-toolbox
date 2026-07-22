@@ -12,7 +12,7 @@ IsToolboxTestMode() {
 
 NormalizeFeatureHotkey(shortcut) {
     shortcut := Trim(shortcut)
-    prefixFlags := Map("~", false, "*", false, "$", false)
+    prefixFlags := Map("*", false)
     modifiers := Map(
         "^", Map("", false, "<", false, ">", false),
         "!", Map("", false, "<", false, ">", false),
@@ -22,6 +22,10 @@ NormalizeFeatureHotkey(shortcut) {
 
     while (position <= StrLen(shortcut)) {
         token := SubStr(shortcut, position, 1)
+        if (token = "~" || token = "$") {
+            position += 1
+            continue
+        }
         if prefixFlags.Has(token) {
             prefixFlags[token] := true
             position += 1
@@ -46,7 +50,7 @@ NormalizeFeatureHotkey(shortcut) {
     }
 
     normalized := ""
-    for prefix in ["~", "*", "$"] {
+    for prefix in ["*"] {
         if prefixFlags[prefix]
             normalized .= prefix
     }

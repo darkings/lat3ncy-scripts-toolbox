@@ -7,7 +7,10 @@ class CapsLockIme {
         return heldMilliseconds >= 500 ? "enable-caps" : "toggle-input"
     }
 
-    static Handle(*) {
+    static Handle(_hotkeyName := "", receiverProbe := unset) {
+        if IsSet(receiverProbe)
+            return receiverProbe.Call(this)
+
         wasLocked := GetKeyState("CapsLock", "T")
         pressedAt := A_TickCount
         KeyWait "CapsLock"
@@ -88,8 +91,8 @@ class CapsLockIme {
 
     static ShowTip(message) {
         ToolTip message
-        SetTimer CapsLockIme.HideTip, 0
-        SetTimer CapsLockIme.HideTip, -1500
+        SetTimer CapsLockIme.HideTipCallback, 0
+        SetTimer CapsLockIme.HideTipCallback, -1500
     }
 
     static HideTip() {
@@ -97,5 +100,8 @@ class CapsLockIme {
     }
 }
 
+CapsLockIme.HotkeyCallback := ObjBindMethod(CapsLockIme, "Handle")
+CapsLockIme.HideTipCallback := ObjBindMethod(CapsLockIme, "HideTip")
+
 if !IsToolboxTestMode()
-    RegisterFeatureHotkey("Caps Lock / 输入法", Shortcuts.CapsLockIme, CapsLockIme.Handle)
+    RegisterFeatureHotkey("Caps Lock / 输入法", Shortcuts.CapsLockIme, CapsLockIme.HotkeyCallback)

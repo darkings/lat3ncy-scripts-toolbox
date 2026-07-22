@@ -56,6 +56,7 @@ class Shortcuts {
     static AlwaysOnTop := "^#t"
     static ToggleHiddenFiles := "#+."
     static SearchSelectedText := "^+g"
+    static SmartPaste := "^+v"
     static OpenSelectedTarget := "^!o"
     static LocateSelectedTarget := "^!e"
 }
@@ -110,12 +111,25 @@ try {
         (Join-Path $featureRoot 'always-on-top.ahk'),
         (Join-Path $featureRoot 'toggle-hidden-files.ahk'),
         (Join-Path $featureRoot 'search-selected-text.ahk'),
+        (Join-Path (Join-Path $featureRoot 'smart-paste') 'smart-paste.ahk'),
         (Join-Path $featureRoot 'open-selected-target.ahk'),
         (Join-Path $featureRoot 'locate-selected-target.ahk')
     )
     foreach ($featurePath in $independentFeatures) {
         Test-FeatureLoadsIndependently -AutoHotkey $autoHotkey -FeaturePath $featurePath
     }
+
+    $helperPath = Join-Path (Join-Path $featureRoot 'smart-paste') 'save-clipboard-image.ps1'
+    $parseErrors = $null
+    [void][Management.Automation.Language.Parser]::ParseFile(
+        $helperPath,
+        [ref]$null,
+        [ref]$parseErrors
+    )
+    if ($parseErrors.Count -ne 0) {
+        throw ('PowerShell helper AST parse failed: {0}' -f ($parseErrors.Message -join '; '))
+    }
+    [Console]::Out.WriteLine('PASS: PowerShell helper AST parse')
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $autoHotkey

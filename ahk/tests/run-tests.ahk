@@ -75,7 +75,10 @@ AssertEqual("plain-text", SmartPaste.ChooseAction(false, false, true, false), "p
 AssertEqual("save-image", SmartPaste.ChooseAction(false, true, false, true), "Explorer image")
 AssertEqual("normal-paste", SmartPaste.ChooseAction(false, true, false, false), "application image")
 AssertEqual("normal-paste", SmartPaste.ChooseAction(true, true, true, true), "file list wins")
+AssertEqual("normal-paste", SmartPaste.ChooseAction(true, false, true, true), "file list without image wins")
+AssertEqual("plain-text", SmartPaste.ChooseAction(false, false, true, true), "Explorer text remains plain text")
 AssertEqual("normal-paste", SmartPaste.ChooseAction(false, false, false, false), "unknown clipboard")
+AssertEqual('"C:\\"', SmartPaste.QuoteArgument("C:\"), "quote root destination safely")
 shortcutRegistry := Map()
 ValidateFeatureHotkey("first", "^!a", shortcutRegistry)
 AssertThrows(() => ValidateFeatureHotkey("duplicate", "^!a", shortcutRegistry), "快捷键冲突", "duplicate shortcut")
@@ -104,7 +107,7 @@ for targetClass in [OpenSelectedTarget, LocateSelectedTarget] {
     AssertEqual("C:\中文\a.txt", targetClass.Normalize("file:///C:/%E4%B8%AD%E6%96%87/a.txt"), "UTF-8 local file URI")
     AssertEqual("\\server\share\中文.txt", targetClass.Normalize("file://server/share/%E4%B8%AD%E6%96%87.txt"), "UTF-8 UNC file URI")
 }
-for featureClass in [SearchSelectedText, OpenSelectedTarget, LocateSelectedTarget] {
+for featureClass in [SearchSelectedText, SmartPaste, OpenSelectedTarget, LocateSelectedTarget] {
     AssertEqual("BoundFunc", Type(featureClass.HotkeyCallback), "selected action bound hotkey callback")
     AssertEqual("BoundFunc", Type(featureClass.HideTipCallback), "selected action bound tooltip callback")
     AssertEqual(true, featureClass.HotkeyCallback == featureClass.HotkeyCallback, "selected action stable hotkey callback")
@@ -115,6 +118,8 @@ for featureClass in [SearchSelectedText, OpenSelectedTarget, LocateSelectedTarge
 searchSource := FileRead(A_ScriptDir "\..\features\search-selected-text.ahk", "UTF-8")
 openSource := FileRead(A_ScriptDir "\..\features\open-selected-target.ahk", "UTF-8")
 locateSource := FileRead(A_ScriptDir "\..\features\locate-selected-target.ahk", "UTF-8")
+smartPasteSource := FileRead(A_ScriptDir "\..\features\smart-paste\smart-paste.ahk", "UTF-8")
+smartPasteHelperSource := FileRead(A_ScriptDir "\..\features\smart-paste\save-clipboard-image.ps1", "UTF-8")
 AssertNotContains(searchSource, "OpenSelectedTarget", "search does not depend on open")
 AssertNotContains(searchSource, "LocateSelectedTarget", "search does not depend on locate")
 AssertNotContains(openSource, "SearchSelectedText", "open does not depend on search")
@@ -124,6 +129,16 @@ AssertNotContains(locateSource, "OpenSelectedTarget", "locate does not depend on
 AssertContains(searchSource, "打开搜索失败", "search Run failure hint")
 AssertContains(openSource, "打开目标失败", "open Run failure hint")
 AssertContains(locateSource, "定位目标失败", "locate Run failure hint")
+AssertContains(smartPasteSource, '"UInt", 15', "smart paste detects CF_HDROP")
+AssertContains(smartPasteSource, 'RegisterClipboardFormatW', "smart paste registers PNG clipboard format")
+AssertContains(smartPasteSource, 'A_ScriptDir "\features\smart-paste\save-clipboard-image.ps1"', "smart paste helper path uses entry directory")
+AssertContains(smartPasteSource, 'Send "^v"', "smart paste keeps ordinary paste fallback")
+AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "Paste")', "smart paste binds hotkey callback")
+AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "HideTip")', "smart paste binds tooltip callback")
+AssertContains(smartPasteHelperSource, '[IO.FileMode]::CreateNew', "image helper allocates unique temp file")
+AssertContains(smartPasteHelperSource, '[IO.File]::Move(', "image helper atomically publishes PNG")
+AssertContains(smartPasteHelperSource, '$stream.Length -le 0', "image helper rejects empty PNG")
+AssertContains(smartPasteHelperSource, '[Text.UTF8Encoding]::new($false)', "image helper writes UTF-8 without BOM")
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

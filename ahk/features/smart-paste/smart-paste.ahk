@@ -1,6 +1,18 @@
 #Requires AutoHotkey v2.0
 
 class SmartPaste {
+    static HelperPath() {
+        return A_ScriptDir "\features\smart-paste\save-clipboard-image.ps1"
+    }
+
+    static EnsureHelperAvailable(path := unset) {
+        if !IsSet(path)
+            path := this.HelperPath()
+        if !FileExist(path)
+            throw Error("智能粘贴辅助脚本不存在：" path)
+        return path
+    }
+
     static ChooseAction(hasFiles, hasImage, hasText, isExplorer) {
         if hasFiles
             return "normal-paste"
@@ -82,11 +94,7 @@ class SmartPaste {
     }
 
     static SaveClipboardImage(destination) {
-        helperPath := A_ScriptDir "\features\smart-paste\save-clipboard-image.ps1"
-        if !FileExist(helperPath) {
-            this.ShowTip("图片保存失败")
-            return false
-        }
+        helperPath := this.EnsureHelperAvailable()
 
         processId := DllCall("Kernel32\GetCurrentProcessId", "UInt")
         resultFile := A_Temp "\ahk-clipboard-image-" processId "-" this.NewGuid() ".txt"
@@ -149,5 +157,7 @@ class SmartPaste {
 SmartPaste.HotkeyCallback := ObjBindMethod(SmartPaste, "Paste")
 SmartPaste.HideTipCallback := ObjBindMethod(SmartPaste, "HideTip")
 
-if !IsToolboxTestMode()
+if !IsToolboxTestMode() {
+    SmartPaste.EnsureHelperAvailable()
     RegisterFeatureHotkey("智能粘贴", Shortcuts.SmartPaste, SmartPaste.HotkeyCallback)
+}

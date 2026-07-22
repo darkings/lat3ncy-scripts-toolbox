@@ -79,6 +79,14 @@ AssertEqual("normal-paste", SmartPaste.ChooseAction(true, false, true, true), "f
 AssertEqual("plain-text", SmartPaste.ChooseAction(false, false, true, true), "Explorer text remains plain text")
 AssertEqual("normal-paste", SmartPaste.ChooseAction(false, false, false, false), "unknown clipboard")
 AssertEqual('"C:\\"', SmartPaste.QuoteArgument("C:\"), "quote root destination safely")
+AssertEqual(true, HasMethod(SmartPaste, "EnsureHelperAvailable"), "smart paste exposes helper validation")
+realSmartPasteHelper := A_ScriptDir "\..\features\smart-paste\save-clipboard-image.ps1"
+AssertEqual(realSmartPasteHelper, SmartPaste.EnsureHelperAvailable(realSmartPasteHelper), "smart paste helper exists")
+missingSmartPasteHelper := A_Temp "\lat3ncy-missing-smart-paste-helper-" SmartPaste.NewGuid() ".ps1"
+AssertThrows(
+    () => SmartPaste.EnsureHelperAvailable(missingSmartPasteHelper),
+    "智能粘贴辅助脚本不存在",
+    "smart paste missing helper fails early")
 shortcutRegistry := Map()
 ValidateFeatureHotkey("first", "^!a", shortcutRegistry)
 AssertThrows(() => ValidateFeatureHotkey("duplicate", "^!a", shortcutRegistry), "快捷键冲突", "duplicate shortcut")
@@ -135,6 +143,11 @@ AssertContains(smartPasteSource, 'A_ScriptDir "\features\smart-paste\save-clipbo
 AssertContains(smartPasteSource, 'Send "^v"', "smart paste keeps ordinary paste fallback")
 AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "Paste")', "smart paste binds hotkey callback")
 AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "HideTip")', "smart paste binds tooltip callback")
+smartPasteStartupSource := SubStr(smartPasteSource, InStr(smartPasteSource, "if !IsToolboxTestMode()"))
+startupEnsurePosition := InStr(smartPasteStartupSource, "SmartPaste.EnsureHelperAvailable()")
+startupRegisterPosition := InStr(smartPasteStartupSource, 'RegisterFeatureHotkey("智能粘贴"')
+AssertEqual(true, startupEnsurePosition > 0, "smart paste startup validates helper")
+AssertEqual(true, startupEnsurePosition < startupRegisterPosition, "smart paste validates helper before registration")
 AssertContains(smartPasteHelperSource, '[IO.FileMode]::CreateNew', "image helper allocates unique temp file")
 AssertContains(smartPasteHelperSource, '[IO.File]::Move(', "image helper atomically publishes PNG")
 AssertContains(smartPasteHelperSource, '$stream.Length -le 0', "image helper rejects empty PNG")

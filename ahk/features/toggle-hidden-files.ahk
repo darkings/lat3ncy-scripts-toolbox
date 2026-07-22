@@ -45,7 +45,12 @@ class ToggleHiddenFiles {
 
     static ShowTip(message) {
         ToolTip message
-        SetTimer (*) => ToolTip(), -1500
+        SetTimer ToggleHiddenFiles.HideTip, 0
+        SetTimer ToggleHiddenFiles.HideTip, -1500
+    }
+
+    static HideTip() {
+        ToolTip
     }
 }
 

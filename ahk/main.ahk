@@ -10,11 +10,62 @@ IsToolboxTestMode() {
     return A_Args.Length >= 1 && A_Args[1] = "--test"
 }
 
+NormalizeFeatureHotkey(shortcut) {
+    shortcut := Trim(shortcut)
+    prefixFlags := Map("~", false, "*", false, "$", false)
+    modifiers := Map(
+        "^", Map("", false, "<", false, ">", false),
+        "!", Map("", false, "<", false, ">", false),
+        "+", Map("", false, "<", false, ">", false),
+        "#", Map("", false, "<", false, ">", false))
+    position := 1
+
+    while (position <= StrLen(shortcut)) {
+        token := SubStr(shortcut, position, 1)
+        if prefixFlags.Has(token) {
+            prefixFlags[token] := true
+            position += 1
+            continue
+        }
+
+        if (token = "<" || token = ">") {
+            modifier := SubStr(shortcut, position + 1, 1)
+            if modifiers.Has(modifier) {
+                modifiers[modifier][token] := true
+                position += 2
+                continue
+            }
+        }
+
+        if modifiers.Has(token) {
+            modifiers[token][""] := true
+            position += 1
+            continue
+        }
+        break
+    }
+
+    normalized := ""
+    for prefix in ["~", "*", "$"] {
+        if prefixFlags[prefix]
+            normalized .= prefix
+    }
+    for modifier in ["^", "!", "+", "#"] {
+        if modifiers[modifier][""]
+            normalized .= modifier
+        if modifiers[modifier]["<"]
+            normalized .= "<" modifier
+        if modifiers[modifier][">"]
+            normalized .= ">" modifier
+    }
+    return normalized StrLower(SubStr(shortcut, position))
+}
+
 ValidateFeatureHotkey(featureName, shortcut, registry) {
-    if (shortcut = "")
+    normalized := NormalizeFeatureHotkey(shortcut)
+    if (normalized = "")
         throw Error(featureName " 的快捷键不能为空")
 
-    normalized := StrLower(shortcut)
     if registry.Has(normalized)
         throw Error("快捷键冲突：" featureName " 与 " registry[normalized])
 

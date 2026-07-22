@@ -65,6 +65,10 @@ class CapsLockIme {
         }
     }
 
+    static ResolveFocusedHwnd(focusedHwnd, activeHwnd) {
+        return focusedHwnd ? focusedHwnd : activeHwnd
+    }
+
     static GetFocusedControlHwnd() {
         activeHwnd := WinExist("A")
         if !activeHwnd
@@ -79,12 +83,17 @@ class CapsLockIme {
             return activeHwnd
 
         focusedHwnd := NumGet(guiInfo, 8 + A_PtrSize, "Ptr")
-        return focusedHwnd || activeHwnd
+        return this.ResolveFocusedHwnd(focusedHwnd, activeHwnd)
     }
 
     static ShowTip(message) {
         ToolTip message
-        SetTimer (*) => ToolTip(), -1500
+        SetTimer CapsLockIme.HideTip, 0
+        SetTimer CapsLockIme.HideTip, -1500
+    }
+
+    static HideTip() {
+        ToolTip
     }
 }
 

@@ -26,7 +26,7 @@ AssertContains(haystack, needle, name) {
 AssertThrows(callback, expectedMessage, name) {
     global resultFile
     try callback.Call()
-    catch caught {
+    catch as caught {
         if !(caught is Error) {
             FileAppend "FAIL: " name "`nExpected an Error, got: " Type(caught) "`n", resultFile
             ExitApp 1
@@ -44,6 +44,11 @@ AssertThrows(callback, expectedMessage, name) {
 AssertEqual("toggle-input", CapsLockIme.Action(false, 100), "CapsLock short press")
 AssertEqual("enable-caps", CapsLockIme.Action(false, 500), "CapsLock long press")
 AssertEqual("disable-caps-force-english", CapsLockIme.Action(true, 100), "CapsLock unlock")
+AssertEqual(456, CapsLockIme.ResolveFocusedHwnd(456, 123), "focused HWND wins")
+AssertEqual(123, CapsLockIme.ResolveFocusedHwnd(0, 123), "active HWND fallback")
+AssertEqual(true, HasMethod(CapsLockIme, "HideTip"), "CapsLock stable tooltip callback")
+AssertEqual(true, HasMethod(AlwaysOnTop, "HideTip"), "always-on-top stable tooltip callback")
+AssertEqual(true, HasMethod(ToggleHiddenFiles, "HideTip"), "hidden-files stable tooltip callback")
 AssertEqual("D:\Code\main.py", OpenSelectedTarget.Normalize('  "D:\Code\main.py:25:8"  '), "normalize target")
 AssertEqual("D:\Code\main.py", LocateSelectedTarget.Normalize("file:///D:/Code/main.py"), "normalize file URL")
 AssertEqual("plain-text", SmartPaste.ChooseAction(false, false, true, false), "plain text")
@@ -54,7 +59,14 @@ AssertEqual("normal-paste", SmartPaste.ChooseAction(false, false, false, false),
 shortcutRegistry := Map()
 ValidateFeatureHotkey("first", "^!a", shortcutRegistry)
 AssertThrows(() => ValidateFeatureHotkey("duplicate", "^!a", shortcutRegistry), "快捷键冲突", "duplicate shortcut")
+AssertThrows(() => ValidateFeatureHotkey("second", "!^a", shortcutRegistry), "快捷键冲突", "equivalent modifier order")
 AssertThrows(() => ValidateFeatureHotkey("empty", "", Map()), "不能为空", "empty shortcut")
+directionalRegistry := Map()
+ValidateFeatureHotkey("directional", "~*$<^>!A", directionalRegistry)
+AssertThrows(() => ValidateFeatureHotkey("directional duplicate", "$*~>!<^a", directionalRegistry), "快捷键冲突", "directional modifiers")
+sidedRegistry := Map()
+ValidateFeatureHotkey("generic control", "^a", sidedRegistry)
+ValidateFeatureHotkey("left control", "<^a", sidedRegistry)
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

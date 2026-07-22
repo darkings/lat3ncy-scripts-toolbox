@@ -9,7 +9,12 @@ class AlwaysOnTop {
 
     static ShowTip(message) {
         ToolTip message
-        SetTimer (*) => ToolTip(), -1500
+        SetTimer AlwaysOnTop.HideTip, 0
+        SetTimer AlwaysOnTop.HideTip, -1500
+    }
+
+    static HideTip() {
+        ToolTip
     }
 }
 

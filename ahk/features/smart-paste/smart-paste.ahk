@@ -1,5 +1,20 @@
 #Requires AutoHotkey v2.0
 
+class SmartPasteClipboard {
+    Capture() => ClipboardAll()
+
+    Clear() {
+        A_Clipboard := ""
+    }
+
+    Wait(timeoutSeconds) => ClipWait(timeoutSeconds, true)
+    ReadText() => A_Clipboard
+
+    Restore(snapshot) {
+        A_Clipboard := snapshot
+    }
+}
+
 class SmartPaste {
     static HelperPath() {
         return A_ScriptDir "\features\smart-paste\save-clipboard-image.ps1"
@@ -13,13 +28,13 @@ class SmartPaste {
         return path
     }
 
-    static ChooseAction(hasFiles, hasImage, hasText, isExplorer) {
-        if hasFiles
+    static ChooseAction(hasFiles, hasImage, isExplorer, isVsCode) {
+        if hasFiles || !hasImage
             return "normal-paste"
-        if hasImage
-            return isExplorer ? "save-image" : "normal-paste"
-        if hasText
-            return "plain-text"
+        if isExplorer
+            return "save-explorer-image"
+        if isVsCode
+            return "probe-vscode-image"
         return "normal-paste"
     }
 
@@ -35,11 +50,6 @@ class SmartPaste {
 
         static pngFormat := DllCall("User32\RegisterClipboardFormatW", "Str", "PNG", "UInt")
         return pngFormat && DllCall("User32\IsClipboardFormatAvailable", "UInt", pngFormat, "Int") != 0
-    }
-
-    static HasText() {
-        return (DllCall("User32\IsClipboardFormatAvailable", "UInt", 1, "Int")
-            || DllCall("User32\IsClipboardFormatAvailable", "UInt", 13, "Int")) != 0
     }
 
     static GetActiveExplorerPath() {
@@ -65,32 +75,74 @@ class SmartPaste {
         return ""
     }
 
+    static DirectoryFromCopiedPath(value) {
+        value := Trim(value)
+        if !value || InStr(value, "`r") || InStr(value, "`n")
+            return ""
+
+        if (StrLen(value) >= 2) {
+            first := SubStr(value, 1, 1)
+            last := SubStr(value, -1)
+            if ((first = '"' && last = '"') || (first = "'" && last = "'"))
+                value := SubStr(value, 2, -1)
+        }
+
+        attributes := FileExist(value)
+        return InStr(attributes, "D") ? value : ""
+    }
+
+    static GetVsCodeSelectedDirectory(copyPathShortcut, clipboard := unset, sendCopyPath := unset) {
+        if !IsSet(clipboard)
+            clipboard := SmartPasteClipboard()
+        if !IsSet(sendCopyPath)
+            sendCopyPath := shortcut => Send(shortcut)
+
+        snapshot := clipboard.Capture()
+        try {
+            clipboard.Clear()
+            sendCopyPath.Call(copyPathShortcut)
+            if !clipboard.Wait(0.75)
+                return ""
+            return this.DirectoryFromCopiedPath(clipboard.ReadText())
+        } finally {
+            clipboard.Restore(snapshot)
+        }
+    }
+
     static Paste(_hotkeyName := "", receiverProbe := unset) {
         if IsSet(receiverProbe)
             return receiverProbe.Call(this)
 
-        try {
-            hasFiles := this.HasFiles()
-            hasImage := this.HasImage()
-            hasText := this.HasText()
-            isExplorer := WinActive("ahk_class CabinetWClass") != 0
-            action := this.ChooseAction(hasFiles, hasImage, hasText, isExplorer)
+        hasFiles := this.HasFiles()
+        hasImage := this.HasImage()
+        isExplorer := WinActive("ahk_class CabinetWClass") != 0
+        isVsCode := WinActive("ahk_exe Code.exe") != 0
+        action := this.ChooseAction(hasFiles, hasImage, isExplorer, isVsCode)
 
-            if (action = "normal-paste") {
-                Send "^v"
-            } else if (action = "plain-text") {
-                SendText A_Clipboard
-                this.ShowTip("已粘贴纯文本")
-            } else {
-                explorerPath := this.GetActiveExplorerPath()
-                if explorerPath
-                    this.SaveClipboardImage(explorerPath)
-                else
-                    this.ShowTip("当前资源管理器位置无法保存图片")
-            }
-        } catch {
-            this.ShowTip("智能粘贴失败")
+        if (action = "normal-paste") {
+            Send "^v"
+            return
         }
+
+        if (action = "save-explorer-image") {
+            explorerPath := this.GetActiveExplorerPath()
+            if explorerPath
+                this.SaveClipboardImage(explorerPath)
+            else
+                this.ShowTip("当前资源管理器位置无法保存图片")
+            return
+        }
+
+        try {
+            destination := this.GetVsCodeSelectedDirectory(Shortcuts.VsCodeCopyPath)
+        } catch {
+            destination := ""
+        }
+
+        if destination
+            this.SaveClipboardImage(destination)
+        else
+            Send "^v"
     }
 
     static SaveClipboardImage(destination) {

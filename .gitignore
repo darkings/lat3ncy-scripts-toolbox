@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 *.lnk
 
+# Keep repository documentation limited to the root README.
+**/*.md
+!/README.md
+/docs/
+
 tools/screenshot-ocr/last_ocr.log
 tools/screenshot-ocr/last_capture.png
 tools/screenshot-ocr/last_processed.png

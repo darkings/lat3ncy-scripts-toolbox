@@ -49,26 +49,58 @@ AssertThrows(callback, expectedMessage, name) {
     ExitApp 1
 }
 
+EventSequence(events) {
+    sequence := ""
+    for event in events
+        sequence .= (sequence ? "->" : "") event
+    return sequence
+}
+
+class FakeSmartPasteCopyRecorder {
+    __New(events) {
+        this.events := events
+        this.shortcut := ""
+    }
+
+    Call(shortcut) {
+        this.events.Push("Send")
+        this.shortcut := shortcut
+    }
+}
+
 class FakeSmartPasteClipboard {
-    __New(copyValue, waitResult := true, throwOnWait := false) {
+    __New(copyValue, waitResult := true, throwOnWait := false, events := unset) {
         this.copyValue := copyValue
         this.waitResult := waitResult
         this.throwOnWait := throwOnWait
+        this.events := IsSet(events) ? events : []
         this.restored := false
         this.restoredValue := ""
     }
 
-    Capture() => "original-image"
-    Clear() => 0
-    ReadText() => this.copyValue
+    Capture() {
+        this.events.Push("Capture")
+        return "original-image"
+    }
+
+    Clear() {
+        this.events.Push("Clear")
+    }
+
+    ReadText() {
+        this.events.Push("ReadText")
+        return this.copyValue
+    }
 
     Wait(*) {
+        this.events.Push("Wait")
         if this.throwOnWait
             throw Error("simulated clipboard failure")
         return this.waitResult
     }
 
     Restore(snapshot) {
+        this.events.Push("Restore")
         this.restored := true
         this.restoredValue := snapshot
     }
@@ -116,7 +148,9 @@ AssertEqual("normal-paste", SmartPaste.ChooseAction(false, false, true, false), 
 AssertEqual("save-explorer-image", SmartPaste.ChooseAction(false, true, true, false), "Explorer image saves")
 AssertEqual("probe-vscode-image", SmartPaste.ChooseAction(false, true, false, true), "VS Code image probes selected folder")
 AssertEqual("normal-paste", SmartPaste.ChooseAction(false, true, false, false), "other application image stays native")
-vsCodeTestRoot := A_Temp "\lat3ncy-vscode-folder-" SmartPaste.NewGuid()
+vsCodeTestRoot := A_Args.Length >= 3
+    ? A_Args[3]
+    : A_Temp "\lat3ncy-vscode-folder-" SmartPaste.NewGuid()
 DirCreate vsCodeTestRoot
 vsCodeTestFile := vsCodeTestRoot "\selected.txt"
 FileAppend "test", vsCodeTestFile, "UTF-8"
@@ -125,30 +159,46 @@ try {
     AssertEqual(vsCodeTestRoot, SmartPaste.DirectoryFromCopiedPath('"' vsCodeTestRoot '"'), "VS Code quoted folder")
     AssertEqual("", SmartPaste.DirectoryFromCopiedPath(vsCodeTestFile), "VS Code selected file falls back")
     AssertEqual("", SmartPaste.DirectoryFromCopiedPath(vsCodeTestRoot "`n" vsCodeTestRoot), "VS Code multi-selection falls back")
-    AssertEqual("", SmartPaste.DirectoryFromCopiedPath("C:\missing-lat3ncy-folder"), "VS Code missing folder falls back")
+    vsCodeMissingPath := vsCodeTestRoot "\missing"
+    AssertEqual("", SmartPaste.DirectoryFromCopiedPath(vsCodeMissingPath), "VS Code missing folder falls back")
 
-    sentShortcut := ""
-    sendCopyPath := shortcut => sentShortcut := shortcut
-
-    successClipboard := FakeSmartPasteClipboard(vsCodeTestRoot)
+    successEvents := []
+    successClipboard := FakeSmartPasteClipboard(vsCodeTestRoot, true, false, successEvents)
+    successRecorder := FakeSmartPasteCopyRecorder(successEvents)
     AssertEqual(
         vsCodeTestRoot,
-        SmartPaste.GetVsCodeSelectedDirectory(Shortcuts.VsCodeCopyPath, successClipboard, sendCopyPath),
+        SmartPaste.GetVsCodeSelectedDirectory(Shortcuts.VsCodeCopyPath, successClipboard, successRecorder),
         "VS Code directory probe succeeds")
-    AssertEqual("+!c", sentShortcut, "VS Code probe invokes Copy Path")
+    AssertEqual("+!c", successRecorder.shortcut, "VS Code probe invokes Copy Path")
     AssertEqual(true, successClipboard.restored, "VS Code success restores clipboard")
     AssertEqual("original-image", successClipboard.restoredValue, "VS Code success restores original snapshot")
+    AssertEqual(
+        "Capture->Clear->Send->Wait->ReadText->Restore",
+        EventSequence(successEvents),
+        "VS Code success clipboard order")
 
-    timeoutClipboard := FakeSmartPasteClipboard(vsCodeTestRoot, false)
-    AssertEqual("", SmartPaste.GetVsCodeSelectedDirectory("+!c", timeoutClipboard, (*) => 0), "VS Code timeout falls back")
+    timeoutEvents := []
+    timeoutClipboard := FakeSmartPasteClipboard(vsCodeTestRoot, false, false, timeoutEvents)
+    timeoutRecorder := FakeSmartPasteCopyRecorder(timeoutEvents)
+    AssertEqual("", SmartPaste.GetVsCodeSelectedDirectory("+!c", timeoutClipboard, timeoutRecorder), "VS Code timeout falls back")
     AssertEqual(true, timeoutClipboard.restored, "VS Code timeout restores clipboard")
+    AssertEqual(
+        "Capture->Clear->Send->Wait->Restore",
+        EventSequence(timeoutEvents),
+        "VS Code timeout skips clipboard read")
 
-    errorClipboard := FakeSmartPasteClipboard(vsCodeTestRoot, true, true)
+    errorEvents := []
+    errorClipboard := FakeSmartPasteClipboard(vsCodeTestRoot, true, true, errorEvents)
+    errorRecorder := FakeSmartPasteCopyRecorder(errorEvents)
     AssertThrows(
-        () => SmartPaste.GetVsCodeSelectedDirectory("+!c", errorClipboard, (*) => 0),
+        () => SmartPaste.GetVsCodeSelectedDirectory("+!c", errorClipboard, errorRecorder),
         "simulated clipboard failure",
         "VS Code probe exposes error after restoration")
     AssertEqual(true, errorClipboard.restored, "VS Code exception restores clipboard")
+    AssertEqual(
+        "Capture->Clear->Send->Wait->Restore",
+        EventSequence(errorEvents),
+        "VS Code exception restores after failed wait")
 } finally {
     FileDelete vsCodeTestFile
     DirDelete vsCodeTestRoot

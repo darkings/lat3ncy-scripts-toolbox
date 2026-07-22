@@ -5,6 +5,9 @@ $ErrorActionPreference = 'Stop'
 $resultFile = Join-Path ([System.IO.Path]::GetTempPath()) (
     'lat3ncy-toolbox-test-{0}.txt' -f [guid]::NewGuid().ToString('N')
 )
+$vsCodeTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+    'lat3ncy-vscode-folder-{0}' -f [guid]::NewGuid().ToString('N')
+)
 $testScript = Join-Path $PSScriptRoot 'run-tests.ahk'
 
 function Resolve-AutoHotkeyV2Executable {
@@ -138,7 +141,7 @@ try {
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $startInfo.Arguments = '/ErrorStdOut=UTF-8 "{0}" --test "{1}"' -f $testScript, $resultFile
+    $startInfo.Arguments = '/ErrorStdOut=UTF-8 "{0}" --test "{1}" "{2}"' -f $testScript, $resultFile, $vsCodeTestRoot
 
     $process = [System.Diagnostics.Process]::Start($startInfo)
     $standardOutput = $process.StandardOutput.ReadToEnd()
@@ -162,6 +165,9 @@ try {
         if (-not $hasResult) {
             [Console]::Error.WriteLine('AutoHotkey test result file was not created.')
         } elseif (-not $hasFreshPass) {
+            if ($result) {
+                [Console]::Error.Write($result)
+            }
             [Console]::Error.WriteLine('AutoHotkey test result is not the exact expected PASS marker.')
         }
     } else {
@@ -172,6 +178,7 @@ try {
     [Console]::Error.WriteLine($_.Exception.Message)
 } finally {
     Remove-Item -LiteralPath $resultFile -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $vsCodeTestRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 exit $runnerExitCode

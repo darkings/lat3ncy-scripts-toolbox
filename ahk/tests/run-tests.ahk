@@ -49,6 +49,19 @@ AssertThrows(callback, expectedMessage, name) {
     ExitApp 1
 }
 
+mainSource := FileRead(A_ScriptDir "\..\main.ahk", "UTF-8")
+startupTruePosition := InStr(mainSource, "global ToolboxStarting := true")
+startupHandlerPosition := InStr(mainSource, "OnError ToolboxStartupErrorHandler")
+firstFeatureIncludePosition := InStr(mainSource, "#Include features\caps-lock-ime.ahk")
+lastFeatureIncludePosition := InStr(mainSource, "#Include features\toggle-hidden-files.ahk")
+startupFalsePosition := InStr(mainSource, "`nToolboxStarting := false")
+AssertEqual(true, startupTruePosition > 0, "startup flag exists")
+AssertEqual(true, startupHandlerPosition > startupTruePosition, "startup handler follows flag")
+AssertEqual(true, startupHandlerPosition < firstFeatureIncludePosition, "startup handler precedes feature includes")
+AssertEqual(true, startupFalsePosition > lastFeatureIncludePosition, "startup flag clears after feature includes")
+AssertEqual(false, ToolboxStarting, "startup flag cleared after successful includes")
+AssertEqual(false, HandleToolboxError(Error("runtime"), "test"), "runtime errors use default behavior")
+
 AssertEqual("toggle-input", CapsLockIme.Action(false, 100), "CapsLock short press")
 AssertEqual("enable-caps", CapsLockIme.Action(false, 500), "CapsLock long press")
 AssertEqual("disable-caps-force-english", CapsLockIme.Action(true, 100), "CapsLock unlock")

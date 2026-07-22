@@ -2,6 +2,20 @@
 #SingleInstance Force
 #NoTrayIcon
 
+global ToolboxStarting := true
+
+HandleToolboxError(exception, mode) {
+    global ToolboxStarting
+    if !ToolboxStarting
+        return false
+
+    MsgBox "工具箱启动失败：`n" exception.Message, "脚本工具箱启动错误", "Iconx"
+    ExitApp 1
+}
+
+global ToolboxStartupErrorHandler := HandleToolboxError
+OnError ToolboxStartupErrorHandler
+
 #Include shortcuts.ahk
 
 global RegisteredFeatureHotkeys := Map()
@@ -90,3 +104,5 @@ RegisterFeatureHotkey(featureName, shortcut, callback) {
 #Include features\open-selected-target.ahk
 #Include features\locate-selected-target.ahk
 #Include features\toggle-hidden-files.ahk
+
+ToolboxStarting := false

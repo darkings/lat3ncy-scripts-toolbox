@@ -49,6 +49,31 @@ AssertThrows(callback, expectedMessage, name) {
     ExitApp 1
 }
 
+class FakeSmartPasteClipboard {
+    __New(copyValue, waitResult := true, throwOnWait := false) {
+        this.copyValue := copyValue
+        this.waitResult := waitResult
+        this.throwOnWait := throwOnWait
+        this.restored := false
+        this.restoredValue := ""
+    }
+
+    Capture() => "original-image"
+    Clear() => 0
+    ReadText() => this.copyValue
+
+    Wait(*) {
+        if this.throwOnWait
+            throw Error("simulated clipboard failure")
+        return this.waitResult
+    }
+
+    Restore(snapshot) {
+        this.restored := true
+        this.restoredValue := snapshot
+    }
+}
+
 mainSource := FileRead(A_ScriptDir "\..\main.ahk", "UTF-8")
 startupTruePosition := InStr(mainSource, "global ToolboxStarting := true")
 startupHandlerPosition := InStr(mainSource, "OnError ToolboxStartupErrorHandler")
@@ -84,13 +109,50 @@ AlwaysOnTop.HideTipCallback.Call()
 ToggleHiddenFiles.HideTipCallback.Call()
 AssertEqual("D:\Code\main.py", OpenSelectedTarget.Normalize('  "D:\Code\main.py:25:8"  '), "normalize target")
 AssertEqual("D:\Code\main.py", LocateSelectedTarget.Normalize("file:///D:/Code/main.py"), "normalize file URL")
-AssertEqual("plain-text", SmartPaste.ChooseAction(false, false, true, false), "plain text")
-AssertEqual("save-image", SmartPaste.ChooseAction(false, true, false, true), "Explorer image")
-AssertEqual("normal-paste", SmartPaste.ChooseAction(false, true, false, false), "application image")
-AssertEqual("normal-paste", SmartPaste.ChooseAction(true, true, true, true), "file list wins")
-AssertEqual("normal-paste", SmartPaste.ChooseAction(true, false, true, true), "file list without image wins")
-AssertEqual("plain-text", SmartPaste.ChooseAction(false, false, true, true), "Explorer text remains plain text")
-AssertEqual("normal-paste", SmartPaste.ChooseAction(false, false, false, false), "unknown clipboard")
+AssertEqual("$^v", Shortcuts.SmartPaste, "Smart Paste intercepts Ctrl+V without recursion")
+AssertEqual("+!c", Shortcuts.VsCodeCopyPath, "VS Code Copy Path shortcut")
+AssertEqual("normal-paste", SmartPaste.ChooseAction(true, true, true, false), "file list wins over image")
+AssertEqual("normal-paste", SmartPaste.ChooseAction(false, false, true, false), "non-image Explorer paste stays native")
+AssertEqual("save-explorer-image", SmartPaste.ChooseAction(false, true, true, false), "Explorer image saves")
+AssertEqual("probe-vscode-image", SmartPaste.ChooseAction(false, true, false, true), "VS Code image probes selected folder")
+AssertEqual("normal-paste", SmartPaste.ChooseAction(false, true, false, false), "other application image stays native")
+vsCodeTestRoot := A_Temp "\lat3ncy-vscode-folder-" SmartPaste.NewGuid()
+DirCreate vsCodeTestRoot
+vsCodeTestFile := vsCodeTestRoot "\selected.txt"
+FileAppend "test", vsCodeTestFile, "UTF-8"
+try {
+    AssertEqual(vsCodeTestRoot, SmartPaste.DirectoryFromCopiedPath(vsCodeTestRoot), "VS Code selected folder")
+    AssertEqual(vsCodeTestRoot, SmartPaste.DirectoryFromCopiedPath('"' vsCodeTestRoot '"'), "VS Code quoted folder")
+    AssertEqual("", SmartPaste.DirectoryFromCopiedPath(vsCodeTestFile), "VS Code selected file falls back")
+    AssertEqual("", SmartPaste.DirectoryFromCopiedPath(vsCodeTestRoot "`n" vsCodeTestRoot), "VS Code multi-selection falls back")
+    AssertEqual("", SmartPaste.DirectoryFromCopiedPath("C:\missing-lat3ncy-folder"), "VS Code missing folder falls back")
+
+    sentShortcut := ""
+    sendCopyPath := shortcut => sentShortcut := shortcut
+
+    successClipboard := FakeSmartPasteClipboard(vsCodeTestRoot)
+    AssertEqual(
+        vsCodeTestRoot,
+        SmartPaste.GetVsCodeSelectedDirectory(Shortcuts.VsCodeCopyPath, successClipboard, sendCopyPath),
+        "VS Code directory probe succeeds")
+    AssertEqual("+!c", sentShortcut, "VS Code probe invokes Copy Path")
+    AssertEqual(true, successClipboard.restored, "VS Code success restores clipboard")
+    AssertEqual("original-image", successClipboard.restoredValue, "VS Code success restores original snapshot")
+
+    timeoutClipboard := FakeSmartPasteClipboard(vsCodeTestRoot, false)
+    AssertEqual("", SmartPaste.GetVsCodeSelectedDirectory("+!c", timeoutClipboard, (*) => 0), "VS Code timeout falls back")
+    AssertEqual(true, timeoutClipboard.restored, "VS Code timeout restores clipboard")
+
+    errorClipboard := FakeSmartPasteClipboard(vsCodeTestRoot, true, true)
+    AssertThrows(
+        () => SmartPaste.GetVsCodeSelectedDirectory("+!c", errorClipboard, (*) => 0),
+        "simulated clipboard failure",
+        "VS Code probe exposes error after restoration")
+    AssertEqual(true, errorClipboard.restored, "VS Code exception restores clipboard")
+} finally {
+    FileDelete vsCodeTestFile
+    DirDelete vsCodeTestRoot
+}
 AssertEqual('"C:\\"', SmartPaste.QuoteArgument("C:\"), "quote root destination safely")
 AssertEqual(true, HasMethod(SmartPaste, "EnsureHelperAvailable"), "smart paste exposes helper validation")
 realSmartPasteHelper := A_ScriptDir "\..\features\smart-paste\save-clipboard-image.ps1"

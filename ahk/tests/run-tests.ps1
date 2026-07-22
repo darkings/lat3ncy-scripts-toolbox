@@ -56,7 +56,8 @@ class Shortcuts {
     static AlwaysOnTop := "^#t"
     static ToggleHiddenFiles := "#+."
     static SearchSelectedText := "^+g"
-    static SmartPaste := "^+v"
+    static SmartPaste := "`$^v"
+    static VsCodeCopyPath := "+!c"
     static OpenSelectedTarget := "^!o"
     static LocateSelectedTarget := "^!e"
 }

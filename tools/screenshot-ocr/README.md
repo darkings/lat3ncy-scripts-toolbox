@@ -7,10 +7,10 @@ Windows 屏幕区域 OCR 工具：拖拽框选屏幕区域，按 `Esc` 取消；
 安装 Python 依赖：
 
 ```powershell
-python -m pip install pillow pytesseract
+python -m pip install pillow
 ```
 
-安装 Tesseract OCR：
+Tesseract OCR 是由脚本通过子进程直接调用的原生依赖，不是 Python 包，需要单独安装：
 
 ```powershell
 winget install UB-Mannheim.TesseractOCR

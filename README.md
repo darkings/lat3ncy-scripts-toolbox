@@ -4,11 +4,21 @@
 
 ## AutoHotkey
 
-安装 [AutoHotkey v2](https://www.autohotkey.com/)，然后运行：
+安装 [AutoHotkey v2](https://www.autohotkey.com/)。安装程序建立 `.ahk` 文件关联后，可以直接双击 `ahk/main.ahk` 运行；也可以右键该文件并选择 AutoHotkey v2。
+
+如果要从命令行运行，或使用本仓库的测试 runner，`AutoHotkey.exe` 必须能通过 `PATH` 解析。先验证：
+
+```powershell
+Get-Command AutoHotkey.exe
+```
+
+命令有结果后，才可运行：
 
 ```powershell
 AutoHotkey.exe .\ahk\main.ahk
 ```
+
+如果 `Get-Command` 没有结果，请把 AutoHotkey v2 的安装目录加入 `PATH`，或使用能提供 `AutoHotkey.exe` shim 的包管理器安装方式，然后重开终端验证。
 
 也可以为 `ahk/main.ahk` 创建快捷方式并放入 Windows 启动文件夹（`Win+R` 后输入 `shell:startup`），让工具箱登录后自动运行。
 
@@ -52,7 +62,7 @@ powershell.exe -NoProfile -File .\ahk\tests\run-tests.ps1
 
 ## Screenshot OCR
 
-屏幕区域 OCR 支持前台终端 launcher 和静默 launcher，并依赖 Python、Pillow、pytesseract、Tesseract OCR 及所需语言模型。安装、启动、环境变量和故障排查请参阅 [`tools/screenshot-ocr/README.md`](tools/screenshot-ocr/README.md)。
+屏幕区域 OCR 支持前台终端 launcher 和静默 launcher，并依赖 Python、Pillow，以及单独安装的原生 Tesseract OCR 与所需语言模型。安装、启动、环境变量和故障排查请参阅 [`tools/screenshot-ocr/README.md`](tools/screenshot-ocr/README.md)。
 
 ## 仓库结构
 

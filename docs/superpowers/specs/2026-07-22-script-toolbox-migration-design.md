@@ -85,12 +85,15 @@ lat3ncy-scripts-toolbox/
 - `$CapsLock`：Caps Lock / 输入法控制。
 - `Ctrl+Win+T`：窗口置顶。
 - `Ctrl+Shift+G`：搜索选中文字。
-- `Ctrl+Shift+V`：Smart Paste。
+- `Ctrl+V`（`$^v`）：Smart Paste（后续默认，具体行为见新设计）。
 - `Ctrl+Alt+O`：打开选中目标。
 - `Ctrl+Alt+E`：定位选中目标。
 - `Win+Shift+.`：显示或隐藏隐藏文件。
 
 ## Smart Paste
+
+> **后续变更：** 本节的 `Ctrl+Shift+V` 与纯文本分支已由
+> `2026-07-22-ctrl-v-image-paste-design.md` 取代；当前行为以该文档为准。
 
 Smart Paste 先对剪贴板类型和活动窗口分类，再选择行为：
 

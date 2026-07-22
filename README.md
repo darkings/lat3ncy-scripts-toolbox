@@ -33,22 +33,26 @@ AutoHotkey.exe .\ahk\main.ahk
 | `CapsLock`（`$CapsLock`） | 短按切换输入法，长按启用大写 | `ahk/features/caps-lock-ime.ahk` |
 | `Ctrl+Win+T`（`^#t`） | 切换活动窗口置顶 | `ahk/features/always-on-top.ahk` |
 | `Ctrl+Shift+G`（`^+g`） | 使用 Google 搜索选中文字 | `ahk/features/search-selected-text.ahk` |
-| `Ctrl+Shift+V`（`^+v`） | Smart Paste 智能粘贴 | `ahk/features/smart-paste/smart-paste.ahk` |
+| `Ctrl+V`（`$^v`） | 在资源管理器或 VS Code 选中文件夹中保存剪贴板图片；其他内容原生粘贴 | `ahk/features/smart-paste/smart-paste.ahk` |
 | `Ctrl+Alt+O`（`^!o`） | 打开选中的文件、目录或 URL | `ahk/features/open-selected-target.ahk` |
 | `Ctrl+Alt+E`（`^!e`） | 在资源管理器中定位选中的文件或目录 | `ahk/features/locate-selected-target.ahk` |
 | `Win+Shift+.`（`#+.`） | 显示或隐藏资源管理器中的隐藏文件 | `ahk/features/toggle-hidden-files.ahk` |
 
 ### Smart Paste 路由
 
-`Ctrl+Shift+V` 会根据剪贴板内容和活动窗口选择行为：
+`Ctrl+V` 只在剪贴板包含图片且目标目录明确时改变行为：
 
 | 剪贴板内容 | 活动窗口 | 行为 |
 | --- | --- | --- |
-| 已复制的文件或目录 | 任意 | 普通 `Ctrl+V` |
+| 已复制的文件或目录 | 任意 | 原生 `Ctrl+V` |
+| 非图片内容 | 任意 | 原生 `Ctrl+V` |
 | 图片 | 普通文件系统目录的资源管理器 | 保存为不会覆盖已有文件的唯一命名 PNG |
-| 图片 | 其他应用 | 普通 `Ctrl+V` |
-| 文本 | 任意 | 使用 `SendText` 粘贴无格式文本 |
-| 未知或无法可靠分类的内容 | 任意 | 普通 `Ctrl+V` |
+| 图片 | 资源管理器虚拟位置 | 显示无法保存提示，不发送原生粘贴 |
+| 图片 | VS Code 文件栏选中的单个已存在文件夹 | 保存为不会覆盖已有文件的唯一命名 PNG |
+| 图片 | VS Code 选中文件、多个项目、编辑器聚焦、路径探测超时或快捷键不一致 | 恢复原剪贴板后执行原生 `Ctrl+V` |
+| 图片 | 其他应用 | 原生 `Ctrl+V` |
+
+VS Code 目录探测使用 Windows 版内置的 Copy Path 命令（默认 `Shift+Alt+C`），并在成功、超时或异常后恢复原剪贴板。如果自定义了 VS Code 的 Copy Path 绑定，需要同步修改 `Shortcuts.VsCodeCopyPath`。
 
 ### 测试
 

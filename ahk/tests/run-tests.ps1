@@ -38,9 +38,85 @@ function Resolve-AutoHotkeyV2Executable {
     return $executable
 }
 
+function Test-FeatureLoadsIndependently {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $AutoHotkey,
+        [Parameter(Mandatory = $true)]
+        [string] $FeaturePath
+    )
+
+    $stubPath = Join-Path ([System.IO.Path]::GetTempPath()) (
+        'lat3ncy-toolbox-feature-{0}.ahk' -f [guid]::NewGuid().ToString('N')
+    )
+    $stub = @"
+#Requires AutoHotkey v2.0
+class Shortcuts {
+    static CapsLockIme := "`$CapsLock"
+    static AlwaysOnTop := "^#t"
+    static ToggleHiddenFiles := "#+."
+    static SearchSelectedText := "^+g"
+    static OpenSelectedTarget := "^!o"
+    static LocateSelectedTarget := "^!e"
+}
+IsToolboxTestMode() => true
+RegisterFeatureHotkey(*) => 0
+#Include "$FeaturePath"
+ExitApp 0
+"@
+
+    try {
+        $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($stubPath, $stub, $utf8WithoutBom)
+
+        $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = $AutoHotkey
+        $startInfo.WorkingDirectory = $PSScriptRoot
+        $startInfo.UseShellExecute = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.Arguments = '/ErrorStdOut=UTF-8 "{0}"' -f $stubPath
+
+        $process = [System.Diagnostics.Process]::Start($startInfo)
+        $standardOutput = $process.StandardOutput.ReadToEnd()
+        $standardError = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+
+        if ($standardOutput) {
+            [Console]::Out.Write($standardOutput)
+        }
+        if ($standardError) {
+            [Console]::Error.Write($standardError)
+        }
+
+        $engineOutput = $standardOutput + "`n" + $standardError
+        $hasParseError = $engineOutput -match '(?im)==>|\bError:|cannot be opened|does not contain a recognized action'
+        if ($process.ExitCode -ne 0 -or $hasParseError) {
+            throw "Feature failed independent AHK v2 load: $FeaturePath"
+        }
+
+        [Console]::Out.WriteLine('PASS: independent feature load {0}' -f [System.IO.Path]::GetFileName($FeaturePath))
+    } finally {
+        Remove-Item -LiteralPath $stubPath -ErrorAction SilentlyContinue
+    }
+}
+
 $runnerExitCode = 1
 try {
     $autoHotkey = Resolve-AutoHotkeyV2Executable
+    $featureRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'features'
+    $independentFeatures = @(
+        (Join-Path $featureRoot 'caps-lock-ime.ahk'),
+        (Join-Path $featureRoot 'always-on-top.ahk'),
+        (Join-Path $featureRoot 'toggle-hidden-files.ahk'),
+        (Join-Path $featureRoot 'search-selected-text.ahk'),
+        (Join-Path $featureRoot 'open-selected-target.ahk'),
+        (Join-Path $featureRoot 'locate-selected-target.ahk')
+    )
+    foreach ($featurePath in $independentFeatures) {
+        Test-FeatureLoadsIndependently -AutoHotkey $autoHotkey -FeaturePath $featurePath
+    }
+
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $autoHotkey
     $startInfo.WorkingDirectory = $PSScriptRoot

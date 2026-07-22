@@ -21,28 +21,10 @@ class OpenSelectedTarget {
     }
 
     static FileUriToPath(uri) {
-        capacity := 32768
-        pathBuffer := Buffer(capacity * 2, 0)
-        pathLength := capacity
-        try {
-            result := DllCall("Shlwapi\PathCreateFromUrlW"
-                , "Str", uri
-                , "Ptr", pathBuffer.Ptr
-                , "UInt*", &pathLength
-                , "UInt", 0
-                , "Int")
-            if (result = 0)
-                return StrGet(pathBuffer, pathLength, "UTF-16")
-        }
-        return this.FileUriToPathFallback(uri)
-    }
-
-    static FileUriToPathFallback(uri) {
         if RegExMatch(uri, "i)^file:///")
             path := RegExReplace(uri, "i)^file:///+")
         else
             path := "\\" RegExReplace(uri, "i)^file://+")
-        path := StrReplace(path, "/", "\")
 
         capacity := StrLen(path) + 1
         decoded := Buffer(capacity * 2, 0)
@@ -55,9 +37,9 @@ class OpenSelectedTarget {
                 , "UInt", 0x00040000
                 , "Int")
             if (result = 0)
-                return StrGet(decoded, decodedLength, "UTF-16")
+                path := StrGet(decoded, decodedLength, "UTF-16")
         }
-        return path
+        return StrReplace(path, "/", "\")
     }
 
     static Classify(value) {

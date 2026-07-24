@@ -82,6 +82,19 @@ python -m pip install pillow
 
 `pythonw.exe` 不创建终端窗口。执行后拖拽选择识别区域，结果会复制到剪贴板并通过 Windows 通知显示摘要。可通过 `TESSERACT_CMD`、`OCR_LANG` 和 `OCR_PSM` 环境变量覆盖默认 OCR 配置。
 
+## Navicat-refresh
+
+分为MacOS和Windows版本。
+
+路径切换到./tools/navicat-refresh执行
+
+```bash
+# windows
+.\reset_navicat.ps1 
+# macos
+.\reset_navicat.sh
+```
+
 ## 仓库结构
 
 ```text
@@ -95,5 +108,3 @@ lat3ncy-scripts-toolbox/
 │   └── screenshot-ocr/       # 截图 OCR 与 Raycast Quicklink VBS 入口
 └── README.md                 # 唯一提交的仓库文档
 ```
-
-不要提交运行时产物或机器本地依赖，包括 Python 缓存、OCR 日志与调试截图、Windows 快捷方式，以及 `tessdata/*.traineddata` OCR 模型。仓库的 `.gitignore` 已排除这些内容。

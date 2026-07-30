@@ -86,6 +86,17 @@ python -m pip install pillow
 
 `pythonw.exe` 不创建终端窗口。执行后拖拽选择识别区域，结果会复制到剪贴板并通过 Windows 通知显示摘要。可通过 `TESSERACT_CMD`、`OCR_LANG` 和 `OCR_PSM` 环境变量覆盖默认 OCR 配置。
 
+## Raycast 脚本
+
+`tools/raycst-scripts/` 提供两个 PowerShell Script Command：
+
+| 脚本 | 功能 |
+| --- | --- |
+| `open-neomutt.ps1` | 使用 PowerShell 7+（`pwsh.exe`）打开窗口，在默认 WSL 发行版的 home 目录运行 `neomutt` |
+| `restart-autohotkey.ps1` | 仅结束本工具箱的 `ahk/main.ahk` 进程，通过 PATH 中的 AutoHotkey v2 重新加载，确认进程运行后在 Raycast 显示成功提示 |
+
+在 Raycast 的 Script Commands 设置中添加 `tools/raycst-scripts` 目录即可使用。NeoMutt 脚本要求 `pwsh.exe` 可通过 PATH 解析，并且默认 WSL 发行版内已安装 `neomutt`；AutoHotkey 重启脚本要求 `AutoHotkey.exe` 可通过 PATH 解析。
+
 ## Navicat-refresh
 
 分为MacOS和Windows版本。

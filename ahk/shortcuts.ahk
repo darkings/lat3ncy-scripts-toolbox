@@ -9,4 +9,6 @@ class Shortcuts {
     static OpenSelectedTarget := "^!o"
     static LocateSelectedTarget := "^!e"
     static ToggleHiddenFiles := "#+."
+    static SwitchAppWindowNext := "!sc029"
+    static SwitchAppWindowPrevious := "+!sc029"
 }

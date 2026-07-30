@@ -63,6 +63,8 @@ class Shortcuts {
     static VsCodeCopyPath := "+!c"
     static OpenSelectedTarget := "^!o"
     static LocateSelectedTarget := "^!e"
+    static SwitchAppWindowNext := "!sc029"
+    static SwitchAppWindowPrevious := "+!sc029"
 }
 IsToolboxTestMode() => true
 RegisterFeatureHotkey(*) => 0
@@ -117,7 +119,8 @@ try {
         (Join-Path $featureRoot 'search-selected-text.ahk'),
         (Join-Path (Join-Path $featureRoot 'smart-paste') 'smart-paste.ahk'),
         (Join-Path $featureRoot 'open-selected-target.ahk'),
-        (Join-Path $featureRoot 'locate-selected-target.ahk')
+        (Join-Path $featureRoot 'locate-selected-target.ahk'),
+        (Join-Path $featureRoot 'switch-app-window.ahk')
     )
     foreach ($featurePath in $independentFeatures) {
         Test-FeatureLoadsIndependently -AutoHotkey $autoHotkey -FeaturePath $featurePath

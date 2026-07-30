@@ -37,6 +37,10 @@ AutoHotkey.exe .\ahk\main.ahk
 | `Ctrl+Alt+O`（`^!o`） | 打开选中的文件、目录或 URL | `ahk/features/open-selected-target.ahk` |
 | `Ctrl+Alt+E`（`^!e`） | 在资源管理器中定位选中的文件或目录 | `ahk/features/locate-selected-target.ahk` |
 | `Win+Shift+.`（`#+.`） | 显示或隐藏资源管理器中的隐藏文件 | `ahk/features/toggle-hidden-files.ahk` |
+| `Alt+反引号`（`!sc029`） | 按当前 Z-order 快照循环切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
+| `Alt+Shift+反引号`（`+!sc029`） | 沿快照反向切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
+
+同应用窗口切换在第一次触发时保存窗口顺序，按住 `Alt` 连续按反引号即可完整循环；松开 `Alt` 后清除快照。最小化、不可见、工具型以及被系统隐藏的窗口不会进入候选列表。
 
 ### Smart Paste 路由
 
@@ -81,6 +85,17 @@ python -m pip install pillow
 5. 保存后可为该 Quicklink 配置 alias 或全局快捷键。
 
 `pythonw.exe` 不创建终端窗口。执行后拖拽选择识别区域，结果会复制到剪贴板并通过 Windows 通知显示摘要。可通过 `TESSERACT_CMD`、`OCR_LANG` 和 `OCR_PSM` 环境变量覆盖默认 OCR 配置。
+
+## Raycast 脚本
+
+`tools/raycst-scripts/` 提供两个 PowerShell Script Command：
+
+| 脚本 | 功能 |
+| --- | --- |
+| `open-neomutt.ps1` | 使用 PowerShell 7+（`pwsh.exe`）打开窗口，在默认 WSL 发行版的 home 目录运行 `neomutt` |
+| `restart-autohotkey.ps1` | 仅结束本工具箱的 `ahk/main.ahk` 进程，通过 PATH 中的 AutoHotkey v2 重新加载，确认进程运行后在 Raycast 显示成功提示 |
+
+在 Raycast 的 Script Commands 设置中添加 `tools/raycst-scripts` 目录即可使用。NeoMutt 脚本要求 `pwsh.exe` 可通过 PATH 解析，并且默认 WSL 发行版内已安装 `neomutt`；AutoHotkey 重启脚本要求 `AutoHotkey.exe` 可通过 PATH 解析。
 
 ## Navicat-refresh
 

@@ -104,5 +104,6 @@ RegisterFeatureHotkey(featureName, shortcut, callback) {
 #Include features\open-selected-target.ahk
 #Include features\locate-selected-target.ahk
 #Include features\toggle-hidden-files.ahk
+#Include features\switch-app-window.ahk
 
 ToolboxStarting := false

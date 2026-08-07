@@ -33,14 +33,14 @@ AutoHotkey.exe .\ahk\main.ahk
 | `CapsLock`（`$CapsLock`） | 短按切换输入法，长按启用大写 | `ahk/features/caps-lock-ime.ahk` |
 | `Ctrl+Win+T`（`^#t`） | 切换活动窗口置顶 | `ahk/features/always-on-top.ahk` |
 | `Ctrl+Shift+G`（`^+g`） | 使用 Google 搜索选中文字 | `ahk/features/search-selected-text.ahk` |
-| `Ctrl+V`（`$^v`） | 仅图片时介入：保存到资源管理器当前目录或 VS Code 侧栏选中的单个已存在目录；资源管理器虚拟位置显示提示，其他情况原生粘贴 | `ahk/features/smart-paste/smart-paste.ahk` |
+| `Ctrl+V`（`$^v`） | 仅图片时介入：保存到资源管理器当前目录，或 VS Code / Zed 文件树选中的单个已存在目录；资源管理器虚拟位置显示提示，其他情况原生粘贴 | `ahk/features/smart-paste/smart-paste.ahk` |
 | `Ctrl+Alt+O`（`^!o`） | 打开选中的文件、目录或 URL | `ahk/features/open-selected-target.ahk` |
 | `Ctrl+Alt+E`（`^!e`） | 在资源管理器中定位选中的文件或目录 | `ahk/features/locate-selected-target.ahk` |
 | `Win+Shift+.`（`#+.`） | 显示或隐藏资源管理器中的隐藏文件 | `ahk/features/toggle-hidden-files.ahk` |
 | `Alt+反引号`（`!sc029`） | 按当前 Z-order 快照循环切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
 | `Alt+Shift+反引号`（`+!sc029`） | 沿快照反向切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
 
-同应用窗口切换在第一次触发时保存窗口顺序，按住 `Alt` 连续按反引号即可完整循环；松开 `Alt` 后清除快照。最小化、不可见、工具型以及被系统隐藏的窗口不会进入候选列表。
+同应用窗口切换在第一次触发时保存窗口顺序，按住 `Alt` 连续按反引号即可完整循环；松开 `Alt` 后清除快照。最小化、不可见、工具型以及被系统隐藏的窗口不会进入候选列表。Zed 只有一个可见顶层窗口时，快捷键会通过 `F13` / `F14` 桥接到 Zed 的 `multi_workspace::NextProject` / `multi_workspace::PreviousProject`，循环切换同一窗口中的项目。
 
 ### Smart Paste 路由
 
@@ -52,11 +52,12 @@ AutoHotkey.exe .\ahk\main.ahk
 | 非图片内容 | 任意 | 原生 `Ctrl+V` |
 | 图片 | 普通文件系统目录的资源管理器 | 保存为不会覆盖已有文件的唯一命名 PNG |
 | 图片 | 资源管理器虚拟位置 | 显示无法保存提示，不发送原生粘贴 |
-| 图片 | VS Code 文件栏选中的单个已存在文件夹 | 保存为不会覆盖已有文件的唯一命名 PNG |
-| 图片 | VS Code 选中文件、多个项目、编辑器聚焦、路径探测超时或快捷键不一致 | 恢复原剪贴板后执行原生 `Ctrl+V` |
+| 图片 | VS Code / Zed 文件树选中的单个已存在文件夹 | 保存为不会覆盖已有文件的唯一命名 PNG |
+| 图片 | VS Code / Zed 编辑器聚焦且当前打开文件存在（文件树探测失败后） | 保存为当前文件所在目录下不会覆盖已有文件的唯一命名 PNG |
+| 图片 | VS Code / Zed 选中文件、多选、编辑器无打开文件、路径探测超时或快捷键不一致 | 显示提示并恢复原剪贴板后执行原生 `Ctrl+V` |
 | 图片 | 其他应用 | 原生 `Ctrl+V` |
 
-VS Code 目录探测使用 Windows 版内置的 Copy Path 命令（默认 `Shift+Alt+C`），并在成功、超时或异常后恢复原剪贴板。如果自定义了 VS Code 的 Copy Path 绑定，需要同步修改 `Shortcuts.VsCodeCopyPath`。
+VS Code 目录探测使用其内置的 Copy Path 命令（默认 `Shift+Alt+C`）；Zed 目录探测使用项目面板的 Copy Path 命令（默认同为 `Shift+Alt+C`，仅项目面板聚焦时生效）。两者失败后都会兜底尝试编辑器上下文的 Copy Path（默认 `Ctrl+K P`），把图片保存到当前文件所在目录；Zed 还会进一步尝试键盘导航选中文件树首个条目（根目录）后再次探测，以覆盖面板无选中项的场景。所有探测都会在成功、超时或异常后恢复原剪贴板。如果自定义了对应编辑器的 Copy Path 绑定，需要同步修改 `Shortcuts.VsCodeCopyPath` / `Shortcuts.ZedCopyPath`。
 
 ### 测试
 

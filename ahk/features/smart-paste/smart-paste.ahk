@@ -28,13 +28,13 @@ class SmartPaste {
         return path
     }
 
-    static ChooseAction(hasFiles, hasImage, isExplorer, isVsCode) {
+    static ChooseAction(hasFiles, hasImage, isExplorer, isCopyPathCapableEditor) {
         if hasFiles || !hasImage
             return "normal-paste"
         if isExplorer
             return "save-explorer-image"
-        if isVsCode
-            return "probe-vscode-image"
+        if isCopyPathCapableEditor
+            return "probe-copy-path-image"
         return "normal-paste"
     }
 
@@ -91,11 +91,11 @@ class SmartPaste {
         return InStr(attributes, "D") ? value : ""
     }
 
-    static GetVsCodeSelectedDirectory(copyPathShortcut, clipboard := unset, sendCopyPath := unset) {
+    static GetCopyPathSelectedDirectory(copyPathShortcut, clipboard := unset, sendCopyPath := unset) {
         if !IsSet(clipboard)
             clipboard := SmartPasteClipboard()
         if !IsSet(sendCopyPath)
-            sendCopyPath := shortcut => Send(shortcut)
+            sendCopyPath := shortcut => this.SendCopyPathKey(shortcut)
 
         snapshot := clipboard.Capture()
         try {
@@ -103,9 +103,60 @@ class SmartPaste {
             sendCopyPath.Call(copyPathShortcut)
             if !clipboard.Wait(0.75)
                 return ""
-            return this.DirectoryFromCopiedPath(clipboard.ReadText())
+            value := clipboard.ReadText()
+            return this.DirectoryFromCopiedPath(value)
         } finally {
             clipboard.Restore(snapshot)
+        }
+    }
+
+    static GetCurrentFileParentDirectory(keys := unset, clipboard := unset, sendSequence := unset) {
+        if !IsSet(keys)
+            keys := ["^k", "p"]
+        if !IsSet(clipboard)
+            clipboard := SmartPasteClipboard()
+        if !IsSet(sendSequence)
+            sendSequence := () => this.SendCopyPathSequence(keys)
+
+        snapshot := clipboard.Capture()
+        try {
+            clipboard.Clear()
+            sendSequence.Call()
+            if !clipboard.Wait(0.75)
+                return ""
+            value := Trim(clipboard.ReadText())
+            if !value || InStr(value, "`r") || InStr(value, "`n")
+                return ""
+
+            if (StrLen(value) >= 2) {
+                first := SubStr(value, 1, 1)
+                last := SubStr(value, -1)
+                if ((first = '"' && last = '"') || (first = "'" && last = "'"))
+                    value := SubStr(value, 2, -1)
+            }
+
+            attributes := FileExist(value)
+            if !attributes
+                return ""
+            if InStr(attributes, "D")
+                return value
+            SplitPath value, , &parent
+            return InStr(FileExist(parent), "D") ? parent : ""
+        } finally {
+            clipboard.Restore(snapshot)
+        }
+    }
+
+    static SendCopyPathKey(shortcut) {
+        Send "{Ctrl up}"
+        Send shortcut
+    }
+
+    static SendCopyPathSequence(keys) {
+        Send "{Ctrl up}"
+        for key in keys {
+            Send key
+            Sleep 30
         }
     }
 
@@ -117,7 +168,8 @@ class SmartPaste {
         hasImage := this.HasImage()
         isExplorer := WinActive("ahk_class CabinetWClass") != 0
         isVsCode := WinActive("ahk_exe Code.exe") != 0
-        action := this.ChooseAction(hasFiles, hasImage, isExplorer, isVsCode)
+        isZed := WinActive("ahk_exe zed.exe") != 0
+        action := this.ChooseAction(hasFiles, hasImage, isExplorer, isVsCode || isZed)
 
         if (action = "normal-paste") {
             Send "^v"
@@ -133,16 +185,35 @@ class SmartPaste {
             return
         }
 
+        copyPathShortcut := isZed ? Shortcuts.ZedCopyPath : Shortcuts.VsCodeCopyPath
         try {
-            destination := this.GetVsCodeSelectedDirectory(Shortcuts.VsCodeCopyPath)
-        } catch {
+            destination := this.GetCopyPathSelectedDirectory(copyPathShortcut)
+        } catch as probeError {
             destination := ""
+        }
+        if !destination {
+            try {
+                destination := this.GetCurrentFileParentDirectory()
+            } catch as probeError {
+                destination := ""
+            }
+        }
+        if !destination && isZed {
+            try {
+                Send "{Up}"
+                Sleep 50
+                destination := this.GetCopyPathSelectedDirectory(copyPathShortcut)
+            } catch as probeError {
+                destination := ""
+            }
         }
 
         if destination
             this.SaveClipboardImage(destination)
-        else
+        else {
+            this.ShowTip("图片粘贴失败：请在文件树选中目录，或打开文件后重试")
             Send "^v"
+        }
     }
 
     static SaveClipboardImage(destination) {

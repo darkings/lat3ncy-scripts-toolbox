@@ -6,6 +6,7 @@ class Shortcuts {
     static SearchSelectedText := "^+g"
     static SmartPaste := "$^v"
     static VsCodeCopyPath := "+!c"
+    static ZedCopyPath := "+!c"
     static OpenSelectedTarget := "^!o"
     static LocateSelectedTarget := "^!e"
     static ToggleHiddenFiles := "#+."

@@ -34,8 +34,16 @@ class SwitchAppWindow {
         else
             this.Snapshot := this.LiveWindows(this.Snapshot)
 
-        if (this.Snapshot.Length < 2 || !this.Contains(this.Snapshot, activeHwnd)) {
+        if !this.Contains(this.Snapshot, activeHwnd) {
             this.Reset()
+            return
+        }
+
+        if (this.Snapshot.Length < 2) {
+            fallbackShortcut := this.SingleWindowShortcut(processName, direction)
+            this.Reset()
+            if fallbackShortcut
+                Send(fallbackShortcut)
             return
         }
 
@@ -119,6 +127,12 @@ class SwitchAppWindow {
         if (count < 1)
             return 0
         return Mod(currentIndex - 1 + direction + count, count) + 1
+    }
+
+    static SingleWindowShortcut(processName, direction) {
+        if (StrLower(processName) != "zed.exe")
+            return ""
+        return direction > 0 ? "{F13}" : "{F14}"
     }
 
     static Reset(*) {

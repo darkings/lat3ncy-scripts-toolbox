@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# @raycast.schemaVersion 1
+# @raycast.title Install OCR Dependencies
+# @raycast.mode compact
+# @raycast.platform windows
+# @raycast.packageName Lat3ncy Toolbox
+# @raycast.description 安装 OCR 依赖（Pillow + RapidOCR），已装则跳过
+# @raycast.icon 📦
+
 """Screenshot OCR 依赖安装脚本（跨平台）。
 
 按当前操作系统选择可用的 Python 解释器，通过 pip 安装 OCR 所需的
@@ -53,7 +61,7 @@ def linux_distro_id() -> str:
 def find_python() -> list[str] | None:
     """返回安装依赖用的 Python 命令前缀。
 
-    Windows 上优先 `python`（与 launch.vbs 使用的 pythonw.exe 同一环境），
+    Windows 上优先 `python`（与 Raycast OCR 脚本使用的 pythonw.exe 同一环境），
     macOS/Linux 上优先 `python3`。
     """
     if sys.platform == "win32":

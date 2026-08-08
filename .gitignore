@@ -9,4 +9,4 @@ __pycache__/
 /docs/
 
 **/*.log
-/tools/screenshot-ocr/*.png
+/tools/raycst-scripts/ocr/*.png

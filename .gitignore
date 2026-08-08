@@ -11,4 +11,3 @@ __pycache__/
 tools/screenshot-ocr/last_ocr.log
 tools/screenshot-ocr/last_capture.png
 tools/screenshot-ocr/last_processed.png
-tools/screenshot-ocr/tessdata/

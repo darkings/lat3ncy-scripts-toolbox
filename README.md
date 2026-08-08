@@ -71,11 +71,13 @@ powershell.exe -NoProfile -File .\ahk\tests\run-tests.ps1
 
 ## Screenshot OCR
 
-屏幕区域 OCR 依赖 Python 3、Pillow，以及单独安装的 Tesseract OCR 与 `chi_sim`、`eng` 语言模型：
+屏幕区域 OCR 依赖 Python 3、Pillow 与 RapidOCR（中英文识别，模型随包分发、完全离线）。运行依赖安装脚本自动完成安装：
 
 ```powershell
-python -m pip install pillow
+python .\tools\screenshot-ocr\install-deps.py
 ```
+
+脚本会先检测操作系统与 Python 环境，再按平台选用解释器（Windows 优先 `python`，macOS/Linux 优先 `python3`），仅安装缺失的 pip 依赖并验证 RapidOCR 引擎可加载；重复运行会自动跳过已装依赖，`--check` 参数可只检测不安装。
 
 推荐使用 Raycast Quicklink 打开 `launch.vbs`。VBS 通过 `pythonw.exe`（失败时回退到 `pyw.exe`）静默启动 OCR，不会创建终端窗口。
 
@@ -85,7 +87,7 @@ python -m pip install pillow
 4. Open With 使用系统默认的 Windows Script Host。
 5. 保存后可为该 Quicklink 配置 alias 或全局快捷键。
 
-`pythonw.exe` 不创建终端窗口。执行后拖拽选择识别区域，结果会复制到剪贴板并通过 Windows 通知显示摘要。可通过 `TESSERACT_CMD`、`OCR_LANG` 和 `OCR_PSM` 环境变量覆盖默认 OCR 配置。
+`pythonw.exe` 不创建终端窗口。执行后拖拽选择识别区域，结果会复制到剪贴板并通过 Windows 通知显示摘要。
 
 ## Raycast 脚本
 

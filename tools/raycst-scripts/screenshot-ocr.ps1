@@ -10,7 +10,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-# 注入 Win+Shift+S 打开截图工具框选，随后由 screenshot_ocr.py --clipboard
+# 注入 Win+Shift+S 打开截图工具框选，随后由 ocr/ocr.py
 # 轮询剪贴板中的图片并完成 RapidOCR 识别。
 Add-Type -TypeDefinition @"
 using System;
@@ -36,7 +36,7 @@ Start-Sleep -Milliseconds 60
 
 Start-Sleep -Milliseconds 500
 
-$ocrScript = Join-Path $PSScriptRoot 'ocr\screenshot_ocr.py'
+$ocrScript = Join-Path $PSScriptRoot 'ocr\ocr.py'
 if (-not (Test-Path -LiteralPath $ocrScript -PathType Leaf))
 {
   throw "OCR script not found: $ocrScript"

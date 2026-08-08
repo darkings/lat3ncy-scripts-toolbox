@@ -79,10 +79,10 @@ python .\tools\raycst-scripts\ocr\install-deps.py
 
 脚本会先检测操作系统与 Python 环境，再按平台选用解释器（Windows 优先 `python`，macOS/Linux 优先 `python3`），仅安装缺失的 pip 依赖并验证 RapidOCR 引擎可加载；重复运行会自动跳过已装依赖，`--check` 参数可只检测不安装。
 
-推荐通过 Raycast 命令 **Screenshot OCR**（`tools/raycst-scripts/screenshot-ocr.ps1`）触发：注入 `Win+Shift+S` 打开系统截图框选，随后由 `ocr/screenshot_ocr.py` 静默识别。也可以手动运行：
+推荐通过 Raycast 命令 **Screenshot OCR**（`tools/raycst-scripts/screenshot-ocr.ps1`）触发：注入 `Win+Shift+S` 打开系统截图框选，随后由 `ocr/ocr.py` 静默识别。也可以手动运行：
 
 ```powershell
-pythonw.exe .\tools\raycst-scripts\ocr\screenshot_ocr.py
+pythonw.exe .\tools\raycst-scripts\ocr\ocr.py
 ```
 
 脚本轮询系统剪贴板中的图片（超时 45 秒，按 Esc 取消则直接退出），识别中英文后把文本写回剪贴板，并通过 Windows 通知显示摘要；`last_capture.png`、`last_processed.png`、`last_ocr.log` 留在同目录供排查。
@@ -97,7 +97,7 @@ pythonw.exe .\tools\raycst-scripts\ocr\screenshot_ocr.py
 | `restart-autohotkey.ps1` | 仅结束本工具箱的 `ahk/main.ahk` 进程，通过 PATH 中的 AutoHotkey v2 重新加载，确认进程运行后在 Raycast 显示成功提示 |
 | `record-screen.ps1` | 注入 `Win+Shift+R` 直接打开截图工具（Snipping Tool）的屏幕录制框选，停止录制使用录制浮窗按钮，产物保存到 `Videos\Captures` |
 | `screenshot.ps1` | 注入 `Win+Shift+S` 打开截图工具框选，结果复制到剪贴板（可用智能粘贴保存到目录） |
-| `screenshot-ocr.ps1` | 注入 `Win+Shift+S` 后启动 `ocr/screenshot_ocr.py`，框选结束自动 OCR，识别文本复制到剪贴板 |
+| `screenshot-ocr.ps1` | 注入 `Win+Shift+S` 后启动 `ocr/ocr.py`，框选结束自动 OCR，识别文本复制到剪贴板 |
 | `ocr/install-deps.py` | 安装 OCR 依赖（Pillow + RapidOCR），已装则跳过 |
 
 在 Raycast 的 Script Commands 设置中添加 `tools/raycst-scripts` 目录即可使用，并可对每个命令单独绑定 Hotkey。NeoMutt 脚本要求 `pwsh.exe` 可通过 PATH 解析，并且默认 WSL 发行版内已安装 `neomutt`；AutoHotkey 重启脚本要求 `AutoHotkey.exe` 可通过 PATH 解析；录屏脚本要求 Windows 11 22H2+（截图工具自带屏幕录制）；OCR 脚本要求先运行 `install-deps.py` 安装 RapidOCR，且 `pythonw.exe` 可通过 PATH 解析。

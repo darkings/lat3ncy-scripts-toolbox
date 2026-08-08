@@ -1,26 +1,14 @@
 import os
-import shutil
-import subprocess
 import sys
-import tempfile
 import time
 import tkinter as tk
 
-from PIL import ImageEnhance, ImageFilter, ImageGrab, ImageOps
-
-
-COMMON_TESSERACT_PATHS = [
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-]
-DEFAULT_OCR_LANG = "chi_sim+eng"
+from PIL import ImageGrab
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOCAL_TESSDATA_DIR = os.path.join(SCRIPT_DIR, "tessdata")
 LOG_PATH = os.path.join(SCRIPT_DIR, "last_ocr.log")
 LAST_CAPTURE_PATH = os.path.join(SCRIPT_DIR, "last_capture.png")
 LAST_PROCESSED_PATH = os.path.join(SCRIPT_DIR, "last_processed.png")
-NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 
 def log(message):
@@ -29,38 +17,11 @@ def log(message):
         log_file.write(f"[{timestamp}] {message}\n")
 
 
-def safe_log(message):
+def safe_log(message: str) -> None:
     try:
         log(message)
-    except Exception:
-        pass
-
-
-def find_tesseract():
-    configured = os.environ.get("TESSERACT_CMD")
-    if configured and os.path.isfile(configured):
-        return configured
-
-    for path in COMMON_TESSERACT_PATHS:
-        if os.path.isfile(path):
-            return path
-
-    return shutil.which("tesseract")
-
-
-def normalize_language_spec(lang):
-    return "+".join(token.strip() for token in lang.split("+") if token.strip())
-
-
-def has_complete_local_tessdata(lang, directory=LOCAL_TESSDATA_DIR):
-    normalized_lang = normalize_language_spec(lang)
-    languages = normalized_lang.split("+") if normalized_lang else []
-    if not languages or not os.path.isdir(directory):
-        return False
-    return all(
-        os.path.isfile(os.path.join(directory, f"{language}.traineddata"))
-        for language in languages
-    )
+    except OSError:
+        return
 
 
 def copy_to_clipboard(text):
@@ -109,8 +70,8 @@ def notify(title, message):
 
         root.after(2600, root.destroy)
         root.mainloop()
-    except Exception:
-        pass
+    except tk.TclError:
+        return
 
 
 class RegionSelector:
@@ -156,8 +117,8 @@ class RegionSelector:
             width=3,
         )
 
-    def on_drag(self, event):
-        if not self.rect_id:
+    def on_drag(self, event: tk.Event) -> None:
+        if not self.rect_id or self.start_x is None or self.start_y is None:
             return
         self.canvas.coords(
             self.rect_id,
@@ -167,7 +128,11 @@ class RegionSelector:
             self.root.winfo_pointery(),
         )
 
-    def on_release(self, _event):
+    def on_release(self, _event: tk.Event) -> None:
+        if self.start_x is None or self.start_y is None:
+            self.bbox = None
+            self.root.quit()
+            return
         end_x = self.root.winfo_pointerx()
         end_y = self.root.winfo_pointery()
         left, right = sorted([self.start_x, end_x])
@@ -191,58 +156,31 @@ class RegionSelector:
         return self.bbox
 
 
-def preprocess(image):
-    image = ImageOps.grayscale(image)
-    image = ImageOps.autocontrast(image)
-    image = image.resize((image.width * 2, image.height * 2))
-    image = ImageEnhance.Contrast(image).enhance(1.5)
-    return image.filter(ImageFilter.SHARPEN)
+def load_engine():
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except (ImportError, OSError) as error:
+        safe_log(f"rapidocr_import_error={error}")
+        notify("OCR 未配置", "RapidOCR 不可用，请先运行 install-deps.py 安装依赖")
+        return None
+
+    try:
+        return RapidOCR()
+    except (OSError, RuntimeError) as error:
+        safe_log(f"rapidocr_init_error={error}")
+        notify("OCR 未配置", f"RapidOCR 初始化失败：{str(error)[:120]}")
+        return None
 
 
-def run_tesseract(tesseract_cmd, image_path, output_base, lang, psm):
-    normalized_lang = normalize_language_spec(lang)
-    cmd = [
-        tesseract_cmd,
-        image_path,
-        output_base,
-        "-l",
-        normalized_lang,
-        "--psm",
-        str(psm),
-    ]
-    use_local_tessdata = has_complete_local_tessdata(
-        normalized_lang, LOCAL_TESSDATA_DIR
-    )
-    if use_local_tessdata:
-        cmd.extend(["--tessdata-dir", LOCAL_TESSDATA_DIR])
-
-    env = os.environ.copy()
-    if use_local_tessdata:
-        env["TESSDATA_PREFIX"] = LOCAL_TESSDATA_DIR
-
-    log("Running: " + " ".join(f'"{part}"' if " " in part else part for part in cmd))
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        env=env,
-        creationflags=NO_WINDOW,
-    )
-
-
-def run_ocr():
+def run_ocr() -> int:
     try:
         if os.path.exists(LOG_PATH):
             os.remove(LOG_PATH)
-    except Exception:
-        pass
+    except OSError as error:
+        safe_log(f"cleanup_error={error}")
 
-    tesseract_cmd = find_tesseract()
-    log(f"tesseract={tesseract_cmd}")
-    log(f"local_tessdata={LOCAL_TESSDATA_DIR} exists={os.path.isdir(LOCAL_TESSDATA_DIR)}")
-
-    if not tesseract_cmd:
-        notify("OCR 未配置", "没有找到 tesseract.exe")
+    engine = load_engine()
+    if not engine:
         return 1
 
     selector = RegionSelector()
@@ -254,49 +192,22 @@ def run_ocr():
     time.sleep(0.35)
     image = ImageGrab.grab(bbox=bbox)
     image.save(LAST_CAPTURE_PATH)
-    image = preprocess(image)
     image.save(LAST_PROCESSED_PATH)
 
-    lang = normalize_language_spec(os.environ.get("OCR_LANG", "")) or DEFAULT_OCR_LANG
-    psm_values = [
-        os.environ.get("OCR_PSM", "6"),
-        "7",
-        "11",
-        "3",
-    ]
+    import numpy as np
 
-    with tempfile.TemporaryDirectory() as tmp:
-        image_path = os.path.join(tmp, "ocr.png")
-        image.save(image_path)
+    try:
+        result, elapse = engine(np.array(image))
+    except (RuntimeError, OSError) as error:
+        safe_log(f"ocr_error={error}")
+        notify("OCR 失败", str(error)[:120])
+        return 1
+    log(f"elapse={elapse}")
 
-        text = ""
-        last_error = ""
-        for psm in psm_values:
-            output_base = os.path.join(tmp, f"ocr_{psm}")
-            proc = run_tesseract(tesseract_cmd, image_path, output_base, lang, psm)
-            log(f"psm={psm} returncode={proc.returncode}")
-            if proc.stdout:
-                log(f"stdout={proc.stdout.strip()}")
-            if proc.stderr:
-                log(f"stderr={proc.stderr.strip()}")
-            if proc.returncode != 0:
-                last_error = proc.stderr.strip() or "Tesseract 执行失败"
-                continue
-
-            text_path = output_base + ".txt"
-            with open(text_path, "r", encoding="utf-8", errors="ignore") as text_file:
-                candidate = text_file.read().strip()
-            log(f"psm={psm} text_len={len(candidate)} text={candidate[:120]}")
-            if candidate:
-                text = candidate
-                break
-
-        if not text and last_error:
-            error_preview = last_error
-            if len(error_preview) > 120:
-                error_preview = error_preview[:120] + "..."
-            notify("OCR 失败", error_preview)
-            return 1
+    text = ""
+    if result:
+        text = "\n".join(line[1] for line in result).strip()
+    log(f"text_len={len(text)} text={text[:120]}")
 
     if text:
         copy_to_clipboard(text)
@@ -310,10 +221,11 @@ def run_ocr():
     return 0
 
 
-def main():
+def main() -> int:
     try:
         return run_ocr()
-    except Exception as error:
+    except (OSError, RuntimeError, ValueError, ImportError, tk.TclError) as error:
+        # 顶层兜底：文件、运行时、图像与 tkinter 的预期异常都要通知用户而不是静默退出
         error_message = str(error).strip() or error.__class__.__name__
         safe_log(f"fatal_error={error.__class__.__name__}: {error_message}")
         if len(error_message) > 120:

@@ -1,8 +1,8 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 
 # @raycast.schemaVersion 1
 # @raycast.title Screenshot
-# @raycast.mode compact
+# @raycast.mode silent
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
 # @raycast.description 触发截图工具（Snipping Tool）截图，结果复制到剪贴板

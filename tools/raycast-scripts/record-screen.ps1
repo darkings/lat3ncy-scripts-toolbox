@@ -5,7 +5,7 @@
 # @raycast.mode silent
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
-# @raycast.description 触发截图工具（Snipping Tool）屏幕录制，一步直达框选
+# @raycast.description Start a Snipping Tool screen recording and select the area
 # @raycast.icon 🎥
 
 $ErrorActionPreference = 'Stop'
@@ -37,8 +37,8 @@ Start-Sleep -Milliseconds 60
 Start-Sleep -Milliseconds 500
 if (-not (Get-Process -Name 'SnippingTool' -ErrorAction SilentlyContinue))
 {
-  Write-Output '未检测到截图工具窗口，请确认系统为 Windows 11 22H2+'
+  Write-Output 'Snipping Tool window not found. Windows 11 22H2+ is required.'
   exit 1
 }
 
-Write-Output '屏幕录制已打开：框选区域后开始录制，录制中点击浮窗停止'
+Write-Output 'Screen recording opened: select an area to start, click the floating button to stop'

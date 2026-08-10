@@ -4,14 +4,24 @@
 把识别文本写回剪贴板并通过 Windows 通知显示摘要。超时 45 秒。
 """
 
+import os
 import sys
 import time
 import tkinter as tk
 from typing import Any
 
+import tomllib
 from PIL import Image, ImageGrab
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CLIPBOARD_TIMEOUT_SECONDS = 45
+
+# models.json 中预设的键名 -> RapidOCR 构造函数参数名
+MODEL_PARAM_NAMES = {
+    "det": "det_model_path",
+    "cls": "cls_model_path",
+    "rec": "rec_model_path",
+}
 
 
 def copy_to_clipboard(text: str) -> None:
@@ -139,6 +149,27 @@ def rounded_rect(
     return canvas.create_polygon(points, smooth=True, **kwargs)
 
 
+def load_model_paths() -> dict[str, str]:
+    """从 models.toml 读取模型配置，返回 RapidOCR 可用的模型路径参数。"""
+    config_path = os.path.join(SCRIPT_DIR, "models.toml")
+    try:
+        with open(config_path, "rb") as config_file:
+            config = tomllib.load(config_file)
+        preset = config.get("models", {}).get(config.get("model", "default"), {})
+    except (OSError, ValueError):
+        return {}
+
+    paths: dict[str, str] = {}
+    for key, param_name in MODEL_PARAM_NAMES.items():
+        value = preset.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        candidate = os.path.join(SCRIPT_DIR, value)
+        if os.path.isfile(candidate):
+            paths[param_name] = candidate
+    return paths
+
+
 def load_engine() -> Any | None:
     try:
         from rapidocr_onnxruntime import RapidOCR
@@ -147,7 +178,7 @@ def load_engine() -> Any | None:
         return None
 
     try:
-        return RapidOCR()
+        return RapidOCR(**load_model_paths())
     except (OSError, RuntimeError) as error:
         notify("OCR 未配置", f"RapidOCR 初始化失败：{str(error)[:120]}")
         return None

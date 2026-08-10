@@ -6,7 +6,7 @@
 # @raycast.timeout 90000
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
-# @raycast.description 系统截图后自动 OCR，识别文本复制到剪贴板，托盘气泡显示结果
+# @raycast.description Screenshot, OCR text, copy to clipboard and show a balloon tip
 # @raycast.icon 🧠
 
 $ErrorActionPreference = 'Stop'

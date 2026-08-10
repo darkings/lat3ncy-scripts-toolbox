@@ -1,8 +1,8 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 
 # @raycast.schemaVersion 1
 # @raycast.title Screen Record
-# @raycast.mode compact
+# @raycast.mode silent
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
 # @raycast.description 触发截图工具（Snipping Tool）屏幕录制，一步直达框选

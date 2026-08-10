@@ -29,6 +29,7 @@ import sys
 PIP_PACKAGES: list[str] = [
     "pillow",
     "rapidocr-onnxruntime",
+    "pyperclip",
 ]
 
 # pip 包名 -> 模块导入名

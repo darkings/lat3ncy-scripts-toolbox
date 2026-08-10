@@ -9,4 +9,5 @@ __pycache__/
 /docs/
 
 **/*.log
-/tools/raycst-scripts/ocr/*.png
+/tools/raycast-scripts/ocr/*.png
+/tools/raycast-scripts/ocr/models/*.onnx

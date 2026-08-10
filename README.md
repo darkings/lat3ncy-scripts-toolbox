@@ -74,22 +74,31 @@ powershell.exe -NoProfile -File .\ahk\tests\run-tests.ps1
 屏幕区域 OCR 依赖 Python 3、Pillow 与 RapidOCR（中英文识别，模型随包分发、完全离线）。运行依赖安装脚本自动完成安装：
 
 ```powershell
-python .\tools\raycst-scripts\ocr\install-deps.py
+python .\tools\raycast-scripts\ocr\install-deps.py
 ```
 
-脚本会先检测操作系统与 Python 环境，再按平台选用解释器（Windows 优先 `python`，macOS/Linux 优先 `python3`），仅安装缺失的 pip 依赖并验证 RapidOCR 引擎可加载；重复运行会自动跳过已装依赖，`--check` 参数可只检测不安装。
+脚本会先检测操作系统与 Python 环境，再按平台选用解释器（Windows 优先 `python`，macOS/Linux 优先 `python3`），仅安装缺失的 pip 依赖并验证 RapidOCR 引擎可加载；重复运行会自动跳过已装依赖，`--check` 参数可只检测不安装。安装完成后会询问是否下载 PP-OCRv4 移动端模型，下载完成后可继续询问是否将 `models.toml` 切换为 `mobile`。
 
-推荐通过 Raycast 命令 **Screenshot OCR**（`tools/raycst-scripts/screenshot-ocr.ps1`）触发：注入 `Win+Shift+S` 打开系统截图框选，随后由 `ocr/ocr.py` 静默识别。也可以手动运行：
+推荐通过 Raycast 命令 **Screenshot OCR**（`tools/raycast-scripts/screenshot-ocr.ps1`）触发：注入 `Win+Shift+S` 打开系统截图框选，随后由 `ocr/ocr.py` 静默识别，完成后托盘气泡显示结果。也可以手动运行：
 
 ```powershell
-pythonw.exe .\tools\raycst-scripts\ocr\ocr.py
+pythonw.exe .\tools\raycast-scripts\ocr\ocr.py
 ```
 
-脚本轮询系统剪贴板中的图片（超时 45 秒，按 Esc 取消则直接退出），识别中英文后把文本写回剪贴板，并通过 Windows 通知显示摘要；`last_capture.png`、`last_processed.png`、`last_ocr.log` 留在同目录供排查。
+脚本轮询系统剪贴板中的图片（超时 45 秒，按 Esc 取消则直接退出），识别中英文后把文本写回剪贴板并显示结果通知（Raycast 流程为托盘气泡，手动运行为右上角自绘卡片），不产生日志或临时文件。
+
+### OCR 模型配置
+
+`tools/raycast-scripts/ocr/models.toml`（TOML，支持 `#` 注释）中 `models` 下列出所有可用模型的完整配置（检测 `det` / 方向分类 `cls` / 识别 `rec` 三个模型路径），修改顶层 `model` 字段选择生效的模型，文件内注释有完整说明：
+
+- `default`（默认）：`""` 表示使用 RapidOCR 包内置的 PP-OCRv4 全精度模型，精度优先
+- `mobile`：使用 PP-OCRv4 移动端模型，识别更快、精度略降；运行 `python .\tools\raycast-scripts\ocr\install-deps.py` 后按提示选择下载（sha256 校验，已存在则跳过），下载完成后可一键把 `models.toml` 切换为 `mobile`
+
+路径缺失时自动回退对应内置模型（`cls` 缺失时回退的内置模型与本配置指向的是同一文件），不影响启动。
 
 ## Raycast 脚本
 
-`tools/raycst-scripts/` 提供五个 PowerShell Script Command：
+`tools/raycast-scripts/` 提供六个 Script Command：
 
 | 脚本 | 功能 |
 | --- | --- |
@@ -98,9 +107,9 @@ pythonw.exe .\tools\raycst-scripts\ocr\ocr.py
 | `record-screen.ps1` | 注入 `Win+Shift+R` 直接打开截图工具（Snipping Tool）的屏幕录制框选，停止录制使用录制浮窗按钮，产物保存到 `Videos\Captures` |
 | `screenshot.ps1` | 注入 `Win+Shift+S` 打开截图工具框选，结果复制到剪贴板（可用智能粘贴保存到目录） |
 | `screenshot-ocr.ps1` | 注入 `Win+Shift+S` 后启动 `ocr/ocr.py`，框选结束自动 OCR，识别文本复制到剪贴板 |
-| `ocr/install-deps.py` | 安装 OCR 依赖（Pillow + RapidOCR），已装则跳过 |
+| `ocr/install-deps.py` | 安装 OCR 依赖（Pillow + RapidOCR + pyperclip），按提示下载移动端模型，已装则跳过 |
 
-在 Raycast 的 Script Commands 设置中添加 `tools/raycst-scripts` 目录即可使用，并可对每个命令单独绑定 Hotkey。NeoMutt 脚本要求 `pwsh.exe` 可通过 PATH 解析，并且默认 WSL 发行版内已安装 `neomutt`；AutoHotkey 重启脚本要求 `AutoHotkey.exe` 可通过 PATH 解析；录屏脚本要求 Windows 11 22H2+（截图工具自带屏幕录制）；OCR 脚本要求先运行 `install-deps.py` 安装 RapidOCR，且 `pythonw.exe` 可通过 PATH 解析。
+在 Raycast 的 Script Commands 设置中添加 `tools/raycast-scripts` 目录即可使用，并可对每个命令单独绑定 Hotkey。NeoMutt 脚本要求 `pwsh.exe` 可通过 PATH 解析，并且默认 WSL 发行版内已安装 `neomutt`；AutoHotkey 重启脚本要求 `AutoHotkey.exe` 可通过 PATH 解析；录屏脚本要求 Windows 11 22H2+（截图工具自带屏幕录制）；OCR 脚本要求先运行 `install-deps.py` 安装 RapidOCR，且 `pythonw.exe` 可通过 PATH 解析。
 
 ## Navicat-refresh
 
@@ -125,6 +134,6 @@ lat3ncy-scripts-toolbox/
 │   ├── features/             # 独立功能模块
 │   └── tests/                # AHK 与 PowerShell 自动测试
 ├── tools/
-│   └── raycst-scripts/        # Raycast 命令（含 ocr/ 子目录的 OCR 核心与依赖安装）
+│   └── raycast-scripts/        # Raycast 命令（含 ocr/ 子目录的 OCR 核心与依赖安装）
 └── README.md                 # 唯一提交的仓库文档
 ```

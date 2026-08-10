@@ -5,7 +5,7 @@
 # @raycast.mode silent
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
-# @raycast.description 触发截图工具（Snipping Tool）截图，结果复制到剪贴板
+# @raycast.description Take a Snipping Tool screenshot and copy the result to the clipboard
 # @raycast.icon 📷
 
 $ErrorActionPreference = 'Stop'
@@ -37,8 +37,8 @@ Start-Sleep -Milliseconds 60
 Start-Sleep -Milliseconds 500
 if (-not (Get-Process -Name 'SnippingTool' -ErrorAction SilentlyContinue))
 {
-  Write-Output '未检测到截图工具窗口，请确认系统为 Windows 11 22H2+'
+  Write-Output 'Snipping Tool window not found. Windows 11 22H2+ is required.'
   exit 1
 }
 
-Write-Output '已打开截图：框选后结果复制到剪贴板，可用智能粘贴保存到目录'
+Write-Output 'Screenshot opened: select an area, the result will be copied to the clipboard'

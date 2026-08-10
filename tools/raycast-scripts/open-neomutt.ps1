@@ -5,7 +5,7 @@
 # @raycast.mode silent
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
-# @raycast.description 使用 PowerShell 7+ 打开默认 WSL 发行版并运行 NeoMutt
+# @raycast.description Open the default WSL distro with PowerShell 7+ and run NeoMutt
 # @raycast.icon ✉️
 
 $ErrorActionPreference = 'Stop'

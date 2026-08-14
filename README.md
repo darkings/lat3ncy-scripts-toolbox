@@ -119,9 +119,53 @@ pythonw.exe .\tools\raycast-scripts\ocr\ocr.py
 
 ```bash
 # windows
-.\reset_navicat.ps1 
+.\reset_navicat.ps1
 # macos
 .\reset_navicat.sh
+```
+
+## Theme Scheduler
+
+Windows 深浅色模式自动切换：根据日出/日落时间切换深浅色，定位失败时回退固定时间。
+
+### 运行方式
+
+由三个计划任务驱动（`schtasks /query /tn "Theme-*"` 查看）：
+
+| 任务 | 时间 | 作用 |
+| --- | --- | --- |
+| `Theme-Schedule-Update` | 每天 00:10 | 定位经纬度，计算当天日出/日落，更新下面两个任务的触发时间 |
+| `Theme-Light` | 日出时 | 切换浅色 |
+| `Theme-Dark` | 日落时 | 切换深色 |
+
+切换原理：修改 `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` 的 `AppsUseLightTheme` / `SystemUsesLightTheme`（1=浅色，0=深色）。
+
+### 手动控制
+
+```powershell
+# 立即重新计算日出/日落并更新时间
+schtasks /run /tn "Theme-Schedule-Update"
+
+# 立即切换深浅色
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\theme-scheduler\Set-Theme-Dark.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\theme-scheduler\Set-Theme-Light.ps1
+```
+
+### 配置
+
+编辑 `tools/theme-scheduler/Update-ThemeSchedule.ps1` 顶部：
+
+- 位置：默认通过**绕过系统代理**的直连 IP 定位经纬度（避免代理出口导致位置偏差）；也可手动填写 `$Latitude` / `$Longitude` 固定位置
+- 备用时间：定位失败或极昼/极夜时使用 `$FallbackLight`（默认 07:00）/ `$FallbackDark`（默认 19:00）
+
+运行日志写入同目录 `theme-scheduler.log`。
+
+### 计划任务注册
+
+```powershell
+schtasks /create /tn "Theme-Schedule-Update" /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\tools\theme-scheduler\Update-ThemeSchedule.ps1" /sc daily /st 00:10 /f
+schtasks /create /tn "Theme-Light" /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\tools\theme-scheduler\Set-Theme-Light.ps1" /sc daily /st 07:00 /f
+schtasks /create /tn "Theme-Dark" /tr "powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\tools\theme-scheduler\Set-Theme-Dark.ps1" /sc daily /st 19:00 /f
 ```
 
 ## 仓库结构
@@ -134,6 +178,8 @@ lat3ncy-scripts-toolbox/
 │   ├── features/             # 独立功能模块
 │   └── tests/                # AHK 与 PowerShell 自动测试
 ├── tools/
-│   └── raycast-scripts/        # Raycast 命令（含 ocr/ 子目录的 OCR 核心与依赖安装）
+│   ├── navicat-refresh/      # Navicat 试用期重置（MacOS/Windows）
+│   ├── raycast-scripts/      # Raycast 命令（含 ocr/ 子目录的 OCR 核心与依赖安装）
+│   └── theme-scheduler/      # Windows 深浅色自动切换（日出日落调度）
 └── README.md                 # 唯一提交的仓库文档
 ```

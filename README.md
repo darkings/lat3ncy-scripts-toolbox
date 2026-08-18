@@ -89,6 +89,11 @@ pythonw.exe .\tools\raycast-scripts\ocr\ocr.py
 
 ### OCR 模型配置
 
+`tools/raycast-scripts/ocr/config.json` 的 `"ocr"` 字段切换识别引擎：
+
+- `system`（默认）：使用 Windows 系统文本操作（`Win+Shift+T`，Windows 11 23H2+），框选后由系统自动 OCR，无需 Python 依赖
+- `rapidocr`：使用 RapidOCR（`pythonw` + `ocr/ocr.py`，ctypes 注入 `Win+Shift+S`），识别精度更高但需先运行 `install-deps.py` 安装依赖
+
 `tools/raycast-scripts/ocr/models.toml`（TOML，支持 `#` 注释）中 `models` 下列出所有可用模型的完整配置（检测 `det` / 方向分类 `cls` / 识别 `rec` 三个模型路径），修改顶层 `model` 字段选择生效的模型，文件内注释有完整说明：
 
 - `default`（默认）：`""` 表示使用 RapidOCR 包内置的 PP-OCRv4 全精度模型，精度优先

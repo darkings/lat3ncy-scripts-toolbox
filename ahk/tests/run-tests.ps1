@@ -12,6 +12,17 @@ $testScript = Join-Path $PSScriptRoot 'run-tests.ahk'
 
 function Resolve-AutoHotkeyV2Executable
 {
+  # 优先标准 v2 安装位置（官方安装程序默认安装到 LOCALAPPDATA）
+  $standardV2 = Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey\v2'
+  foreach ($engineName in @('AutoHotkey64.exe', 'AutoHotkey32.exe'))
+  {
+    $candidate = Join-Path $standardV2 $engineName
+    if (Test-Path -LiteralPath $candidate -PathType Leaf)
+    {
+      return $candidate
+    }
+  }
+
   $command = Get-Command AutoHotkey.exe -ErrorAction Stop
   $executable = $command.Source
   $shimFile = [System.IO.Path]::ChangeExtension($executable, '.shim')
@@ -182,9 +193,9 @@ try
   $hasParseError = $engineOutput -match '(?im)==>|\bError:|cannot be opened|does not contain a recognized action'
   $hasResult = Test-Path -LiteralPath $resultFile
   $result = if ($hasResult)
-  { Get-Content -Raw -LiteralPath $resultFile 
+  { Get-Content -Raw -LiteralPath $resultFile
   } else
-  { '' 
+  { ''
   }
   $hasFreshPass = $hasResult -and $result.Trim() -ceq 'PASS: core assertions'
 

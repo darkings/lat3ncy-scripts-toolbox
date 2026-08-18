@@ -22,6 +22,21 @@ $resolvedMainScript = (Resolve-Path -LiteralPath $mainScript).Path
 $escapedMainScript = [Regex]::Escape($resolvedMainScript)
 $toolboxPathPattern = 'lat3ncy-scripts-toolbox[\\/]ahk[\\/]main\.ahk'
 
+function Resolve-AutoHotkeyV2Executable
+{
+  # 优先标准 v2 安装位置（官方安装程序默认安装到 LOCALAPPDATA）
+  $standardV2 = Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey\v2'
+  foreach ($engineName in @('AutoHotkey64.exe', 'AutoHotkey32.exe'))
+  {
+    $candidate = Join-Path $standardV2 $engineName
+    if (Test-Path -LiteralPath $candidate -PathType Leaf)
+    {
+      return $candidate
+    }
+  }
+  return (Get-Command AutoHotkey.exe -ErrorAction Stop).Source
+}
+
 function Get-ToolboxAutoHotkeyProcess
 {
   @(Get-CimInstance Win32_Process |
@@ -44,7 +59,7 @@ if ($toolboxProcesses)
   Start-Sleep -Milliseconds 200
 }
 
-$autoHotkey = (Get-Command AutoHotkey.exe -ErrorAction Stop).Source
+$autoHotkey = Resolve-AutoHotkeyV2Executable
 $workingDirectory = Split-Path $resolvedMainScript -Parent
 $mainScriptArgument = '"{0}"' -f $resolvedMainScript
 

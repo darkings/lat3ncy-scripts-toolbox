@@ -16,6 +16,14 @@ class SmartPasteClipboard {
 }
 
 class SmartPaste {
+    static VsCodeCopyPathShortcut := ""
+    static ZedCopyPathShortcut := ""
+
+    static Configure(vsCodeCopyPathShortcut, zedCopyPathShortcut) {
+        this.VsCodeCopyPathShortcut := vsCodeCopyPathShortcut
+        this.ZedCopyPathShortcut := zedCopyPathShortcut
+    }
+
     static HelperPath() {
         return A_ScriptDir "\features\smart-paste\save-clipboard-image.ps1"
     }
@@ -185,7 +193,11 @@ class SmartPaste {
             return
         }
 
-        copyPathShortcut := isZed ? Shortcuts.ZedCopyPath : Shortcuts.VsCodeCopyPath
+        copyPathShortcut := isZed
+            ? this.ZedCopyPathShortcut
+            : this.VsCodeCopyPathShortcut
+        if !copyPathShortcut
+            throw Error("智能粘贴尚未配置编辑器 Copy Path 快捷键")
         try {
             destination := this.GetCopyPathSelectedDirectory(copyPathShortcut)
         } catch as probeError {
@@ -279,8 +291,3 @@ class SmartPaste {
 
 SmartPaste.HotkeyCallback := ObjBindMethod(SmartPaste, "Paste")
 SmartPaste.HideTipCallback := ObjBindMethod(SmartPaste, "HideTip")
-
-if !IsToolboxTestMode() {
-    SmartPaste.EnsureHelperAvailable()
-    RegisterFeatureHotkey("智能粘贴", Shortcuts.SmartPaste, SmartPaste.HotkeyCallback)
-}

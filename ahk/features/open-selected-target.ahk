@@ -121,6 +121,3 @@ class OpenSelectedTarget {
 
 OpenSelectedTarget.HotkeyCallback := ObjBindMethod(OpenSelectedTarget, "Open")
 OpenSelectedTarget.HideTipCallback := ObjBindMethod(OpenSelectedTarget, "HideTip")
-
-if !IsToolboxTestMode()
-    RegisterFeatureHotkey("打开选中目标", Shortcuts.OpenSelectedTarget, OpenSelectedTarget.HotkeyCallback)

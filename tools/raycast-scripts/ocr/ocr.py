@@ -16,7 +16,7 @@ from PIL import Image, ImageGrab
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CLIPBOARD_TIMEOUT_SECONDS = 45
 
-# models.json 中预设的键名 -> RapidOCR 构造函数参数名
+# config.toml 中预设的键名 -> RapidOCR 构造函数参数名
 MODEL_PARAM_NAMES = {
     "det": "det_model_path",
     "cls": "cls_model_path",
@@ -150,8 +150,8 @@ def rounded_rect(
 
 
 def load_model_paths() -> dict[str, str]:
-    """从 models.toml 读取模型配置，返回 RapidOCR 可用的模型路径参数。"""
-    config_path = os.path.join(SCRIPT_DIR, "models.toml")
+    """从 config.toml 读取模型配置，返回 RapidOCR 可用的模型路径参数。"""
+    config_path = os.path.join(SCRIPT_DIR, "config.toml")
     try:
         with open(config_path, "rb") as config_file:
             config = tomllib.load(config_file)

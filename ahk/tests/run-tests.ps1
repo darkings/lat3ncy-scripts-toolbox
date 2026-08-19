@@ -74,21 +74,6 @@ function Test-FeatureLoadsIndependently
   )
   $stub = @"
 #Requires AutoHotkey v2.0
-class Shortcuts {
-    static CapsLockIme := "`$CapsLock"
-    static AlwaysOnTop := "^#t"
-    static ToggleHiddenFiles := "#+."
-    static SearchSelectedText := "^+g"
-    static SmartPaste := "`$^v"
-    static VsCodeCopyPath := "+!c"
-    static ZedCopyPath := "+!c"
-    static OpenSelectedTarget := "^!o"
-    static LocateSelectedTarget := "^!e"
-    static SwitchAppWindowNext := "!sc029"
-    static SwitchAppWindowPrevious := "+!sc029"
-}
-IsToolboxTestMode() => true
-RegisterFeatureHotkey(*) => 0
 #Include "$FeaturePath"
 ExitApp 0
 "@
@@ -147,6 +132,7 @@ try
     (Join-Path (Join-Path $featureRoot 'smart-paste') 'smart-paste.ahk'),
     (Join-Path $featureRoot 'open-selected-target.ahk'),
     (Join-Path $featureRoot 'locate-selected-target.ahk'),
+    (Join-Path $featureRoot 'speak-selected-text.ahk'),
     (Join-Path $featureRoot 'switch-app-window.ahk')
   )
   foreach ($featurePath in $independentFeatures)

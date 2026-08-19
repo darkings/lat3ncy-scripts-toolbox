@@ -162,9 +162,9 @@ def prompt_yes_no(question: str) -> bool:
 
 
 def switch_model_to_mobile() -> None:
-    """把 models.toml 顶层 model 字段切换为 mobile。"""
+    """把 config.toml 顶层 model 字段切换为 mobile。"""
     config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "models.toml"
+        os.path.dirname(os.path.abspath(__file__)), "config.toml"
     )
     lines = open(config_path, encoding="utf-8").readlines()
     for index, line in enumerate(lines):
@@ -172,7 +172,7 @@ def switch_model_to_mobile() -> None:
             lines[index] = 'model = "mobile"\n'
             break
     open(config_path, "w", encoding="utf-8").writelines(lines)
-    print('已切换：model = "mobile"（修改 ocr/models.toml 可随时切回 default）')
+    print('已切换：model = "mobile"（修改 ocr/config.toml 可随时切回 default）')
 
 
 def verify_engine(python: list[str]) -> None:
@@ -230,7 +230,7 @@ def main() -> int:
             ensure_mobile_models()
         except (OSError, urllib.error.URLError) as error:
             raise SystemExit(f"移动端模型下载失败：{error}")
-        if prompt_yes_no("是否将 models.toml 的模型切换为 mobile？"):
+        if prompt_yes_no("是否将 config.toml 的模型切换为 mobile？"):
             switch_model_to_mobile()
 
     print("\n依赖安装完成，可以运行 Screenshot OCR 了。")

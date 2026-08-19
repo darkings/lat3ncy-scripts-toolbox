@@ -9,26 +9,27 @@
 # @raycast.description Screenshot, OCR text, copy to clipboard and show a balloon tip
 # @raycast.icon 🧠
 
-# OCR 引擎切换：ocr/config.json 的 "ocr" 字段
-#   "system"   （默认）Win+Shift+T 系统文本操作（Windows 11 23H2+），无需 Python
-#   "rapidocr" 旧方案：pythonw + RapidOCR（ctypes 注入 Win+Shift+S）
+# OCR 引擎切换：ocr/config.toml 的顶层 "ocr" 字段
+#   "system"   （默认）Win+Shift+T 系统文本操作（Windows 11 23H2+），
+#               框选识别复制全部由系统完成，本脚本不弹通知
+#   "rapidocr" 旧方案：pythonw + RapidOCR（ctypes 注入 Win+Shift+S），识别后弹气泡
 
 $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-# ---------- 读取 OCR 模式配置 ----------
+# ---------- 读取 OCR 模式配置（TOML 顶层键，正则解析） ----------
 $mode = 'system'
-$configPath = Join-Path $PSScriptRoot 'ocr\config.json'
+$configPath = Join-Path $PSScriptRoot 'ocr\config.toml'
 if (Test-Path -LiteralPath $configPath)
 {
   try
   {
-    $config = Get-Content -Raw -LiteralPath $configPath -Encoding UTF8 | ConvertFrom-Json
-    if ($config.ocr)
+    $configText = Get-Content -Raw -LiteralPath $configPath -Encoding UTF8
+    if ($configText -match '(?m)^\s*ocr\s*=\s*"([^"]+)"')
     {
-      $mode = [string]$config.ocr
+      $mode = $Matches[1]
     }
   } catch
   {
@@ -94,6 +95,7 @@ if ($mode -eq 'rapidocr')
 } else
 {
   # ================= 系统文本操作分支（Win+Shift+T） =================
+  # 仅注入快捷键：框选、识别、复制全部由系统完成，不弹通知。
   Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -111,39 +113,11 @@ public static class SystemHotkeySim {
   [SystemHotkeySim]::keybd_event(0x10, 0, 0x0002, [UIntPtr]::Zero) # Shift 抬起
   [SystemHotkeySim]::keybd_event(0x5B, 0, 0x0002, [UIntPtr]::Zero) # Win 抬起
 
-  # 记录触发前剪贴板文本，避免误取旧内容
-  $beforeText = [Windows.Forms.Clipboard]::GetText()
-
-  # 等待系统文本操作把识别文本写入剪贴板（框选 + 识别，最长 75 秒）
-  $text = ''
-  $ocrDeadline = (Get-Date).AddSeconds(75)
-  while ((Get-Date) -lt $ocrDeadline)
-  {
-    $candidate = [Windows.Forms.Clipboard]::GetText()
-    if ($candidate -and $candidate -ne $beforeText)
-    {
-      $text = $candidate
-      break
-    }
-    Start-Sleep -Milliseconds 300
-  }
-
-  if ($text)
-  {
-    [Windows.Forms.Clipboard]::SetText($text)
-    $message = $text.Replace("`r", ' ').Replace("`n", ' ')
-    if ($message.Length -gt 60)
-    {
-      $message = $message.Substring(0, 60) + '...'
-    }
-  } else
-  {
-    $title = 'OCR 未识别到文字'
-    $message = '请确认 Win+Shift+T 文本操作可用'
-  }
+  # 注入完成即退出（系统接管后续流程）
+  exit 0
 }
 
-# ---------- 托盘气泡：消息泵保持进程存活 ----------
+# ---------- 托盘气泡（仅 rapidocr 引擎）：消息泵保持进程存活 ----------
 $icon = New-Object System.Windows.Forms.NotifyIcon
 $icon.Icon = [System.Drawing.SystemIcons]::Information
 $icon.BalloonTipTitle = $title

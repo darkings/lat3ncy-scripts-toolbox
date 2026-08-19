@@ -68,6 +68,3 @@ class SearchSelectedText {
 
 SearchSelectedText.HotkeyCallback := ObjBindMethod(SearchSelectedText, "Search")
 SearchSelectedText.HideTipCallback := ObjBindMethod(SearchSelectedText, "HideTip")
-
-if !IsToolboxTestMode()
-    RegisterFeatureHotkey("搜索选中文字", Shortcuts.SearchSelectedText, SearchSelectedText.HotkeyCallback)

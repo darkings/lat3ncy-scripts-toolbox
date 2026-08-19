@@ -23,6 +23,3 @@ class AlwaysOnTop {
 
 AlwaysOnTop.HotkeyCallback := ObjBindMethod(AlwaysOnTop, "Toggle")
 AlwaysOnTop.HideTipCallback := ObjBindMethod(AlwaysOnTop, "HideTip")
-
-if !IsToolboxTestMode()
-    RegisterFeatureHotkey("窗口置顶", Shortcuts.AlwaysOnTop, AlwaysOnTop.HotkeyCallback)

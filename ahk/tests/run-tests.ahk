@@ -7,6 +7,8 @@ resultFile := A_Args.Length >= 2 ? A_Args[2] : A_Temp "\lat3ncy-toolbox-test-res
 if FileExist(resultFile)
     FileDelete resultFile
 
+OnError (e, mode) => (FileAppend("FAIL: Unhandled exception at line " e.Line ": " e.Message "`n" e.Stack "`n", resultFile), ExitApp(1))
+
 AssertEqual(expected, actual, name) {
     global resultFile
     if (expected !== actual) {
@@ -113,23 +115,23 @@ startupTruePosition := InStr(mainSource, "global ToolboxStarting := true")
 startupHandlerPosition := InStr(mainSource, "OnError ToolboxStartupErrorHandler")
 firstFeatureIncludePosition := InStr(mainSource, "#Include features\caps-lock-ime.ahk")
 lastFeatureIncludePosition := InStr(mainSource, "#Include features\switch-app-window.ahk")
+routerIncludePosition := InStr(mainSource, "#Include hotkey-router.ahk")
 startupFalsePosition := InStr(mainSource, "`nToolboxStarting := false")
 AssertEqual(true, startupTruePosition > 0, "startup flag exists")
 AssertEqual(true, startupHandlerPosition > startupTruePosition, "startup handler follows flag")
 AssertEqual(true, startupHandlerPosition < firstFeatureIncludePosition, "startup handler precedes feature includes")
-AssertEqual(true, startupFalsePosition > lastFeatureIncludePosition, "startup flag clears after feature includes")
+AssertEqual(true, routerIncludePosition > lastFeatureIncludePosition, "router loads after all features")
+AssertEqual(true, startupFalsePosition > routerIncludePosition, "startup flag clears after router")
 AssertEqual(false, ToolboxStarting, "startup flag cleared after successful includes")
 AssertEqual(false, HandleToolboxError(Error("runtime"), "test"), "runtime errors use default behavior")
 
-AssertEqual("toggle-input", CapsLockIme.Action(false, 100), "CapsLock short press")
-AssertEqual("enable-caps", CapsLockIme.Action(false, 500), "CapsLock long press")
-AssertEqual("disable-caps-force-english", CapsLockIme.Action(true, 100), "CapsLock unlock")
-AssertEqual(456, CapsLockIme.ResolveFocusedHwnd(456, 123), "focused HWND wins")
-AssertEqual(123, CapsLockIme.ResolveFocusedHwnd(0, 123), "active HWND fallback")
+AssertEqual(true, HasMethod(CapsLockIme, "Handle"), "CapsLock handle method exists")
 AssertEqual(true, HasMethod(CapsLockIme, "HideTip"), "CapsLock stable tooltip callback")
 AssertEqual(true, HasMethod(AlwaysOnTop, "HideTip"), "always-on-top stable tooltip callback")
 AssertEqual(true, HasMethod(ToggleHiddenFiles, "HideTip"), "hidden-files stable tooltip callback")
 AssertEqual("BoundFunc", Type(CapsLockIme.HotkeyCallback), "CapsLock bound hotkey callback")
+AssertEqual("BoundFunc", Type(CapsLockIme.KeyUpCallback), "CapsLock bound key-up callback")
+AssertEqual("BoundFunc", Type(CapsLockIme.LongPressCallback), "CapsLock bound long-press callback")
 AssertEqual("BoundFunc", Type(AlwaysOnTop.HotkeyCallback), "always-on-top bound hotkey callback")
 AssertEqual("BoundFunc", Type(ToggleHiddenFiles.HotkeyCallback), "hidden-files bound hotkey callback")
 AssertEqual(true, CapsLockIme.HotkeyCallback.Call("test", receiver => receiver == CapsLockIme), "CapsLock callback this")
@@ -141,6 +143,13 @@ AssertEqual("BoundFunc", Type(ToggleHiddenFiles.HideTipCallback), "hidden-files 
 CapsLockIme.HideTipCallback.Call()
 AlwaysOnTop.HideTipCallback.Call()
 ToggleHiddenFiles.HideTipCallback.Call()
+
+CapsLockIme._pressed := true
+CapsLockIme._chordUsed := false
+AssertEqual(true, MarkCapsChordUsed(), "Caps chord marker accepts active press")
+AssertEqual(true, CapsLockIme._chordUsed, "Caps chord marker records usage")
+CapsLockIme._pressed := false
+CapsLockIme._chordUsed := false
 AssertEqual("D:\Code\main.py", OpenSelectedTarget.Normalize('  "D:\Code\main.py:25:8"  '), "normalize target")
 AssertEqual("D:\Code\main.py", LocateSelectedTarget.Normalize("file:///D:/Code/main.py"), "normalize file URL")
 AssertEqual("$^v", Shortcuts.SmartPaste, "Smart Paste intercepts Ctrl+V without recursion")
@@ -302,7 +311,7 @@ for targetClass in [OpenSelectedTarget, LocateSelectedTarget] {
     AssertEqual("C:\中文\a.txt", targetClass.Normalize("file:///C:/%E4%B8%AD%E6%96%87/a.txt"), "UTF-8 local file URI")
     AssertEqual("\\server\share\中文.txt", targetClass.Normalize("file://server/share/%E4%B8%AD%E6%96%87.txt"), "UTF-8 UNC file URI")
 }
-for featureClass in [SearchSelectedText, SmartPaste, OpenSelectedTarget, LocateSelectedTarget] {
+for featureClass in [SearchSelectedText, SmartPaste, OpenSelectedTarget, LocateSelectedTarget, SpeakSelectedText] {
     AssertEqual("BoundFunc", Type(featureClass.HotkeyCallback), "selected action bound hotkey callback")
     AssertEqual("BoundFunc", Type(featureClass.HideTipCallback), "selected action bound tooltip callback")
     AssertEqual(true, featureClass.HotkeyCallback == featureClass.HotkeyCallback, "selected action stable hotkey callback")
@@ -310,11 +319,52 @@ for featureClass in [SearchSelectedText, SmartPaste, OpenSelectedTarget, LocateS
     AssertEqual(true, featureClass.HotkeyCallback.Call("test", receiver => receiver == featureClass), "selected action callback this")
     featureClass.HideTipCallback.Call()
 }
+
+AssertEqual(true, SpeakSelectedText.HasSpeakableText("hello"), "speak accepts English")
+AssertEqual(true, SpeakSelectedText.HasSpeakableText("今天学习"), "speak accepts Chinese")
+AssertEqual(true, SpeakSelectedText.HasSpeakableText("Windows 11"), "speak accepts mixed English and numbers")
+AssertEqual(true, SpeakSelectedText.HasSpeakableText("ChatGPT 中文版"), "speak accepts mixed Chinese and English")
+AssertEqual(false, SpeakSelectedText.HasSpeakableText("123456"), "speak rejects pure numbers")
+AssertEqual(false, SpeakSelectedText.HasSpeakableText("!@#$%^&*()"), "speak rejects pure symbols")
+AssertEqual(false, SpeakSelectedText.HasSpeakableText("   "), "speak rejects whitespace")
+AssertEqual("hello world", SpeakSelectedText.Normalize("  hello world  "), "speak normalizes whitespace")
+AssertEqual("*$CapsLock", Shortcuts.CapsLockIme, "CapsLock shortcut is *$CapsLock")
+AssertEqual("~CapsLock & s", Shortcuts.SpeakSelectedText, "speak shortcut is CapsLock & s")
+AssertEqual("~CapsLock & g", Shortcuts.SearchSelectedText, "search shortcut is CapsLock & g")
+AssertEqual("~CapsLock & o", Shortcuts.OpenSelectedTarget, "open shortcut is CapsLock & o")
+AssertEqual("~CapsLock & e", Shortcuts.LocateSelectedTarget, "locate shortcut is CapsLock & e")
+AssertEqual("~CapsLock & t", Shortcuts.AlwaysOnTop, "always on top shortcut is CapsLock & t")
+AssertEqual("~CapsLock & h", Shortcuts.ToggleHiddenFiles, "toggle hidden files shortcut is CapsLock & h")
+AssertEqual("~Alt Up", Shortcuts.SwitchAppWindowReset, "same-app reset shortcut")
+
+speakSource := FileRead(A_ScriptDir "\..\features\speak-selected-text.ahk", "UTF-8")
+AssertNotContains(speakSource, "Shortcuts.", "speak is independent from shortcut config")
+AssertContains(speakSource, 'ClipboardAll()', "speak captures clipboard safely")
+AssertContains(speakSource, 'finally', "speak restores clipboard in finally block")
+AssertContains(speakSource, 'mciSendStringW', "speak uses MCI to close audio")
+
 searchSource := FileRead(A_ScriptDir "\..\features\search-selected-text.ahk", "UTF-8")
 openSource := FileRead(A_ScriptDir "\..\features\open-selected-target.ahk", "UTF-8")
 locateSource := FileRead(A_ScriptDir "\..\features\locate-selected-target.ahk", "UTF-8")
 smartPasteSource := FileRead(A_ScriptDir "\..\features\smart-paste\smart-paste.ahk", "UTF-8")
+routerSource := FileRead(A_ScriptDir "\..\hotkey-router.ahk", "UTF-8")
 smartPasteHelperSource := FileRead(A_ScriptDir "\..\features\smart-paste\save-clipboard-image.ps1", "UTF-8")
+AssertContains(routerSource, "RegisterCapsChord", "router owns Caps chord wiring")
+AssertContains(routerSource, "MarkCapsChordUsed()", "router marks Caps chord before dispatch")
+AssertContains(routerSource, "SmartPaste.Configure", "router injects Smart Paste shortcuts")
+for featureSource in [
+    speakSource,
+    searchSource,
+    openSource,
+    locateSource,
+    smartPasteSource,
+    FileRead(A_ScriptDir "\..\features\always-on-top.ahk", "UTF-8"),
+    FileRead(A_ScriptDir "\..\features\toggle-hidden-files.ahk", "UTF-8"),
+    FileRead(A_ScriptDir "\..\features\switch-app-window.ahk", "UTF-8")
+] {
+    AssertNotContains(featureSource, "RegisterFeatureHotkey", "feature does not register hotkeys")
+    AssertNotContains(featureSource, "Shortcuts.", "feature does not read shortcut config")
+}
 AssertNotContains(searchSource, "OpenSelectedTarget", "search does not depend on open")
 AssertNotContains(searchSource, "LocateSelectedTarget", "search does not depend on locate")
 AssertNotContains(openSource, "SearchSelectedText", "open does not depend on search")
@@ -335,9 +385,11 @@ AssertContains(smartPasteSource, "finally", "VS Code probe restores clipboard in
 AssertContains(smartPasteSource, 'Send "^v"', "smart paste keeps ordinary paste fallback")
 AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "Paste")', "smart paste binds hotkey callback")
 AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "HideTip")', "smart paste binds tooltip callback")
-smartPasteStartupSource := SubStr(smartPasteSource, InStr(smartPasteSource, "if !IsToolboxTestMode()"))
-startupEnsurePosition := InStr(smartPasteStartupSource, "SmartPaste.EnsureHelperAvailable()")
-startupRegisterPosition := InStr(smartPasteStartupSource, 'RegisterFeatureHotkey("智能粘贴"')
+startupConfigurePosition := InStr(routerSource, "SmartPaste.Configure(")
+startupEnsurePosition := InStr(routerSource, "SmartPaste.EnsureHelperAvailable()")
+startupRegisterPosition := InStr(routerSource, "Shortcuts.SmartPaste")
+AssertEqual(true, startupConfigurePosition > 0, "smart paste startup injects shortcuts")
+AssertEqual(true, startupConfigurePosition < startupEnsurePosition, "smart paste config precedes helper validation")
 AssertEqual(true, startupEnsurePosition > 0, "smart paste startup validates helper")
 AssertEqual(true, startupEnsurePosition < startupRegisterPosition, "smart paste validates helper before registration")
 AssertContains(smartPasteHelperSource, '[IO.FileMode]::CreateNew', "image helper allocates unique temp file")

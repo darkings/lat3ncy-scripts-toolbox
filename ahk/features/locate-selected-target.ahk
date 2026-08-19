@@ -126,6 +126,3 @@ class LocateSelectedTarget {
 
 LocateSelectedTarget.HotkeyCallback := ObjBindMethod(LocateSelectedTarget, "Locate")
 LocateSelectedTarget.HideTipCallback := ObjBindMethod(LocateSelectedTarget, "HideTip")
-
-if !IsToolboxTestMode()
-    RegisterFeatureHotkey("定位选中目标", Shortcuts.LocateSelectedTarget, LocateSelectedTarget.HotkeyCallback)

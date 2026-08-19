@@ -59,6 +59,3 @@ class ToggleHiddenFiles {
 
 ToggleHiddenFiles.HotkeyCallback := ObjBindMethod(ToggleHiddenFiles, "Toggle")
 ToggleHiddenFiles.HideTipCallback := ObjBindMethod(ToggleHiddenFiles, "HideTip")
-
-if !IsToolboxTestMode()
-    RegisterFeatureHotkey("显示隐藏文件", Shortcuts.ToggleHiddenFiles, ToggleHiddenFiles.HotkeyCallback)

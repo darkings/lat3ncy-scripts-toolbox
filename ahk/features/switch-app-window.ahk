@@ -144,15 +144,3 @@ class SwitchAppWindow {
 SwitchAppWindow.ForwardCallback := ObjBindMethod(SwitchAppWindow, "Forward")
 SwitchAppWindow.BackwardCallback := ObjBindMethod(SwitchAppWindow, "Backward")
 SwitchAppWindow.ResetCallback := ObjBindMethod(SwitchAppWindow, "Reset")
-
-if !IsToolboxTestMode() {
-    RegisterFeatureHotkey(
-        "同应用下一窗口",
-        Shortcuts.SwitchAppWindowNext,
-        SwitchAppWindow.ForwardCallback)
-    RegisterFeatureHotkey(
-        "同应用上一窗口",
-        Shortcuts.SwitchAppWindowPrevious,
-        SwitchAppWindow.BackwardCallback)
-    Hotkey "~Alt Up", SwitchAppWindow.ResetCallback
-}

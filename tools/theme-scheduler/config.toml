@@ -1,0 +1,58 @@
+# ============================================================
+# Theme Scheduler (Windows 主题 / 深浅色 / 壁纸自动调度配置)
+# ============================================================
+
+[general]
+# 切换类型：
+#   - "mode"  (深浅色模式切换：切换系统任务栏与应用深浅色，默认推荐)
+#   - "theme" (完整主题切换：应用 .theme 官方或自定义主题包文件)
+switch_type = "mode"
+
+# 切换时是否弹出 HUD 提示通知 (☀️ 已切换为浅色模式 / 🌙 已切换为深色模式)
+show_notification = true
+
+[schedule]
+# 触发机制：
+#   - "sun"   (根据日出日落时间自动计算，每天动态对齐太阳作息)
+#   - "fixed" (使用下方固定的固定时间)
+trigger_mode = "sun"
+
+# 手动经纬度（留空则根据当前公网 IP 自动获取所在城市日出日落）
+latitude = ""    # 例: "31.2304" (上海)
+longitude = ""   # 例: "121.4737"
+
+# 备用 / 固定切换时间 (HH:mm)
+fixed_light_time = "07:00"  # 白天 / 浅色切换时间
+fixed_dark_time  = "19:00"  # 夜间 / 深色切换时间
+
+# ============================================================
+# 模式 A: 深浅模式配置 (当 switch_type = "mode" 时生效)
+# ============================================================
+[mode_settings]
+switch_apps = true    # 是否切换应用程序 (Edge, Chrome, VS Code, 文件资源管理器等)
+switch_system = true  # 是否切换系统任务栏、开始菜单、操作中心
+
+# ============================================================
+# 壁纸联动配置 (可选，支持独立开关)
+# ============================================================
+[wallpaper]
+# 是否在切换时自动更换桌面壁纸 (true / false)
+# 若设为 false，则不改变当前壁纸 (默认 false)
+enabled = false
+
+# 白天 / 浅色模式专属壁纸绝对路径 (支持 jpg, png, bmp)
+light_wallpaper = ""
+
+# 夜间 / 深色模式专属壁纸绝对路径 (支持 jpg, png, bmp)
+dark_wallpaper = ""
+
+# ============================================================
+# 模式 B: 官方 / 自定义 .theme 主题包配置 (当 switch_type = "theme" 时生效)
+# ============================================================
+[theme_settings]
+# 主题配置支持以下两种填写方式：
+#   1. 仅填主题名：例如 "aero"、"dark"、"spotlight" -> 自动从 C:\Windows\Resources\Themes\ 寻找
+#                 例如 "Light Theme"、"Dark Theme" -> 自动从系统用户主题目录寻找
+#   2. 填完整绝对路径：例如 "C:\Windows\Resources\Themes\aero.theme" 或 "D:\Themes\MyTheme.theme"
+light_theme_file = "aero.theme"
+dark_theme_file  = "dark.theme"

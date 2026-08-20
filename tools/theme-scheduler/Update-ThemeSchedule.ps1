@@ -1,21 +1,14 @@
 # Update-ThemeSchedule.ps1
-# 根据日出/日落时间自动切换 Windows 深浅色模式(固定时间作为备用)
-# 用法:
-#   - 手动配置位置:修改下面的 $Latitude / $Longitude(留空则 IP 直连定位)
-#   - IP 定位失败或算法异常:回退到 $FallbackLight / $FallbackDark 固定时间
+# 根据日出/日落时间或固定时间自动调度 Windows 深浅色模式/主题/壁纸切换
 # 计划任务:
 #   Theme-Schedule-Update  每天 00:10 运行本脚本,更新当天切换时间
-#   Theme-Light            日出时间执行(浅色)
-#   Theme-Dark             日落时间执行(深色)
-
-# ===== 配置 =====
-$Latitude  = $null   # 例: 31.2304 (上海);留空则 IP 直连定位
-$Longitude = $null   # 例: 121.4737
-$FallbackLight = '07:00'   # 备用:浅色时间
-$FallbackDark  = '19:00'   # 备用:深色时间
-# ================
+#   Theme-Light            日出或指定时间执行(浅色/白天)
+#   Theme-Dark             日落或指定时间执行(深色/夜晚)
 
 $ErrorActionPreference = 'Continue'
+. (Join-Path $PSScriptRoot 'ThemeUtils.ps1')
+
+$config = Get-ThemeConfig
 $LightTask = 'Theme-Light'
 $DarkTask  = 'Theme-Dark'
 $LogFile   = Join-Path $PSScriptRoot 'theme-scheduler.log'
@@ -31,9 +24,13 @@ function Write-Log
 # ---------- 获取经纬度(绕过代理直连,10 秒超时) ----------
 function Get-Coordinates
 {
-  if ($Latitude -and $Longitude)
+  if ($config.schedule.latitude -and $config.schedule.longitude)
   {
-    return [pscustomobject]@{ Lat = [double]$Latitude; Lon = [double]$Longitude; Source = 'config' }
+    return [pscustomobject]@{
+      Lat = [double]$config.schedule.latitude
+      Lon = [double]$config.schedule.longitude
+      Source = 'config'
+    }
   }
   try
   {
@@ -53,7 +50,8 @@ function Get-Coordinates
     {
       return [pscustomobject]@{ Lat = [double]$loc[0]; Lon = [double]$loc[1]; Source = 'ip' }
     }
-  } catch
+  }
+  catch
   {
   }
   return $null
@@ -78,7 +76,8 @@ function Get-SunTimes
   $cosHa = ([Math]::Cos(90.833 * [Math]::PI / 180) / ([Math]::Cos($latRad) * [Math]::Cos($decl)) `
       - [Math]::Tan($latRad) * [Math]::Tan($decl))
   if ($cosHa -gt 1 -or $cosHa -lt -1)
-  { return $null
+  {
+    return $null
   }  # 极昼/极夜
 
   $ha = [Math]::Acos($cosHa)
@@ -92,32 +91,41 @@ function Get-SunTimes
 }
 
 # ---------- 主流程 ----------
-$coords = Get-Coordinates
-if (-not $coords)
-{
-  Write-Log 'Location lookup failed, using fallback times.'
-  $riseTime = [datetime]::Parse($FallbackLight)
-  $setTime  = [datetime]::Parse($FallbackDark)
-} else
-{
-  $sun = Get-SunTimes -Lat $coords.Lat -Lon $coords.Lon
-  if ($null -eq $sun)
-  {
-    Write-Log 'Sun times unavailable (polar day/night), using fallback times.'
-    $riseTime = [datetime]::Parse($FallbackLight)
-    $setTime  = [datetime]::Parse($FallbackDark)
-  } else
-  {
-    $riseTime = $sun.Sunrise
-    $setTime  = $sun.Sunset
-  }
-}
+$fallbackLight = if ($config.schedule.fixed_light_time) { $config.schedule.fixed_light_time } else { '07:00' }
+$fallbackDark  = if ($config.schedule.fixed_dark_time) { $config.schedule.fixed_dark_time } else { '19:00' }
 
-Write-Log ('Location: {0} ({1}, {2})' -f $(if ($coords)
-    { $coords.Source
-    } else
-    { 'fallback'
-    }), $riseTime.ToString('HH:mm'), $setTime.ToString('HH:mm'))
+if ($config.schedule.trigger_mode -eq 'fixed')
+{
+  $riseTime = [datetime]::Parse($fallbackLight)
+  $setTime  = [datetime]::Parse($fallbackDark)
+  Write-Log ('Schedule mode: fixed ({0}, {1})' -f $riseTime.ToString('HH:mm'), $setTime.ToString('HH:mm'))
+}
+else
+{
+  $coords = Get-Coordinates
+  if (-not $coords)
+  {
+    Write-Log 'Location lookup failed, using fallback times.'
+    $riseTime = [datetime]::Parse($fallbackLight)
+    $setTime  = [datetime]::Parse($fallbackDark)
+  }
+  else
+  {
+    $sun = Get-SunTimes -Lat $coords.Lat -Lon $coords.Lon
+    if ($null -eq $sun)
+    {
+      Write-Log 'Sun times unavailable (polar day/night), using fallback times.'
+      $riseTime = [datetime]::Parse($fallbackLight)
+      $setTime  = [datetime]::Parse($fallbackDark)
+    }
+    else
+    {
+      $riseTime = $sun.Sunrise
+      $setTime  = $sun.Sunset
+    }
+  }
+  Write-Log ('Location: {0} ({1}, {2})' -f $(if ($coords) { $coords.Source } else { 'fallback' }), $riseTime.ToString('HH:mm'), $setTime.ToString('HH:mm'))
+}
 
 # ---------- 更新计划任务时间(Set-ScheduledTask,无需密码) ----------
 try
@@ -125,16 +133,19 @@ try
   $lightTrigger = New-ScheduledTaskTrigger -Daily -At $riseTime
   Set-ScheduledTask -TaskName $LightTask -Trigger $lightTrigger | Out-Null
   Write-Log ("Theme-Light -> {0}: OK" -f $riseTime.ToString('HH:mm'))
-} catch
+}
+catch
 {
   Write-Log ("Theme-Light -> {0}: FAILED {1}" -f $riseTime.ToString('HH:mm'), $_.Exception.Message)
 }
+
 try
 {
   $darkTrigger = New-ScheduledTaskTrigger -Daily -At $setTime
   Set-ScheduledTask -TaskName $DarkTask -Trigger $darkTrigger | Out-Null
   Write-Log ("Theme-Dark -> {0}: OK" -f $setTime.ToString('HH:mm'))
-} catch
+}
+catch
 {
   Write-Log ("Theme-Dark -> {0}: FAILED {1}" -f $setTime.ToString('HH:mm'), $_.Exception.Message)
 }

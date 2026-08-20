@@ -1,8 +1,17 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
 #NoTrayIcon
+Persistent(true)
 
 global ToolboxStarting := true
+
+LogToolboxExit(exitReason, exitCode) {
+    try {
+        timeStr := FormatTime(, "yyyy-MM-dd HH:mm:ss")
+        FileAppend("[" timeStr "] main.ahk EXITING! Reason: " exitReason " Code: " exitCode "`n", "C:\Users\Jie\Projects\lat3ncy-scripts-toolbox\debug-notify.log", "UTF-8")
+    }
+}
+OnExit LogToolboxExit
 
 HandleToolboxError(exception, mode) {
     global ToolboxStarting
@@ -21,6 +30,13 @@ OnError ToolboxStartupErrorHandler
 IsToolboxTestMode() {
     return A_Args.Length >= 1 && A_Args[1] = "--test"
 }
+
+; ============================================================
+; 共享通知基础设施
+; ============================================================
+
+#Include ..\shared\notify\renderer.ahk
+#Include ..\shared\notify\notify.ahk
 
 ; ============================================================
 ; 功能实现层：只加载功能，不在模块内部注册快捷键

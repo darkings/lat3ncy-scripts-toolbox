@@ -9,6 +9,7 @@
 # @raycast.icon 🎥
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 # 截图工具的录屏模式没有公开命令行参数，只能注入系统热键 Win+Shift+R
 # 直达录制模式（keybd_event 为低层注入，可触发系统注册热键）。
@@ -37,8 +38,16 @@ Start-Sleep -Milliseconds 60
 Start-Sleep -Milliseconds 500
 if (-not (Get-Process -Name 'SnippingTool' -ErrorAction SilentlyContinue))
 {
-  Write-Output 'Snipping Tool window not found. Windows 11 22H2+ is required.'
+  $shown = Show-ToolboxNotify -Type 'error' -Icon '×' -Text '无法打开录屏工具'
+  if (-not $shown)
+  {
+    Write-Output '× 无法打开录屏工具'
+  }
   exit 1
 }
 
-Write-Output 'Screen recording opened: select an area to start, click the floating button to stop'
+$shown = Show-ToolboxNotify -Type 'state' -Icon '●' -Text '开始录屏'
+if (-not $shown)
+{
+  Write-Output '● 开始录屏'
+}

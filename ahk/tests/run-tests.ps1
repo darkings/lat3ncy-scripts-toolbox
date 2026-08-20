@@ -66,6 +66,8 @@ function Test-FeatureLoadsIndependently
     [Parameter(Mandatory = $true)]
     [string] $AutoHotkey,
     [Parameter(Mandatory = $true)]
+    [string] $NotifyRoot,
+    [Parameter(Mandatory = $true)]
     [string] $FeaturePath
   )
 
@@ -74,6 +76,8 @@ function Test-FeatureLoadsIndependently
   )
   $stub = @"
 #Requires AutoHotkey v2.0
+#Include "$(Join-Path $NotifyRoot 'renderer.ahk')"
+#Include "$(Join-Path $NotifyRoot 'notify.ahk')"
 #Include "$FeaturePath"
 ExitApp 0
 "@
@@ -123,7 +127,9 @@ $runnerExitCode = 1
 try
 {
   $autoHotkey = Resolve-AutoHotkeyV2Executable
+  $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
   $featureRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'features'
+  $notifyRoot = Join-Path (Join-Path $repoRoot 'shared') 'notify'
   $independentFeatures = @(
     (Join-Path $featureRoot 'caps-lock-ime.ahk'),
     (Join-Path $featureRoot 'always-on-top.ahk'),
@@ -137,21 +143,33 @@ try
   )
   foreach ($featurePath in $independentFeatures)
   {
-    Test-FeatureLoadsIndependently -AutoHotkey $autoHotkey -FeaturePath $featurePath
+    Test-FeatureLoadsIndependently -AutoHotkey $autoHotkey -NotifyRoot $notifyRoot -FeaturePath $featurePath
   }
 
-  $helperPath = Join-Path (Join-Path $featureRoot 'smart-paste') 'save-clipboard-image.ps1'
-  $parseErrors = $null
-  [void][Management.Automation.Language.Parser]::ParseFile(
-    $helperPath,
-    [ref]$null,
-    [ref]$parseErrors
+  $raycastRoot = Join-Path (Join-Path $repoRoot 'tools') 'raycast-scripts'
+  $powerShellScripts = @(
+    (Join-Path (Join-Path $featureRoot 'smart-paste') 'save-clipboard-image.ps1'),
+    (Join-Path (Join-Path $raycastRoot '_lib') 'notify.ps1'),
+    (Join-Path $raycastRoot 'screenshot.ps1'),
+    (Join-Path $raycastRoot 'screenshot-ocr.ps1'),
+    (Join-Path $raycastRoot 'record-screen.ps1'),
+    (Join-Path $raycastRoot 'restart-autohotkey.ps1'),
+    (Join-Path $raycastRoot 'reset-navicat.ps1')
   )
-  if ($parseErrors.Count -ne 0)
+  foreach ($scriptPath in $powerShellScripts)
   {
-    throw ('PowerShell helper AST parse failed: {0}' -f ($parseErrors.Message -join '; '))
+    $parseErrors = $null
+    [void][Management.Automation.Language.Parser]::ParseFile(
+      $scriptPath,
+      [ref]$null,
+      [ref]$parseErrors
+    )
+    if ($parseErrors.Count -ne 0)
+    {
+      throw ('PowerShell AST parse failed for {0}: {1}' -f $scriptPath, ($parseErrors.Message -join '; '))
+    }
+    [Console]::Out.WriteLine('PASS: PowerShell AST parse {0}' -f [System.IO.Path]::GetFileName($scriptPath))
   }
-  [Console]::Out.WriteLine('PASS: PowerShell helper AST parse')
 
   $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
   $startInfo.FileName = $autoHotkey

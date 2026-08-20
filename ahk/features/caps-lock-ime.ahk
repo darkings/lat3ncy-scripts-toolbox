@@ -13,7 +13,6 @@
 
 class CapsLockIme {
     static HoldThreshold := 500
-    static TipDuration := 1200
     static MessageTimeout := 80
     static RestoreImeAfterCaps := true
 
@@ -44,6 +43,7 @@ class CapsLockIme {
     }
 
     static OnKeyDown() {
+        NotifyRenderer.Log("CapsLock KeyDown: pressed=" this._pressed " isCapsToggled=" GetKeyState("CapsLock", "T"))
         ; 过滤按住 CapsLock 时产生的键盘自动重复。
         if this._pressed
             return
@@ -64,6 +64,7 @@ class CapsLockIme {
     }
 
     static OnKeyUp() {
+        NotifyRenderer.Log("CapsLock KeyUp: pressed=" this._pressed " chordUsed=" this._chordUsed " longPress=" this._longPressTriggered)
         if !this._pressed
             return
 
@@ -76,8 +77,14 @@ class CapsLockIme {
         this._longPressTriggered := false
 
         if shouldToggleIme {
-            this.ToggleIme()
-            this.ShowTip("已切换中英文")
+            newState := this.ToggleIme()
+            NotifyRenderer.Log("  ToggleIme returned: " newState)
+            if (newState = "chinese")
+                Notify.State("中", "中")
+            else if (newState = "english")
+                Notify.State("A", "A")
+            else
+                Notify.State("↔", "已切换")
         }
     }
 
@@ -115,7 +122,7 @@ class CapsLockIme {
         ; 大写输入必须使用英文；直接 API 失败时 SetImeState 会做受控回退。
         this.SetImeState("english")
         SetCapsLockState "On"
-        this.ShowTip("已开启大写")
+        Notify.State("CAPS", "CAPS")
     }
 
     static ExitCapsMode() {
@@ -135,11 +142,11 @@ class CapsLockIme {
         }
 
         if (desiredState = "chinese" && restored)
-            this.ShowTip("已关闭大写，恢复中文")
+            Notify.State("中", "中")
         else if (desiredState = "english" && restored)
-            this.ShowTip("已关闭大写，恢复英文")
+            Notify.State("A", "A")
         else
-            this.ShowTip("已关闭大写，已尝试切换英文")
+            Notify.Error("!", "输入法恢复失败")
 
         this._imeBeforeCaps := "unknown"
     }
@@ -147,6 +154,8 @@ class CapsLockIme {
     static ToggleIme() {
         ; 保留 Microsoft 拼音最自然的 Shift 中英文切换手感。
         Send "{Shift}"
+        Sleep 40
+        return this.GetCurrentImeState()
     }
 
     ; 返回 "chinese"、"english" 或 "unknown"。
@@ -197,7 +206,7 @@ class CapsLockIme {
         currentState := this.GetCurrentImeState(hwnd)
         if (currentState != "unknown" && currentState != desiredState) {
             Send "{Shift}"
-            Sleep 20
+            Sleep 30
             return this.GetCurrentImeState(hwnd) = desiredState
         }
 
@@ -220,7 +229,18 @@ class CapsLockIme {
                 "Ptr", inputContext,
                 "Int"
             )
-            return isOpen ? "chinese" : "english"
+            if !isOpen
+                return "english"
+
+            convMode := 0
+            sentMode := 0
+            DllCall(
+                "Imm32\ImmGetConversionStatus",
+                "Ptr", inputContext,
+                "UInt*", &convMode,
+                "UInt*", &sentMode
+            )
+            return (convMode & 1) ? "chinese" : "english"
         } catch {
             return "unknown"
         } finally {
@@ -246,12 +266,22 @@ class CapsLockIme {
             if !inputContext
                 return false
 
-            return !!DllCall(
-                "Imm32\ImmSetOpenStatus",
+            convMode := 0
+            sentMode := 0
+            DllCall(
+                "Imm32\ImmGetConversionStatus",
                 "Ptr", inputContext,
-                "Int", openIme,
-                "Int"
+                "UInt*", &convMode,
+                "UInt*", &sentMode
             )
+            newConvMode := openIme ? (convMode | 1) : (convMode & ~1)
+            DllCall(
+                "Imm32\ImmSetConversionStatus",
+                "Ptr", inputContext,
+                "UInt", newConvMode,
+                "UInt", sentMode
+            )
+            return true
         } catch {
             return false
         } finally {
@@ -276,7 +306,7 @@ class CapsLockIme {
             if !imeHwnd
                 return "unknown"
 
-            result := 0
+            openStatus := 0
             succeeded := DllCall(
                 "User32\SendMessageTimeoutW",
                 "Ptr", imeHwnd,
@@ -285,13 +315,28 @@ class CapsLockIme {
                 "Ptr", 0,
                 "UInt", this.SMTO_ABORTIFHUNG,
                 "UInt", this.MessageTimeout,
-                "UPtr*", &result,
+                "UPtr*", &openStatus,
+                "Ptr"
+            )
+            if (!succeeded || !openStatus)
+                return succeeded ? "english" : "unknown"
+
+            convMode := 0
+            succeeded := DllCall(
+                "User32\SendMessageTimeoutW",
+                "Ptr", imeHwnd,
+                "UInt", this.WM_IME_CONTROL,
+                "Ptr", 0x0001, ; IMC_GETCONVERSIONMODE
+                "Ptr", 0,
+                "UInt", this.SMTO_ABORTIFHUNG,
+                "UInt", this.MessageTimeout,
+                "UPtr*", &convMode,
                 "Ptr"
             )
             if !succeeded
                 return "unknown"
 
-            return result ? "chinese" : "english"
+            return (convMode & 1) ? "chinese" : "english"
         } catch {
             return "unknown"
         }
@@ -307,13 +352,29 @@ class CapsLockIme {
             if !imeHwnd
                 return false
 
+            convMode := 0
+            succeeded := DllCall(
+                "User32\SendMessageTimeoutW",
+                "Ptr", imeHwnd,
+                "UInt", this.WM_IME_CONTROL,
+                "Ptr", 0x0001, ; IMC_GETCONVERSIONMODE
+                "Ptr", 0,
+                "UInt", this.SMTO_ABORTIFHUNG,
+                "UInt", this.MessageTimeout,
+                "UPtr*", &convMode,
+                "Ptr"
+            )
+            if !succeeded
+                return false
+
+            newConvMode := openIme ? (convMode | 1) : (convMode & ~1)
             result := 0
             succeeded := DllCall(
                 "User32\SendMessageTimeoutW",
                 "Ptr", imeHwnd,
                 "UInt", this.WM_IME_CONTROL,
-                "Ptr", this.IMC_SETOPENSTATUS,
-                "Ptr", openIme ? 1 : 0,
+                "Ptr", 0x0002, ; IMC_SETCONVERSIONMODE
+                "Ptr", newConvMode,
                 "UInt", this.SMTO_ABORTIFHUNG,
                 "UInt", this.MessageTimeout,
                 "UPtr*", &result,
@@ -387,15 +448,6 @@ class CapsLockIme {
         }
     }
 
-    static ShowTip(message) {
-        ToolTip message
-        SetTimer this.HideTipCallback, 0
-        SetTimer this.HideTipCallback, -this.TipDuration
-    }
-
-    static HideTip() {
-        ToolTip
-    }
 }
 
 ; 给 Router 或其他统一接线模块使用的稳定公共接口。
@@ -406,4 +458,4 @@ MarkCapsChordUsed(*) {
 CapsLockIme.HotkeyCallback := ObjBindMethod(CapsLockIme, "Handle")
 CapsLockIme.KeyUpCallback := ObjBindMethod(CapsLockIme, "HandleKeyUp")
 CapsLockIme.LongPressCallback := ObjBindMethod(CapsLockIme, "HandleLongPress")
-CapsLockIme.HideTipCallback := ObjBindMethod(CapsLockIme, "HideTip")
+

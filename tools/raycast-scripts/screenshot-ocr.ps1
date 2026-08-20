@@ -6,7 +6,7 @@
 # @raycast.timeout 90000
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
-# @raycast.description Screenshot, OCR text, copy to clipboard and show a balloon tip
+# @raycast.description Screenshot, OCR text, copy to clipboard and show a unified HUD
 # @raycast.icon 🧠
 
 # OCR 引擎切换：ocr/config.toml 的顶层 "ocr" 字段
@@ -15,9 +15,7 @@
 #   "rapidocr" 旧方案：pythonw + RapidOCR（ctypes 注入 Win+Shift+S），识别后弹气泡
 
 $ErrorActionPreference = 'Stop'
-
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
+. (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 # ---------- 读取 OCR 模式配置（TOML 顶层键，正则解析） ----------
 $mode = 'system'
@@ -37,8 +35,9 @@ if (Test-Path -LiteralPath $configPath)
   }
 }
 
-$title = 'OCR 已复制'
-$message = '识别完成，文本已复制到剪贴板'
+$notificationType = 'success'
+$notificationIcon = '✓'
+$notificationText = 'OCR 已复制'
 
 if ($mode -eq 'rapidocr')
 {
@@ -46,7 +45,12 @@ if ($mode -eq 'rapidocr')
   $ocrScript = Join-Path $PSScriptRoot 'ocr\ocr.py'
   if (-not (Test-Path -LiteralPath $ocrScript -PathType Leaf))
   {
-    throw "OCR script not found: $ocrScript"
+    $shown = Show-ToolboxNotify -Type 'error' -Icon '×' -Text 'OCR 脚本不存在'
+    if (-not $shown)
+    {
+      Write-Output '× OCR 脚本不存在'
+    }
+    exit 1
   }
 
   $pythonw = Get-Command pythonw.exe -ErrorAction SilentlyContinue
@@ -56,7 +60,12 @@ if ($mode -eq 'rapidocr')
   }
   if (-not $pythonw)
   {
-    throw 'pythonw.exe / pyw.exe not found on PATH'
+    $shown = Show-ToolboxNotify -Type 'error' -Icon '×' -Text '未找到 Python'
+    if (-not $shown)
+    {
+      Write-Output '× 未找到 Python'
+    }
+    exit 1
   }
 
   $resultFile = Join-Path $env:TEMP (
@@ -69,27 +78,23 @@ if ($mode -eq 'rapidocr')
 
   if ($process.ExitCode -ne 0)
   {
-    $title = 'OCR 失败'
-    $message = '识别失败，请重试'
+    $notificationType = 'error'
+    $notificationIcon = '×'
+    $notificationText = 'OCR 失败'
   } elseif (Test-Path -LiteralPath $resultFile)
   {
     $text = [System.IO.File]::ReadAllText($resultFile, [System.Text.Encoding]::UTF8)
-    if ($text)
+    if (-not $text)
     {
-      $message = $text.Replace("`r", ' ').Replace("`n", ' ')
-      if ($message.Length -gt 60)
-      {
-        $message = $message.Substring(0, 60) + '...'
-      }
-    } else
-    {
-      $title = 'OCR 未识别到文字'
-      $message = '请重新框选更清晰的区域'
+      $notificationType = 'error'
+      $notificationIcon = '!'
+      $notificationText = '未识别到文字'
     }
   } else
   {
-    $title = 'OCR 已取消'
-    $message = '未框选截图区域'
+    $notificationType = 'info'
+    $notificationIcon = '−'
+    $notificationText = 'OCR 已取消'
   }
   Remove-Item -LiteralPath $resultFile -ErrorAction SilentlyContinue
 } else
@@ -117,19 +122,8 @@ public static class SystemHotkeySim {
   exit 0
 }
 
-# ---------- 托盘气泡（仅 rapidocr 引擎）：消息泵保持进程存活 ----------
-$icon = New-Object System.Windows.Forms.NotifyIcon
-$icon.Icon = [System.Drawing.SystemIcons]::Information
-$icon.BalloonTipTitle = $title
-$icon.BalloonTipText = $message
-$icon.Visible = $true
-[System.Windows.Forms.Application]::DoEvents()
-Start-Sleep -Milliseconds 300
-$icon.ShowBalloonTip(5000)
-$deadline = (Get-Date).AddSeconds(6)
-while ((Get-Date) -lt $deadline)
+$shown = Show-ToolboxNotify -Type $notificationType -Icon $notificationIcon -Text $notificationText
+if (-not $shown)
 {
-  [System.Windows.Forms.Application]::DoEvents()
-  Start-Sleep -Milliseconds 100
+  Write-Output "$notificationIcon $notificationText"
 }
-$icon.Dispose()

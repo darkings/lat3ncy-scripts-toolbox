@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 
 # @raycast.schemaVersion 1
 # @raycast.title Restart AutoHotkey
@@ -9,6 +9,7 @@
 # @raycast.icon 🔄
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 $repositoryRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $mainScript = Join-Path $repositoryRoot 'ahk\main.ahk'
@@ -61,14 +62,19 @@ if ($toolboxProcesses)
 
 $autoHotkey = Resolve-AutoHotkeyV2Executable
 $workingDirectory = Split-Path $resolvedMainScript -Parent
-$mainScriptArgument = '"{0}"' -f $resolvedMainScript
+$commandLine = '"{0}" "{1}"' -f $autoHotkey, $resolvedMainScript
 
-Start-Process `
-  -FilePath $autoHotkey `
-  -ArgumentList $mainScriptArgument `
-  -WorkingDirectory $workingDirectory
+$createResult = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+  CommandLine = $commandLine
+  CurrentDirectory = $workingDirectory
+}
 
-Start-Sleep -Milliseconds 800
+if ($createResult.ReturnValue -ne 0)
+{
+  throw ("Failed to launch AutoHotkey process. Return code: {0}" -f $createResult.ReturnValue)
+}
+
+Start-Sleep -Milliseconds 600
 $reloadedProcesses = Get-ToolboxAutoHotkeyProcess
 
 if (-not $reloadedProcesses)
@@ -77,4 +83,8 @@ if (-not $reloadedProcesses)
 }
 
 $processIds = ($reloadedProcesses.ProcessId | Sort-Object -Unique) -join ', '
-Write-Output "AutoHotkey reloaded successfully (PID: $processIds)"
+$shown = Show-ToolboxNotify -Type 'success' -Icon '✓' -Text 'AutoHotkey 已重载'
+if (-not $shown)
+{
+  Write-Output "✓ AutoHotkey 已重载 (PID: $processIds)"
+}

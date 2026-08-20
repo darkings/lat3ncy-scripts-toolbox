@@ -10,21 +10,20 @@ class SearchSelectedText {
             A_Clipboard := ""
             Send "^c"
             if !ClipWait(1) {
-                this.ShowTip("没有选中文字")
+                Notify.Error("!", "未选中文字")
                 return
             }
 
             selected := Trim(A_Clipboard)
             if !selected {
-                this.ShowTip("没有选中文字")
+                Notify.Error("!", "未选中文字")
                 return
             }
 
             try {
                 Run "https://www.google.com/search?q=" this.UriEncode(selected)
-                this.ShowTip("正在搜索：" this.ShortText(selected))
             } catch {
-                this.ShowTip("打开搜索失败")
+                Notify.Error("×", "打开搜索失败")
             }
         } finally {
             A_Clipboard := savedClipboard
@@ -55,16 +54,6 @@ class SearchSelectedText {
         return StrLen(text) > maxLength ? SubStr(text, 1, maxLength - 1) "…" : text
     }
 
-    static ShowTip(message) {
-        ToolTip message
-        SetTimer SearchSelectedText.HideTipCallback, 0
-        SetTimer SearchSelectedText.HideTipCallback, -1500
-    }
-
-    static HideTip() {
-        ToolTip
-    }
 }
 
 SearchSelectedText.HotkeyCallback := ObjBindMethod(SearchSelectedText, "Search")
-SearchSelectedText.HideTipCallback := ObjBindMethod(SearchSelectedText, "HideTip")

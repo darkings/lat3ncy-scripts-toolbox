@@ -189,15 +189,17 @@ class SmartPaste {
             if explorerPath
                 this.SaveClipboardImage(explorerPath)
             else
-                this.ShowTip("当前资源管理器位置无法保存图片")
+                Notify.Error("!", "当前位置无法保存图片")
             return
         }
 
         copyPathShortcut := isZed
             ? this.ZedCopyPathShortcut
             : this.VsCodeCopyPathShortcut
-        if !copyPathShortcut
-            throw Error("智能粘贴尚未配置编辑器 Copy Path 快捷键")
+        if !copyPathShortcut {
+            Notify.Error("×", "智能粘贴尚未配置")
+            return
+        }
         try {
             destination := this.GetCopyPathSelectedDirectory(copyPathShortcut)
         } catch as probeError {
@@ -223,7 +225,7 @@ class SmartPaste {
         if destination
             this.SaveClipboardImage(destination)
         else {
-            this.ShowTip("图片粘贴失败：请在文件树选中目录，或打开文件后重试")
+            Notify.Error("!", "请选择目录或打开文件后重试")
             Send "^v"
         }
     }
@@ -241,21 +243,21 @@ class SmartPaste {
         try {
             exitCode := RunWait(command, , "Hide")
             if (exitCode != 0 || !FileExist(resultFile)) {
-                this.ShowTip("图片保存失败")
+                Notify.Error("×", "图片保存失败")
                 return false
             }
 
             outputPath := Trim(FileRead(resultFile, "UTF-8"))
             SplitPath outputPath, &fileName, , &extension
             if (!outputPath || StrLower(extension) != "png" || !FileExist(outputPath)) {
-                this.ShowTip("图片保存失败")
+                Notify.Error("×", "图片保存失败")
                 return false
             }
 
-            this.ShowTip("已保存图片：" fileName)
+            Notify.Success("✓", "已保存 " fileName)
             return true
         } catch {
-            this.ShowTip("图片保存失败")
+            Notify.Error("×", "图片保存失败")
             return false
         } finally {
             if FileExist(resultFile)
@@ -278,16 +280,6 @@ class SmartPaste {
         return '"' value '"'
     }
 
-    static ShowTip(message) {
-        ToolTip message
-        SetTimer SmartPaste.HideTipCallback, 0
-        SetTimer SmartPaste.HideTipCallback, -1500
-    }
-
-    static HideTip() {
-        ToolTip
-    }
 }
 
 SmartPaste.HotkeyCallback := ObjBindMethod(SmartPaste, "Paste")
-SmartPaste.HideTipCallback := ObjBindMethod(SmartPaste, "HideTip")

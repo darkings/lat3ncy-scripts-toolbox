@@ -86,7 +86,7 @@ class LocateSelectedTarget {
         target := this.GetSelected()
         kind := this.Classify(target)
         if (kind != "file" && kind != "directory") {
-            this.ShowTip("选中内容不是有效文件或文件夹")
+            Notify.Error("!", "不是有效文件或文件夹")
             return
         }
 
@@ -95,9 +95,8 @@ class LocateSelectedTarget {
                 Run 'explorer.exe /select,"' target '"'
             else
                 Run target
-            this.ShowTip("正在定位：" this.TargetLabel(target))
         } catch {
-            this.ShowTip("定位目标失败")
+            Notify.Error("×", "定位目标失败")
         }
     }
 
@@ -113,16 +112,6 @@ class LocateSelectedTarget {
         return this.ShortText(name ? name : target)
     }
 
-    static ShowTip(message) {
-        ToolTip message
-        SetTimer LocateSelectedTarget.HideTipCallback, 0
-        SetTimer LocateSelectedTarget.HideTipCallback, -1500
-    }
-
-    static HideTip() {
-        ToolTip
-    }
 }
 
 LocateSelectedTarget.HotkeyCallback := ObjBindMethod(LocateSelectedTarget, "Locate")
-LocateSelectedTarget.HideTipCallback := ObjBindMethod(LocateSelectedTarget, "HideTip")

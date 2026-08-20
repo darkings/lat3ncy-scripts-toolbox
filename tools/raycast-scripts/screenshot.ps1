@@ -9,6 +9,7 @@
 # @raycast.icon 📷
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 # 截图工具没有公开的命令行参数，只能注入系统热键 Win+Shift+S
 # （keybd_event 为低层注入，可触发系统注册热键）。
@@ -37,8 +38,16 @@ Start-Sleep -Milliseconds 60
 Start-Sleep -Milliseconds 500
 if (-not (Get-Process -Name 'SnippingTool' -ErrorAction SilentlyContinue))
 {
-  Write-Output 'Snipping Tool window not found. Windows 11 22H2+ is required.'
+  $shown = Show-ToolboxNotify -Type 'error' -Icon '×' -Text '无法打开截图工具'
+  if (-not $shown)
+  {
+    Write-Output '× 无法打开截图工具'
+  }
   exit 1
 }
 
-Write-Output 'Screenshot opened: select an area, the result will be copied to the clipboard'
+$shown = Show-ToolboxNotify -Type 'state' -Icon '▣' -Text '截图已打开'
+if (-not $shown)
+{
+  Write-Output '▣ 截图已打开'
+}

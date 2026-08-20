@@ -18,9 +18,12 @@ class ToggleHiddenFiles {
             action := this.Action(currentValue)
             RegWrite action.value, "REG_DWORD", registryKey, "Hidden"
             this.RefreshExplorerWindows()
-            this.ShowTip(action.visible ? "已显示隐藏文件" : "已隐藏隐藏文件")
+            if action.visible
+                Notify.State("◉", "显示隐藏文件")
+            else
+                Notify.State("○", "隐藏文件")
         } catch {
-            this.ShowTip("切换隐藏文件失败")
+            Notify.Error("×", "切换隐藏文件失败")
         }
     }
 
@@ -46,16 +49,6 @@ class ToggleHiddenFiles {
             , "Ptr*", 0)
     }
 
-    static ShowTip(message) {
-        ToolTip message
-        SetTimer ToggleHiddenFiles.HideTipCallback, 0
-        SetTimer ToggleHiddenFiles.HideTipCallback, -1500
-    }
-
-    static HideTip() {
-        ToolTip
-    }
 }
 
 ToggleHiddenFiles.HotkeyCallback := ObjBindMethod(ToggleHiddenFiles, "Toggle")
-ToggleHiddenFiles.HideTipCallback := ObjBindMethod(ToggleHiddenFiles, "HideTip")

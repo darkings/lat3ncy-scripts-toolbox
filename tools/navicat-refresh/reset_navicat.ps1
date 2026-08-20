@@ -1,20 +1,18 @@
-<#
-.SYNOPSIS
-    Navicat Premium 试用期重置脚本（Windows 版本）
-.DESCRIPTION
-    会终止进程、删除注册表和文件中的哈希标识，并在高版本中清理凭据。
-.NOTES
-    建议以管理员身份运行，确保有权修改注册表。
-#>
+[CmdletBinding()]
+param(
+    [switch]$Force
+)
 
 # ---------- 1. 关闭正在运行的 Navicat ----------
 $navicatProcess = Get-Process -Name "Navicat*" -ErrorAction SilentlyContinue
 if ($navicatProcess) {
-    Write-Host ""
-    Write-Host "   Navicat Premium 正在运行！"
-    Write-Host "   请先保存您的工作。"
-    Write-Host ""
-    Read-Host -Prompt "按 Enter 键关闭 Navicat 并继续..."
+    if (-not $Force -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+        Write-Host ""
+        Write-Host "   Navicat Premium 正在运行！"
+        Write-Host "   请先保存您的工作。"
+        Write-Host ""
+        Read-Host -Prompt "按 Enter 键关闭 Navicat 并继续..."
+    }
     Write-Host "正在关闭 Navicat Premium..."
     Stop-Process -Name "Navicat*" -Force
     Start-Sleep -Seconds 1
@@ -26,7 +24,10 @@ $navicatPaths = @(
     "C:\Program Files\PremiumSoft\Navicat Premium\Navicat.exe",
     "C:\Program Files (x86)\PremiumSoft\Navicat Premium\Navicat.exe",
     "${env:ProgramFiles}\PremiumSoft\Navicat Premium\Navicat.exe",
-    "${env:ProgramFiles(x86)}\PremiumSoft\Navicat Premium\Navicat.exe"
+    "${env:ProgramFiles(x86)}\PremiumSoft\Navicat Premium\Navicat.exe",
+    "C:\Program Files\PremiumSoft\Navicat Premium 17\Navicat.exe",
+    "C:\Program Files\PremiumSoft\Navicat Premium 16\Navicat.exe",
+    "C:\Program Files\PremiumSoft\Navicat Premium 15\Navicat.exe"
 )
 $exePath = $null
 foreach ($path in $navicatPaths) {
@@ -35,15 +36,32 @@ foreach ($path in $navicatPaths) {
         break
     }
 }
+
 if (-not $exePath) {
-    Write-Host "未找到 Navicat Premium 可执行文件，请检查安装路径。" -ForegroundColor Red
-    exit 1
+    # 尝试从注册表寻找版本
+    $regRoots = @("HKCU:\Software\PremiumSoft\NavicatPremium\17", "HKCU:\Software\PremiumSoft\NavicatPremium\16", "HKCU:\Software\PremiumSoft\NavicatPremium\15")
+    $regFound = $false
+    foreach ($r in $regRoots) {
+        if (Test-Path $r) {
+            $regFound = $true
+            break
+        }
+    }
+    if (-not $regFound) {
+        Write-Host "未找到 Navicat Premium 可执行文件或注册表项，请检查安装。" -ForegroundColor Yellow
+    }
 }
 
-$versionInfo = (Get-Item $exePath).VersionInfo
-$fullVersion = "$($versionInfo.FileMajorPart).$($versionInfo.FileMinorPart).$($versionInfo.FileBuildPart)"
-$version = $versionInfo.FileMajorPart
-Write-Host "检测到 Navicat Premium 版本: $fullVersion"
+$fullVersion = "17.0.0"
+$version = 17
+if ($exePath) {
+    $versionInfo = (Get-Item $exePath).VersionInfo
+    $fullVersion = "$($versionInfo.FileMajorPart).$($versionInfo.FileMinorPart).$($versionInfo.FileBuildPart)"
+    $version = $versionInfo.FileMajorPart
+    Write-Host "检测到 Navicat Premium 版本: $fullVersion"
+} else {
+    Write-Host "使用默认支持版本扫描 (15/16/17)..."
+}
 
 # ---------- 3. 根据主版本号确定注册表路径 ----------
 switch ($version) {

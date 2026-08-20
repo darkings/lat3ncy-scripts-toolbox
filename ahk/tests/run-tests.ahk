@@ -113,12 +113,17 @@ class FakeSmartPasteClipboard {
 mainSource := FileRead(A_ScriptDir "\..\main.ahk", "UTF-8")
 startupTruePosition := InStr(mainSource, "global ToolboxStarting := true")
 startupHandlerPosition := InStr(mainSource, "OnError ToolboxStartupErrorHandler")
+rendererIncludePosition := InStr(mainSource, "#Include ..\shared\notify\renderer.ahk")
+notifyIncludePosition := InStr(mainSource, "#Include ..\shared\notify\notify.ahk")
 firstFeatureIncludePosition := InStr(mainSource, "#Include features\caps-lock-ime.ahk")
 lastFeatureIncludePosition := InStr(mainSource, "#Include features\switch-app-window.ahk")
 routerIncludePosition := InStr(mainSource, "#Include hotkey-router.ahk")
 startupFalsePosition := InStr(mainSource, "`nToolboxStarting := false")
 AssertEqual(true, startupTruePosition > 0, "startup flag exists")
 AssertEqual(true, startupHandlerPosition > startupTruePosition, "startup handler follows flag")
+AssertEqual(true, rendererIncludePosition > startupHandlerPosition, "renderer loads after startup handler")
+AssertEqual(true, notifyIncludePosition > rendererIncludePosition, "notify API loads after renderer")
+AssertEqual(true, firstFeatureIncludePosition > notifyIncludePosition, "features load after shared notify")
 AssertEqual(true, startupHandlerPosition < firstFeatureIncludePosition, "startup handler precedes feature includes")
 AssertEqual(true, routerIncludePosition > lastFeatureIncludePosition, "router loads after all features")
 AssertEqual(true, startupFalsePosition > routerIncludePosition, "startup flag clears after router")
@@ -126,9 +131,6 @@ AssertEqual(false, ToolboxStarting, "startup flag cleared after successful inclu
 AssertEqual(false, HandleToolboxError(Error("runtime"), "test"), "runtime errors use default behavior")
 
 AssertEqual(true, HasMethod(CapsLockIme, "Handle"), "CapsLock handle method exists")
-AssertEqual(true, HasMethod(CapsLockIme, "HideTip"), "CapsLock stable tooltip callback")
-AssertEqual(true, HasMethod(AlwaysOnTop, "HideTip"), "always-on-top stable tooltip callback")
-AssertEqual(true, HasMethod(ToggleHiddenFiles, "HideTip"), "hidden-files stable tooltip callback")
 AssertEqual("BoundFunc", Type(CapsLockIme.HotkeyCallback), "CapsLock bound hotkey callback")
 AssertEqual("BoundFunc", Type(CapsLockIme.KeyUpCallback), "CapsLock bound key-up callback")
 AssertEqual("BoundFunc", Type(CapsLockIme.LongPressCallback), "CapsLock bound long-press callback")
@@ -137,12 +139,28 @@ AssertEqual("BoundFunc", Type(ToggleHiddenFiles.HotkeyCallback), "hidden-files b
 AssertEqual(true, CapsLockIme.HotkeyCallback.Call("test", receiver => receiver == CapsLockIme), "CapsLock callback this")
 AssertEqual(true, AlwaysOnTop.HotkeyCallback.Call("test", receiver => receiver == AlwaysOnTop), "always-on-top callback this")
 AssertEqual(true, ToggleHiddenFiles.HotkeyCallback.Call("test", receiver => receiver == ToggleHiddenFiles), "hidden-files callback this")
-AssertEqual("BoundFunc", Type(CapsLockIme.HideTipCallback), "CapsLock bound tooltip callback")
-AssertEqual("BoundFunc", Type(AlwaysOnTop.HideTipCallback), "always-on-top bound tooltip callback")
-AssertEqual("BoundFunc", Type(ToggleHiddenFiles.HideTipCallback), "hidden-files bound tooltip callback")
-CapsLockIme.HideTipCallback.Call()
-AlwaysOnTop.HideTipCallback.Call()
-ToggleHiddenFiles.HideTipCallback.Call()
+AssertEqual("BoundFunc", Type(NotifyRenderer.HideCallback), "renderer stable hide callback")
+AssertEqual("BoundFunc", Type(Notify.ToolTipHideCallback), "notify stable fallback callback")
+AssertEqual("202022", NotifyRenderer.BackgroundColor, "renderer owns background color")
+AssertEqual(0.82, NotifyRenderer.PositionYRatio, "renderer owns vertical position")
+AssertEqual(24, NotifyRenderer.BadgeSize, "renderer owns badge size")
+AssertEqual(8, NotifyRenderer.Radius, "renderer owns radius")
+AssertEqual(10, NotifyRenderer.TextSize, "renderer owns text size")
+AssertEqual(12, NotifyRenderer.IconSize, "renderer owns icon size")
+AssertEqual(12, NotifyRenderer.PaddingX, "renderer owns padding")
+AssertEqual("3A3A3C", NotifyRenderer.TypeBadgeBg["state"], "renderer owns state badge")
+AssertEqual("34D399", NotifyRenderer.TypeIconColor["success"], "renderer owns success icon color")
+AssertEqual(true, NotifyRenderer.IconMap.Has("✓"), "renderer owns fluent icon map")
+
+originalNotifyMode := Notify.Mode
+Notify.Mode := "full"
+AssertEqual(true, Notify.ShouldShow("state"), "full mode shows state")
+Notify.Mode := "errors"
+AssertEqual(false, Notify.ShouldShow("state"), "errors mode hides state")
+AssertEqual(true, Notify.ShouldShow("error"), "errors mode shows errors")
+Notify.Mode := "off"
+AssertEqual(false, Notify.ShouldShow("error"), "off mode hides errors")
+Notify.Mode := originalNotifyMode
 
 CapsLockIme._pressed := true
 CapsLockIme._chordUsed := false
@@ -313,11 +331,8 @@ for targetClass in [OpenSelectedTarget, LocateSelectedTarget] {
 }
 for featureClass in [SearchSelectedText, SmartPaste, OpenSelectedTarget, LocateSelectedTarget, SpeakSelectedText] {
     AssertEqual("BoundFunc", Type(featureClass.HotkeyCallback), "selected action bound hotkey callback")
-    AssertEqual("BoundFunc", Type(featureClass.HideTipCallback), "selected action bound tooltip callback")
     AssertEqual(true, featureClass.HotkeyCallback == featureClass.HotkeyCallback, "selected action stable hotkey callback")
-    AssertEqual(true, featureClass.HideTipCallback == featureClass.HideTipCallback, "selected action stable tooltip callback")
     AssertEqual(true, featureClass.HotkeyCallback.Call("test", receiver => receiver == featureClass), "selected action callback this")
-    featureClass.HideTipCallback.Call()
 }
 
 AssertEqual(true, SpeakSelectedText.HasSpeakableText("hello"), "speak accepts English")
@@ -347,12 +362,19 @@ searchSource := FileRead(A_ScriptDir "\..\features\search-selected-text.ahk", "U
 openSource := FileRead(A_ScriptDir "\..\features\open-selected-target.ahk", "UTF-8")
 locateSource := FileRead(A_ScriptDir "\..\features\locate-selected-target.ahk", "UTF-8")
 smartPasteSource := FileRead(A_ScriptDir "\..\features\smart-paste\smart-paste.ahk", "UTF-8")
+capsLockSource := FileRead(A_ScriptDir "\..\features\caps-lock-ime.ahk", "UTF-8")
 routerSource := FileRead(A_ScriptDir "\..\hotkey-router.ahk", "UTF-8")
+rendererSource := FileRead(A_ScriptDir "\..\..\shared\notify\renderer.ahk", "UTF-8")
+notifySource := FileRead(A_ScriptDir "\..\..\shared\notify\notify.ahk", "UTF-8")
 smartPasteHelperSource := FileRead(A_ScriptDir "\..\features\smart-paste\save-clipboard-image.ps1", "UTF-8")
 AssertContains(routerSource, "RegisterCapsChord", "router owns Caps chord wiring")
 AssertContains(routerSource, "MarkCapsChordUsed()", "router marks Caps chord before dispatch")
 AssertContains(routerSource, "SmartPaste.Configure", "router injects Smart Paste shortcuts")
+AssertContains(rendererSource, "class NotifyRenderer", "shared renderer exists")
+AssertContains(notifySource, "class Notify", "shared notify API exists")
+AssertContains(notifySource, "ToolTip", "notify API owns ToolTip fallback")
 for featureSource in [
+    capsLockSource,
     speakSource,
     searchSource,
     openSource,
@@ -364,6 +386,8 @@ for featureSource in [
 ] {
     AssertNotContains(featureSource, "RegisterFeatureHotkey", "feature does not register hotkeys")
     AssertNotContains(featureSource, "Shortcuts.", "feature does not read shortcut config")
+    AssertNotContains(featureSource, "ToolTip", "feature does not render ToolTip")
+    AssertNotContains(featureSource, "ShowTip", "feature does not own notification helper")
 }
 AssertNotContains(searchSource, "OpenSelectedTarget", "search does not depend on open")
 AssertNotContains(searchSource, "LocateSelectedTarget", "search does not depend on locate")
@@ -384,7 +408,7 @@ AssertContains(smartPasteSource, "ClipboardAll()", "VS Code probe captures all c
 AssertContains(smartPasteSource, "finally", "VS Code probe restores clipboard in finally")
 AssertContains(smartPasteSource, 'Send "^v"', "smart paste keeps ordinary paste fallback")
 AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "Paste")', "smart paste binds hotkey callback")
-AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "HideTip")', "smart paste binds tooltip callback")
+AssertContains(smartPasteSource, 'Notify.Success("✓"', "smart paste uses shared success notification")
 startupConfigurePosition := InStr(routerSource, "SmartPaste.Configure(")
 startupEnsurePosition := InStr(routerSource, "SmartPaste.EnsureHelperAvailable()")
 startupRegisterPosition := InStr(routerSource, "Shortcuts.SmartPaste")
@@ -404,3 +428,6 @@ AssertNotContains(smartPasteHelperSource, 'Remove-Item -LiteralPath $outputPath'
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0
+
+
+

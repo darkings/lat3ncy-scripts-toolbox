@@ -1,0 +1,47 @@
+# ============================================================
+# TTS (Text-to-Speech) 配置
+# ============================================================
+
+# 引擎类型：
+#   - "auto"   (推荐：自动识别，本地 WinRT 有匹配音色则 0ms 离线合成，否则走 Edge 云端)
+#   - "winrt"  (Windows 10/11 本地离线 OneCore 引擎，极速无网络延迟)
+#   - "edge"   (微软云端在线 Neural 引擎，真人级音质，需联网)
+engine = "auto"
+
+# 中文语音角色：
+#   WinRT 本地离线角色（极速瞬发）：
+#     - "Microsoft Yaoyao"   (女声，瑶瑶，清脆自然，默认推荐)
+#     - "Microsoft Huihui"   (女声，慧慧)
+#     - "Microsoft Kangkang" (男声，康康)
+#     - "Microsoft Xiaoxiao (Natural)" (若已在 Windows 讲述人设置中下载自然语音)
+#   Edge 在线角色：
+#     - "zh-CN-XiaoxiaoNeural"
+#     - "zh-CN-YunxiNeural"
+zh_voice = "Microsoft Yaoyao"
+
+# 英文语音角色：
+#   WinRT 本地离线角色（极速瞬发）：
+#     - "Microsoft Zira"    (女声，齐拉，美音默认推荐)
+#     - "Microsoft David"   (男声，大卫)
+#     - "Microsoft Mark"    (男声，马克)
+#     - "Microsoft Jenny (Natural)" (若已在 Windows 讲述人设置中下载自然语音)
+#   Edge 在线角色：
+#     - "en-US-JennyNeural"
+#     - "en-US-GuyNeural"
+en_voice = "Microsoft Zira"
+
+# 语速调节（如 "+0%", "+10%", "-10%"）
+rate = "+0%"
+
+# 音调调节（如 "+0Hz", "+5Hz", "-5Hz"）
+pitch = "+0Hz"
+
+# 音量调节（如 "+0%", "+10%", "-10%"）
+volume = "+0%"
+
+# 缓存配置
+[cache]
+# 缓存最大容量 (MB)
+max_size_mb = 100
+# 缓存最大文件数
+max_files = 2000

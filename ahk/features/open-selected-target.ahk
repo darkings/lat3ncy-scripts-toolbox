@@ -88,12 +88,11 @@ class OpenSelectedTarget {
         if (kind = "url" || kind = "file" || kind = "directory") {
             try {
                 Run target
-                this.ShowTip("正在打开：" this.TargetLabel(target))
             } catch {
-                this.ShowTip("打开目标失败")
+                Notify.Error("×", "打开目标失败")
             }
         } else
-            this.ShowTip("选中内容不是有效路径或网址")
+            Notify.Error("!", "不是有效路径或网址")
     }
 
     static ShortText(text, maxLength := 36) {
@@ -108,16 +107,6 @@ class OpenSelectedTarget {
         return this.ShortText(name ? name : target)
     }
 
-    static ShowTip(message) {
-        ToolTip message
-        SetTimer OpenSelectedTarget.HideTipCallback, 0
-        SetTimer OpenSelectedTarget.HideTipCallback, -1500
-    }
-
-    static HideTip() {
-        ToolTip
-    }
 }
 
 OpenSelectedTarget.HotkeyCallback := ObjBindMethod(OpenSelectedTarget, "Open")
-OpenSelectedTarget.HideTipCallback := ObjBindMethod(OpenSelectedTarget, "HideTip")

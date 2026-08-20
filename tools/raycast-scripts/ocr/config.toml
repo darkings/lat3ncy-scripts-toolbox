@@ -1,0 +1,36 @@
+# ============================================================
+# OCR 配置
+# ============================================================
+# 识别引擎：
+#   ocr = "system"   -> Windows 系统文本操作（Win+Shift+T，Windows 11 23H2+）
+#                       无需 Python，框选后由系统自动识别并复制文本。
+#                       ⚠ 局限性：框选区域过小会提示“此区域太小，无法扫描文本”；
+#                       对中英混排、代码、小字号内容的识别质量一般。
+#   ocr = "rapidocr" -> RapidOCR（需先运行 install-deps.py 安装依赖）
+#                       识别精度更高，适合复杂排版，识别后右下角弹气泡通知。
+
+ocr = "rapidocr"
+
+# 以下模型配置仅 rapidocr 引擎使用 ============================
+# 切换模型：把下方 model 改为想用的模型名称（对应 [models.*] 段）
+#   model = "default"  -> 内置 PP-OCRv4 全精度模型（默认，离线可用）
+#   model = "mobile"   -> PP-OCRv4 移动端模型（更快、精度略降）
+# det / cls / rec 填写 onnx 文件路径，相对本文件所在目录；
+# 留空 "" 表示使用 RapidOCR 包内置模型。
+
+model = "default"
+
+[models.default]
+det = ""
+cls = ""
+rec = ""
+
+# PP-OCRv4 移动端模型，识别更快、精度略降
+# 使用前需从 RapidOCR 官方仓库下载以下三个文件，放入 ocr/models/ 目录：
+#   ch_PP-OCRv4_det_mobile.onnx
+#   ch_ppocr_mobile_v2.0_cls_mobile.onnx
+#   ch_PP-OCRv4_rec_mobile.onnx
+[models.mobile]
+det = "models/ch_PP-OCRv4_det_mobile.onnx"
+cls = "models/ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+rec = "models/ch_PP-OCRv4_rec_mobile.onnx"

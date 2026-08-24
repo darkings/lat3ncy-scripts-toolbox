@@ -92,7 +92,9 @@ class HotkeyRouter {
     }
 
     static DispatchCapsChord(callback, hotkeyName) {
-        MarkCapsChordUsed()
+        ; 退出大写或没有有效按住时，状态机拒绝本次组合，不能再派发工具。
+        if !MarkCapsChordUsed()
+            return
         return callback.Call(hotkeyName)
     }
 
@@ -139,9 +141,34 @@ class HotkeyRouter {
             AlwaysOnTop.HotkeyCallback
         )
         this.RegisterCapsChord(
+            "隐藏当前窗口",
+            Shortcuts.HideActiveWindow,
+            HideActiveWindow.HotkeyCallback
+        )
+        this.RegisterCapsChord(
             "显示隐藏文件",
             Shortcuts.ToggleHiddenFiles,
             ToggleHiddenFiles.HotkeyCallback
+        )
+        this.RegisterCapsChord(
+            "显示文件扩展名",
+            Shortcuts.ToggleFileExtensions,
+            ToggleFileExtensions.HotkeyCallback
+        )
+        this.RegisterCapsChord(
+            "音频输出切换",
+            Shortcuts.AudioSwitcher,
+            AudioSwitcher.HotkeyCallback
+        )
+        this.RegisterCapsChord(
+            "结束前台进程",
+            Shortcuts.KillForegroundProcess,
+            ForegroundProcess.KillCallback
+        )
+        this.RegisterCapsChord(
+            "重启前台进程",
+            Shortcuts.RestartForegroundProcess,
+            ForegroundProcess.RestartCallback
         )
 
         ; 普通系统级快捷键。

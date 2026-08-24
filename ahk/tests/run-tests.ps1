@@ -13,13 +13,16 @@ $testScript = Join-Path $PSScriptRoot 'run-tests.ahk'
 function Resolve-AutoHotkeyV2Executable
 {
   # 优先标准 v2 安装位置（官方安装程序默认安装到 LOCALAPPDATA）
-  $standardV2 = Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey\v2'
-  foreach ($engineName in @('AutoHotkey64.exe', 'AutoHotkey32.exe'))
+  if ($env:LOCALAPPDATA)
   {
-    $candidate = Join-Path $standardV2 $engineName
-    if (Test-Path -LiteralPath $candidate -PathType Leaf)
+    $standardV2 = Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey\v2'
+    foreach ($engineName in @('AutoHotkey64.exe', 'AutoHotkey32.exe'))
     {
-      return $candidate
+      $candidate = Join-Path $standardV2 $engineName
+      if (Test-Path -LiteralPath $candidate -PathType Leaf)
+      {
+        return $candidate
+      }
     }
   }
 
@@ -133,13 +136,18 @@ try
   $independentFeatures = @(
     (Join-Path $featureRoot 'caps-lock-ime.ahk'),
     (Join-Path $featureRoot 'always-on-top.ahk'),
+    (Join-Path $featureRoot 'hide-active-window.ahk'),
     (Join-Path $featureRoot 'toggle-hidden-files.ahk'),
+    (Join-Path $featureRoot 'toggle-file-extensions.ahk'),
+    (Join-Path $featureRoot 'foreground-process.ahk'),
     (Join-Path $featureRoot 'search-selected-text.ahk'),
     (Join-Path (Join-Path $featureRoot 'smart-paste') 'smart-paste.ahk'),
     (Join-Path $featureRoot 'open-selected-target.ahk'),
     (Join-Path $featureRoot 'locate-selected-target.ahk'),
     (Join-Path $featureRoot 'speak-selected-text.ahk'),
-    (Join-Path $featureRoot 'switch-app-window.ahk')
+    (Join-Path $featureRoot 'audio-switcher.ahk'),
+    (Join-Path $featureRoot 'switch-app-window.ahk'),
+    (Join-Path $notifyRoot 'run-nowindow.ahk')
   )
   foreach ($featurePath in $independentFeatures)
   {
@@ -154,7 +162,17 @@ try
     (Join-Path $raycastRoot 'screenshot-ocr.ps1'),
     (Join-Path $raycastRoot 'record-screen.ps1'),
     (Join-Path $raycastRoot 'restart-autohotkey.ps1'),
-    (Join-Path $raycastRoot 'reset-navicat.ps1')
+    (Join-Path $raycastRoot 'reset-navicat.ps1'),
+    (Join-Path (Join-Path $notifyRoot 'dev') 'capture.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'DshRemoteUtils.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Watch-DshRemote.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Start-DshRemote.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Stop-DshRemote.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Get-DshRemoteStatus.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Install-Watcher.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Uninstall-Watcher.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'theme-scheduler') 'ThemeUtils.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'theme-scheduler') 'Update-ThemeSchedule.ps1')
   )
   foreach ($scriptPath in $powerShellScripts)
   {

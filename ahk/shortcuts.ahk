@@ -11,7 +11,12 @@ class Shortcuts {
     static OpenSelectedTarget := "~CapsLock & o"
     static LocateSelectedTarget := "~CapsLock & e"
     static AlwaysOnTop := "~CapsLock & t"
-    static ToggleHiddenFiles := "~CapsLock & h"
+    static HideActiveWindow := "~CapsLock & h"
+    static ToggleHiddenFiles := "~CapsLock & ."
+    static ToggleFileExtensions := "~CapsLock & x"
+    static AudioSwitcher := "~CapsLock & d"
+    static KillForegroundProcess := "~CapsLock & q"
+    static RestartForegroundProcess := "~CapsLock & r"
 
     ; 【系统级特殊功能】
     static SmartPaste := "$^v"

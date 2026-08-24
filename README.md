@@ -30,16 +30,21 @@ AutoHotkey.exe .\ahk\main.ahk
 
 | 快捷键 | 功能 | Feature 文件 |
 | --- | --- | --- |
-| `CapsLock`（`*$CapsLock`） | 短按切换输入法中英文，长按（>= 500ms）启用大写锁定，再按一次退出并恢复输入法状态 | `ahk/features/caps-lock-ime.ahk` |
+| `CapsLock`（`*$CapsLock`） | 短按（≤ 250ms）切换中英文；250–500ms 松开视为取消，不切输入法；长按（>= 500ms）进入大写，再按一次退出并恢复输入法。组合键会取消本次输入法切换；若长按已进大写，再按字母会先撤回大写再执行工具 | `ahk/features/caps-lock-ime.ahk` |
 | `Caps + S`（`~CapsLock & s`） | 朗读选中的文字（智能中英文双语音色即时发音，再次按下即时打断） | `ahk/features/speak-selected-text.ahk` |
 | `Caps + G`（`~CapsLock & g`） | 使用 Google 搜索选中文字 | `ahk/features/search-selected-text.ahk` |
 | `Caps + O`（`~CapsLock & o`） | 打开选中的文件、目录或 URL | `ahk/features/open-selected-target.ahk` |
 | `Caps + E`（`~CapsLock & e`） | 在资源管理器中定位选中的文件或目录 | `ahk/features/locate-selected-target.ahk` |
-| `Caps + T`（`~CapsLock & t`） | 切换活动窗口置顶 / 取消置顶 | `ahk/features/always-on-top.ahk` |
-| `Caps + H`（`~CapsLock & h`） | 显示或隐藏资源管理器中的隐藏文件 | `ahk/features/toggle-hidden-files.ahk` |
+| `Caps + T`（`~CapsLock & t`） | 切换活动窗口置顶 / 取消置顶，并提示当前状态 | `ahk/features/always-on-top.ahk` |
+| `Caps + H`（`~CapsLock & h`） | 按 Z-order 从顶到底，每次最小化一个尚未最小化的可见窗口；桌面、任务栏、工具窗与工具箱自身不进入列表 | `ahk/features/hide-active-window.ahk` |
+| `Caps + .`（`~CapsLock & .`） | 显示或隐藏资源管理器中的隐藏文件 | `ahk/features/toggle-hidden-files.ahk` |
+| `Caps + X`（`~CapsLock & x`） | 显示或隐藏资源管理器中的文件扩展名 | `ahk/features/toggle-file-extensions.ahk` |
+| `Caps + Q`（`~CapsLock & q`） | 结束当前前台窗口对应进程；前台是资源管理器时直接调用 `Caps + R` | `ahk/features/foreground-process.ahk` |
+| `Caps + R`（`~CapsLock & r`） | 重启当前前台窗口对应进程；资源管理器走专用重启 | `ahk/features/foreground-process.ahk` |
 | `Ctrl + V`（`$^v`） | 智能粘贴：仅图片时介入保存为本地 PNG 文件；非图片内容原生无损透传 | `ahk/features/smart-paste/smart-paste.ahk` |
 | `Alt + 反引号`（`!sc029`） | 按当前 Z-order 快照循环切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
 | `Shift + Alt + 反引号`（`+!sc029`） | 沿快照反向切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
+| `Caps + D`（`~CapsLock & d`） | 切换播放器：`G27Q2 显示器` ↔ `Jie’s AirPods 立体声`，未连时自动拉起 AirPods（12s 内建链，`耳机未就绪` 时自动 `sudo/gsudo` 提权重试），已连秒切，回切不掉蓝牙 | `ahk/features/audio-switcher.ahk` + `tools/audio-switcher/audio-switcher.exe` |
 
 同应用窗口切换在第一次触发时保存窗口顺序，按住 `Alt` 连续按反引号即可完整循环；松开 `Alt` 后清除快照。最小化、不可见、工具型以及被系统隐藏的窗口不会进入候选列表。Zed 只有一个可见顶层窗口时，快捷键会通过 `F13` / `F14` 桥接到 Zed 的 `multi_workspace::NextProject` / `multi_workspace::PreviousProject`，循环切换同一窗口中的项目。
 
@@ -55,7 +60,7 @@ AutoHotkey.exe .\ahk\main.ahk
 | 图片 | 资源管理器虚拟位置 | 显示无法保存提示，不发送原生粘贴 |
 | 图片 | VS Code / Zed 文件树选中的单个已存在文件夹 | 保存为不会覆盖已有文件的唯一命名 PNG |
 | 图片 | VS Code / Zed 编辑器聚焦且当前打开文件存在（文件树探测失败后） | 保存为当前文件所在目录下不会覆盖已有文件的唯一命名 PNG |
-| 图片 | VS Code / Zed 选中文件、多选、编辑器无打开文件、路径探测超时或快捷键不一致 | 显示提示并恢复原剪贴板后执行原生 `Ctrl+V` |
+| 图片 | VS Code / Zed 选中文件、多选、编辑器无打开文件、路径探测超时或快捷键不一致 | 静默回退原生 `Ctrl+V` |
 | 图片 | 其他应用 | 原生 `Ctrl+V` |
 
 VS Code 目录探测使用其内置的 Copy Path 命令（默认 `Shift+Alt+C`）；Zed 目录探测使用项目面板的 Copy Path 命令（默认同为 `Shift+Alt+C`，仅项目面板聚焦时生效）。两者失败后都会兜底尝试编辑器上下文的 Copy Path（默认 `Ctrl+K P`），把图片保存到当前文件所在目录；Zed 还会进一步尝试键盘导航选中文件树首个条目（根目录）后再次探测，以覆盖面板无选中项的场景。所有探测都会在成功、超时或异常后恢复原剪贴板。如果自定义了对应编辑器的 Copy Path 绑定，需要同步修改 `Shortcuts.VsCodeCopyPath` / `Shortcuts.ZedCopyPath`。
@@ -85,7 +90,9 @@ AHK feature 与 Raycast PowerShell 脚本共用 `shared/notify/renderer.ahk` 绘
   - **浅色模式（Light Mode）**：极简纯白 `#FFFFFF` 背景、`#18181B` 高对比度墨黑文字、`#E4E4E7` 1px 浅灰色立体边框。
   - 硬件级亚像素抗锯齿大圆角（`DWMWA_WINDOW_CORNER_PREFERENCE`）与 1px 细描边（`DWMWA_BORDER_COLOR`）。
 - **调用链路**：
-  - AHK 调用链：feature → `Notify` → `NotifyRenderer`；Renderer 失败时自动回退 `ToolTip`。
+  - AHK 调用链：`state`（输入法中 / A / ⇪）走 `Notify` → `NotifyRenderer` 的 28×28 芯片 HUD，失败回退 `ToolTip`；`success` / `info` / `error` 走 `Notify` → `toast.ps1` 系统 Toast，找不到脚本或启动失败时回退 `ToolTip`。
+  - 共享资源（`toast.ps1`、`anchor-locator.exe`）通过 `shared/notify/paths.ahk` 按入口脚本目录解析，不写死本机绝对路径。
+  - 默认不写调试日志；仅启动参数 `--debug` 或环境变量 `LAT3NCY_DEBUG=1` 时写入 `%TEMP%\lat3ncy-toolbox-notify.log`。
   - Raycast 调用链：script → `tools/raycast-scripts/_lib/notify.ps1` → `notify.exe` 或 `notify-cli.ahk`；调用失败时由脚本 `Write-Output`，交给 Raycast HUD 显示。
 - **生命周期**：同一时间只保留一个 HUD，新通知自动覆盖旧通知；默认时长：`state` 550ms、`info` 750ms、`success` 900ms、`error` 1400ms。
 - `Notify.Mode` 支持 `full`、`errors` 和 `off`；默认是 `full`。
@@ -174,8 +181,8 @@ light_wallpaper = "C:\\path\\to\\Day.jpg"
 dark_wallpaper  = "C:\\path\\to\\Night.jpg"
 
 [theme_settings]
-# 智能名称/路径寻址：支持 "aero"、"dark"、"Dark Theme" 或绝对路径
-light_theme_file = "aero.theme"
+# 智能名称/路径寻址：支持 "light"、"dark" 或绝对路径
+light_theme_file = "light.theme"
 dark_theme_file  = "dark.theme"
 ```
 
@@ -217,6 +224,7 @@ schtasks /create /tn "Theme-Dark" /tr "powershell -NoProfile -ExecutionPolicy By
 - **即时打断**：再次按下快捷键时，自动终止上一个播放进程与音频，立即开始新的朗读。
 - **SHA256 本地多维缓存**：按 `text + voice + rate + pitch + volume` 在 `%LOCALAPPDATA%\lat3ncy-toolbox\tts-cache\` 缓存音频，常用词语瞬发播放，支持 LRU 容量自动淘汰。
 - **离线兜底**：若网络异常或离线，自动降级至 Windows 本地 SAPI 朗读保底。
+- **耳机预热（可选）**：`tools/audio-switcher/config.toml` 设 `tts.auto_switch_before_play = true` 时，`Caps+S` 会在播前 `audio-switcher.exe --ensure-headset` 将 AirPods 拉为默认（8s 超时），失败不阻塞，日志记 `tools/tts/tts.log`。
 
 ### 依赖安装与配置
 
@@ -233,6 +241,61 @@ python .\tools\tts\install-deps.py
 - `rate` / `pitch` / `volume`：语速、音调与音量调节
 - `cache`：最大缓存容量与文件数限制
 
+## Audio Switcher
+
+`Caps+D` 在扬声器与耳机间一键互切，依 `tools/audio-switcher/config.toml` 定义首选设备。
+
+- **立体声优先**：只启用 `A2DP Sink (0000110B/0000110D)`，排除 `Hands-Free / iPhone`，不碰 HFP 单声道
+- **未建链自动拉起**：`BluetoothSetServiceState(Enable)` + `WSASetService(WSALookupServiceBegin->RNR)` 复刻系统“连接”，轮询 `12s` 等 `ACTIVE` 后才 `SetDefault`
+- **提权抢占**：`耳机未就绪` 时自动 `sudo --inline` / `gsudo --wait` 提权重试 `Enable-PnpDevice`，`手机占用` 时先 `Disable→Enable` 抢占，无需手动点蓝牙面板
+- **永不掉线**：回切显示器不 `Disable` 蓝牙，下次秒连；注册表 `HKLM\...\MMDevices\Audio\Render` 找回已记住但未 `ACTIVE` 的 AirPods
+- **防抖**：`700ms` 内连按忽略，`ProcessNoWindow` 无黑窗，协议 `SWITCHED|ONLY_ONE|NO_DEVICE|ERROR|耳机未就绪`
+
+```toml
+# tools/audio-switcher/config.toml
+[preferred]
+headset_keywords = ["AirPods"]
+headset_exclude = ["Hands-Free", "Hands Free", "iPhone"]
+speaker_keywords = ["G27Q2", "NVIDIA High Definition Audio"]
+speaker_exclude = ["Virtual"]
+[behavior]
+connect_wait_ms = 12000
+poll_ms = 200
+[tts]
+auto_switch_before_play = false  # true 时 Ctrl+Alt+S 朗读前自动 --ensure-headset 预热
+```
+
+```powershell
+# 手动
+.\tools\audio-switcher\audio-switcher.exe --toggle        # 互切
+.\tools\audio-switcher\audio-switcher.exe --ensure-headset  # 仅确保耳机为默认（TTS 预热用）
+.\tools\audio-switcher\audio-switcher.exe --list
+```
+
+详见 `tools/audio-switcher/config.toml` 与 `ahk/tests/run-tests.ahk` 契约 11 项。
+
+## DSH Remote — 手机远程访问
+
+通过 **Tailscale Serve 动态端口暴露**把本地 `deepseek-harness-desktop` 的 `http://127.0.0.1:<动态端口>` 暴露为 `https://<tailnet>.ts.net`，手机加入同一 Tailnet 即可访问。默认额外经过 loopback relay 重写 `Host`/`Origin`，使 workspace API 和 WebSocket 通过 DSH 的 trust fence。**不写死端口**：`config.toml` 的 `port=0` 时自动从 `~/.store.dat` 读取 DSH 真实端口，失败则通过 `Get-NetTCPConnection` 探测 `deepseek-harness-desktop` 进程的监听端口。
+
+- **事件驱动 + 60s 对账**：WMI `__InstanceCreationEvent/__InstanceDeletionEvent (WITHIN 2s)` 事件唤醒，0 CPU 休眠；每 60s 对账一次
+- **自动 sudo 提权**：Windows `sudo --inline`（`ConsentPromptBehaviorAdmin=0`）无弹窗，已封装 `Invoke-TailscaleCommand` 自动回退
+- **幂等**：重复执行不会重复创建 Serve
+- **远程 API 兼容**：默认 `127.0.0.1:3090 -> DSH` relay，避免远程域名访问 `/api` 返回 `403 forbidden`
+
+```powershell
+# 查看当前动态端口与暴露状态
+pwsh -File .\tools\dsh-remote\Get-DshRemoteStatus.ps1
+# 手动暴露（自动查询 .store.dat -> 进程监听 -> 3081 兜底）
+pwsh -File .\tools\dsh-remote\Start-DshRemote.ps1
+# 安装跟随启停的 Watcher（推荐，自动 sudo）
+pwsh -File .\tools\dsh-remote\Install-Watcher.ps1
+# 日志
+Get-Content .\tools\dsh-remote\watcher.log -Tail 50 -Wait
+```
+
+详见 `tools/dsh-remote/README.md` 与 `tools/dsh-remote/config.toml`。
+
 ## 仓库结构
 
 ```text
@@ -244,11 +307,13 @@ lat3ncy-scripts-toolbox/
 │   ├── features/             # 独立功能模块
 │   └── tests/                # AHK 与 PowerShell 自动测试
 ├── shared/
-│   └── notify/               # AHK/Raycast 共用通知 API、Renderer 与 CLI
+│   └── notify/               # AHK/Raycast 共用通知 API、Renderer、CLI 与 dev 视觉测试
 ├── tools/
+│   ├── audio-switcher/       # Caps+D 音频切换（G27Q2 ↔ AirPods 自动拉起，config.toml 可配置）
 │   ├── navicat-refresh/      # Navicat 试用期重置（MacOS/Windows）
 │   ├── raycast-scripts/      # Raycast 命令（含 ocr/ 子目录的 OCR 核心与依赖安装）
 │   ├── theme-scheduler/      # Windows 深浅色自动切换（日出日落调度）
-│   └── tts/                  # Text-to-Speech 核心播放器、依赖安装与配置
+│   ├── tts/                  # Text-to-Speech 核心播放器、依赖安装与配置
+│   └── dsh-remote/           # DSH 手机远程访问（Tailscale Serve 动态端口暴露 + Watcher）
 └── README.md                 # 唯一提交的仓库文档
 ```

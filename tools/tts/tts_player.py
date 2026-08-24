@@ -63,6 +63,7 @@ def load_config(config_path: str | None = None) -> dict:
         "rate": "+0%",
         "pitch": "+0Hz",
         "volume": "+0%",
+        "concurrency": 2,
         "cache": {
             "max_size_mb": 100,
             "max_files": 2000,
@@ -262,9 +263,11 @@ async def synthesize_one_segment(
     engine: str,
     ready_events: list[asyncio.Event],
     result_files: list[str | None],
+    semaphore: asyncio.Semaphore | None = None,
 ) -> None:
     logger = get_logger()
-    try:
+
+    async def _do_synthesize():
         if os.path.isfile(cache_path) and os.path.getsize(cache_path) > 0:
             logger.info(f"片段 #{idx+1} [{lang}] 命中缓存: {os.path.basename(cache_path)[:12]}... ({seg_text})")
             try:
@@ -292,6 +295,13 @@ async def synthesize_one_segment(
             logger.debug(f"片段 #{idx+1} [{lang}] 合成就绪")
         else:
             logger.error(f"片段 #{idx+1} [{lang}] 输出文件无效")
+
+    try:
+        if semaphore is not None:
+            async with semaphore:
+                await _do_synthesize()
+        else:
+            await _do_synthesize()
     except Exception as e:
         logger.error(f"片段 #{idx+1} [{lang}] 合成发生异常: {e}")
     finally:
@@ -386,12 +396,16 @@ async def main_async() -> None:
     if not segments:
         return
 
-    logger.info(f"待朗读文本: {repr(input_text)} -> {len(segments)} 个语境切片 [中:{zh_voice}, 英:{en_voice}]")
+    concurrency = int(config.get("concurrency", 2))
+    concurrency = max(1, min(concurrency, 10))
+    semaphore = asyncio.Semaphore(concurrency)
+
+    logger.info(f"待朗读文本: {repr(input_text)} -> {len(segments)} 个语境切片 [中:{zh_voice}, 英:{en_voice}] 并发={concurrency}")
 
     ready_events = [asyncio.Event() for _ in segments]
     result_files: list[str | None] = [None] * len(segments)
 
-    # 1. 启动全片段并发合成 Task
+    # 1. 启动受控并发合成 Task (并发上限={concurrency})
     tasks = []
     for idx, (lang, seg_text) in enumerate(segments):
         voice = zh_voice if lang == "zh" else en_voice
@@ -412,6 +426,7 @@ async def main_async() -> None:
                     engine,
                     ready_events,
                     result_files,
+                    semaphore,
                 )
             )
         )

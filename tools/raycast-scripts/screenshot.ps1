@@ -11,6 +11,12 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
+trap {
+  $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
+  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  exit 1
+}
+
 # 截图工具没有公开的命令行参数，只能注入系统热键 Win+Shift+S
 # （keybd_event 为低层注入，可触发系统注册热键）。
 Add-Type -TypeDefinition @"
@@ -35,19 +41,19 @@ Start-Sleep -Milliseconds 60
 [SystemHotkeySim]::keybd_event($VK_SHIFT, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
 [SystemHotkeySim]::keybd_event($VK_LWIN, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
 
-Start-Sleep -Milliseconds 500
-if (-not (Get-Process -Name 'SnippingTool' -ErrorAction SilentlyContinue))
+Start-Sleep -Milliseconds 700
+# Win11 22H2+ 用 ScreenClippingHost / ShellExperienceHost，旧版用 SnippingTool，全部兼容
+$snipProc = Get-Process -Name 'SnippingTool','ScreenClippingHost','ShellExperienceHost' -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $snipProc)
 {
-  $shown = Show-ToolboxNotify -Type 'error' -Icon '×' -Text '无法打开截图工具'
-  if (-not $shown)
-  {
-    Write-Output '× 无法打开截图工具'
-  }
+  # 兜底：Win+Shift+S 注入后系统可能还没拉起进程，稍等再查一次
+  Start-Sleep -Milliseconds 400
+  $snipProc = Get-Process -Name 'SnippingTool','ScreenClippingHost','ShellExperienceHost' -ErrorAction SilentlyContinue | Select-Object -First 1
+}
+if (-not $snipProc)
+{
+  Show-SystemToast -Title '× 截图失败' -Message '无法打开截图工具' | Out-Null
   exit 1
 }
 
-$shown = Show-ToolboxNotify -Type 'state' -Icon '▣' -Text '截图已打开'
-if (-not $shown)
-{
-  Write-Output '▣ 截图已打开'
-}
+exit 0

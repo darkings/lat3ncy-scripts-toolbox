@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 
 # @raycast.schemaVersion 1
 # @raycast.title Reset Navicat Trial
@@ -9,6 +9,12 @@
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
+
+trap {
+  $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
+  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  exit 1
+}
 
 $repositoryRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $navicatDir = Join-Path $repositoryRoot 'tools\navicat-refresh'
@@ -55,7 +61,6 @@ if ($osType -eq 'Windows')
   $scriptPath = Join-Path $navicatDir 'reset_navicat.ps1'
   if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf))
   {
-    Show-ToolboxNotify -Type 'error' -Icon '×' -Text "未找到 Windows 重置脚本" | Out-Null
     Write-Output "× 未找到 Windows 重置脚本: $scriptPath"
     exit 1
   }
@@ -76,7 +81,6 @@ elseif ($osType -eq 'macOS' -or $osType -eq 'Linux')
   $scriptPath = Join-Path $navicatDir 'reset_navicat.sh'
   if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf))
   {
-    Show-ToolboxNotify -Type 'error' -Icon '×' -Text "未找到 $osType 重置脚本" | Out-Null
     Write-Output "× 未找到 $osType 重置脚本: $scriptPath"
     exit 1
   }
@@ -94,7 +98,6 @@ elseif ($osType -eq 'macOS' -or $osType -eq 'Linux')
 }
 else
 {
-  Show-ToolboxNotify -Type 'error' -Icon '×' -Text '不支持的操作系统' | Out-Null
   Write-Output '× 不支持的操作系统'
   exit 1
 }
@@ -102,12 +105,10 @@ else
 # ---------- 3. 结果通知与状态反馈 ----------
 if ($exitCode -eq 0 -or $null -eq $exitCode)
 {
-  Show-ToolboxNotify -Type 'success' -Icon '✓' -Text 'Navicat 试用期已重置' | Out-Null
-  Write-Output '✓ Navicat 试用期已重置'
+  Write-Output '√ Navicat 试用期已重置'
 }
 else
 {
-  Show-ToolboxNotify -Type 'error' -Icon '×' -Text 'Navicat 试用期重置失败' | Out-Null
   Write-Output ('× Navicat 试用期重置失败' + $(if ($outputMsg) { ": $outputMsg" } else { '' }))
   exit $exitCode
 }

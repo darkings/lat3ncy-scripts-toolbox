@@ -5,10 +5,29 @@ Persistent(true)
 
 global ToolboxStarting := true
 
+IsToolboxDebugMode() {
+    try {
+        if (EnvGet("LAT3NCY_DEBUG") = "1")
+            return true
+    } catch {
+    }
+    for arg in A_Args {
+        if (arg = "--debug")
+            return true
+    }
+    return false
+}
+
 LogToolboxExit(exitReason, exitCode) {
+    if !IsToolboxDebugMode()
+        return
     try {
         timeStr := FormatTime(, "yyyy-MM-dd HH:mm:ss")
-        FileAppend("[" timeStr "] main.ahk EXITING! Reason: " exitReason " Code: " exitCode "`n", "C:\Users\Jie\Projects\lat3ncy-scripts-toolbox\debug-notify.log", "UTF-8")
+        FileAppend(
+            "[" timeStr "] main.ahk EXITING! Reason: " exitReason " Code: " exitCode "`n",
+            A_Temp "\lat3ncy-toolbox-notify.log",
+            "UTF-8"
+        )
     }
 }
 OnExit LogToolboxExit
@@ -28,7 +47,11 @@ OnError ToolboxStartupErrorHandler
 #Include shortcuts.ahk
 
 IsToolboxTestMode() {
-    return A_Args.Length >= 1 && A_Args[1] = "--test"
+    for arg in A_Args {
+        if (arg = "--test")
+            return true
+    }
+    return false
 }
 
 ; ============================================================
@@ -60,14 +83,26 @@ IsToolboxTestMode() {
 ; 定位选中目标：在资源管理器中选中并高亮显示目标文件/目录 [快捷键: Caps + E (CapsLock & e)]
 #Include features\locate-selected-target.ahk
 
-; 切换隐藏文件：一键切换资源管理器中隐藏文件的显示/隐藏状态 [快捷键: Caps + H (CapsLock & h)]
+; 隐藏当前窗口：最小化活动窗口，对应 macOS ⌘+H [快捷键: Caps + H (CapsLock & h)]
+#Include features\hide-active-window.ahk
+
+; 切换隐藏文件：一键切换资源管理器中隐藏文件的显示/隐藏状态 [快捷键: Caps + . (CapsLock & .)]
 #Include features\toggle-hidden-files.ahk
+
+; 切换文件扩展名：一键显示或隐藏资源管理器中的文件扩展名 [快捷键: Caps + X (CapsLock & x)]
+#Include features\toggle-file-extensions.ahk
 
 ; 朗读选中文字：智能中英文双语音色极速发音，再次按下即时打断 [快捷键: Caps + S (CapsLock & s)]
 #Include features\speak-selected-text.ahk
 
+; 音频输出切换：一键在可用音频播放设备之间循环切换 [快捷键: Caps + D (CapsLock & d)]
+#Include features\audio-switcher.ahk
+
 ; 同应用窗口切换：在同一应用程序的多个窗口之间前后循环切换 [快捷键: Alt + ` (!sc029) / Shift + Alt + ` (+!sc029)]
 #Include features\switch-app-window.ahk
+
+; 前台进程：结束或重启当前活动窗口对应的进程 [快捷键: Caps + Q / Caps + R]
+#Include features\foreground-process.ahk
 
 ; 统一路由层必须在全部 feature 之后加载。
 #Include hotkey-router.ahk

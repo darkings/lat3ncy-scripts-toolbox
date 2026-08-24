@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 function Get-ThemeConfig
 {
@@ -17,7 +17,7 @@ function Get-ThemeConfig
     }
     mode_settings = @{
       switch_apps = $true
-      switch_system = $true
+      switch_system = $false
     }
     wallpaper = @{
       enabled = $false
@@ -25,7 +25,7 @@ function Get-ThemeConfig
       dark_wallpaper = ''
     }
     theme_settings = @{
-      light_theme_file = 'aero.theme'
+      light_theme_file = 'light.theme'
       dark_theme_file = 'dark.theme'
     }
   }
@@ -63,6 +63,15 @@ function Get-ThemeConfig
       {
         $valStr = $matches[1]
       }
+      elseif ($valStr -match '^(true|false|-?\d+)\s*#')
+      {
+        $valStr = $matches[1]
+      }
+      elseif ($valStr.Contains('#') -and -not $valStr.StartsWith('"') -and -not $valStr.StartsWith("'"))
+      {
+        # 兜底：未加引号的值后带注释 e.g. true # comment
+        $valStr = ($valStr -split '#')[0].Trim()
+      }
 
       $val = $valStr
       if ($valStr -match '^"(.*)"$' -or $valStr -match '^''(.*)''$')
@@ -76,6 +85,10 @@ function Get-ThemeConfig
       elseif ($valStr -eq 'false')
       {
         $val = $false
+      }
+      elseif ($valStr -match '^-?\d+$')
+      {
+        $val = [int]$valStr
       }
 
       if ($currentSection)
@@ -120,6 +133,7 @@ function Resolve-ThemeFilePath
   }
 
   # 3. 用户个性化主题目录 %LOCALAPPDATA%\Microsoft\Windows\Themes\
+  if (-not $env:LOCALAPPDATA) { return $null }
   $userThemeDir = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Themes'
   $userTheme = Join-Path $userThemeDir $nameWithExt
   if (Test-Path -LiteralPath $userTheme -PathType Leaf)
@@ -179,6 +193,46 @@ function Set-DesktopWallpaper
   }
 }
 
+function Get-ThemeHiddenAction
+{
+  param([Parameter(Mandatory = $true)][string]$ScriptPath)
+
+  $arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
+  return New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
+}
+
+function Get-ThemeTaskSettings
+{
+  return New-ScheduledTaskSettingsSet `
+    -Hidden `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -WakeToRun `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+}
+
+function Repair-ThemeScheduledTaskWindow
+{
+  param(
+    [Parameter(Mandatory = $true)][string]$TaskName,
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    $Trigger = $null
+  )
+
+  $action = Get-ThemeHiddenAction -ScriptPath $ScriptPath
+  $settings = Get-ThemeTaskSettings
+  if ($null -ne $Trigger)
+  {
+    Set-ScheduledTask -TaskName $TaskName -Action $action -Settings $settings -Trigger $Trigger | Out-Null
+  }
+  else
+  {
+    Set-ScheduledTask -TaskName $TaskName -Action $action -Settings $settings | Out-Null
+  }
+}
+
 function Invoke-ThemeNotify
 {
   param(
@@ -192,7 +246,8 @@ function Invoke-ThemeNotify
     if (Test-Path -LiteralPath $notifyLib -PathType Leaf)
     {
       . $notifyLib
-      Show-ToolboxNotify -Type $Type -Icon $Icon -Text $Text | Out-Null
+      $title = "$Icon 主题切换"
+      Show-SystemToast -Title $title -Message $Text | Out-Null
     }
   }
   catch

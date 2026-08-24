@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Continue'
+﻿$ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'ThemeUtils.ps1')
 
 $config = Get-ThemeConfig

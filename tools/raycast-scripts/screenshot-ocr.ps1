@@ -17,6 +17,13 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
+trap {
+  $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
+  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  # 已通过系统 Toast 统一提示，避免再触发 Raycast 自带的错误气泡
+  exit 0
+}
+
 # ---------- 读取 OCR 模式配置（TOML 顶层键，正则解析） ----------
 $mode = 'system'
 $configPath = Join-Path $PSScriptRoot 'ocr\config.toml'
@@ -35,22 +42,14 @@ if (Test-Path -LiteralPath $configPath)
   }
 }
 
-$notificationType = 'success'
-$notificationIcon = '✓'
-$notificationText = 'OCR 已复制'
-
 if ($mode -eq 'rapidocr')
 {
   # ================= RapidOCR 分支（原方案，保留备用） =================
   $ocrScript = Join-Path $PSScriptRoot 'ocr\ocr.py'
   if (-not (Test-Path -LiteralPath $ocrScript -PathType Leaf))
   {
-    $shown = Show-ToolboxNotify -Type 'error' -Icon '×' -Text 'OCR 脚本不存在'
-    if (-not $shown)
-    {
-      Write-Output '× OCR 脚本不存在'
-    }
-    exit 1
+    Show-SystemToast -Title '× OCR 失败' -Message 'OCR 脚本不存在' | Out-Null
+    exit 0
   }
 
   $pythonw = Get-Command pythonw.exe -ErrorAction SilentlyContinue
@@ -60,12 +59,8 @@ if ($mode -eq 'rapidocr')
   }
   if (-not $pythonw)
   {
-    $shown = Show-ToolboxNotify -Type 'error' -Icon '×' -Text '未找到 Python'
-    if (-not $shown)
-    {
-      Write-Output '× 未找到 Python'
-    }
-    exit 1
+    Show-SystemToast -Title '× OCR 失败' -Message '未找到 Python 运行环境' | Out-Null
+    exit 0
   }
 
   $resultFile = Join-Path $env:TEMP (
@@ -78,25 +73,27 @@ if ($mode -eq 'rapidocr')
 
   if ($process.ExitCode -ne 0)
   {
-    $notificationType = 'error'
-    $notificationIcon = '×'
-    $notificationText = 'OCR 失败'
+    Show-SystemToast -Title '× OCR 失败' -Message '识别进程异常退出' | Out-Null
   } elseif (Test-Path -LiteralPath $resultFile)
   {
     $text = [System.IO.File]::ReadAllText($resultFile, [System.Text.Encoding]::UTF8)
     if (-not $text)
     {
-      $notificationType = 'error'
-      $notificationIcon = '!'
-      $notificationText = '未识别到文字'
+      Show-SystemToast -Title '! 未识别到文字' -Message '所选区域内未检测到有效字符' | Out-Null
+    } else
+    {
+      $preview = $text.Trim()
+      if ($preview.Length -gt 90) {
+        $preview = $preview.Substring(0, 90) + '...'
+      }
+      Show-SystemToast -Title '✓ OCR 文本已复制' -Message $preview | Out-Null
     }
   } else
   {
-    $notificationType = 'info'
-    $notificationIcon = '−'
-    $notificationText = 'OCR 已取消'
+    Show-SystemToast -Title '○ OCR 已取消' -Message '未检测到截图，请重新框选' | Out-Null
   }
   Remove-Item -LiteralPath $resultFile -ErrorAction SilentlyContinue
+  exit 0
 } else
 {
   # ================= 系统文本操作分支（Win+Shift+T） =================
@@ -118,12 +115,5 @@ public static class SystemHotkeySim {
   [SystemHotkeySim]::keybd_event(0x10, 0, 0x0002, [UIntPtr]::Zero) # Shift 抬起
   [SystemHotkeySim]::keybd_event(0x5B, 0, 0x0002, [UIntPtr]::Zero) # Win 抬起
 
-  # 注入完成即退出（系统接管后续流程）
   exit 0
-}
-
-$shown = Show-ToolboxNotify -Type $notificationType -Icon $notificationIcon -Text $notificationText
-if (-not $shown)
-{
-  Write-Output "$notificationIcon $notificationText"
 }

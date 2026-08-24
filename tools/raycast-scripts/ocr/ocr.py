@@ -1,10 +1,14 @@
 """剪贴板图片 OCR：配合系统截图工具（Win+Shift+S）使用。
 
 轮询系统剪贴板中的图片（由截图工具写入），用 RapidOCR 识别中英文，
-把识别文本写回剪贴板并通过 Windows 通知显示摘要。超时 45 秒。
+把识别文本写回剪贴板并通过统一 HUD（shared/notify）显示摘要。超时 45 秒。
+当由 Raycast（--result-file）调用时保持静默，由外层 ps1 统一通知。
 """
 
 import os
+import pathlib
+import shutil
+import subprocess
 import sys
 import time
 import tkinter as tk
@@ -22,6 +26,9 @@ MODEL_PARAM_NAMES = {
     "cls": "cls_model_path",
     "rec": "rec_model_path",
 }
+
+# Raycast 托管时由外层 ps1 统一通知，py 侧静默以避免双泡
+_SILENT_MODE = False
 
 
 def copy_to_clipboard(text: str) -> None:
@@ -43,110 +50,124 @@ def copy_to_clipboard_tkinter(text: str) -> None:
     root.destroy()
 
 
-def notify(title: str, message: str) -> None:
-    notify_tkinter(title, message)
+def _resolve_notify_dir() -> pathlib.Path | None:
+    current = pathlib.Path(SCRIPT_DIR).resolve()
+    for _ in range(6):
+        candidate = current / "shared" / "notify"
+        if (candidate / "notify-cli.ahk").is_file() or (candidate / "notify.exe").is_file():
+            return candidate
+        if current.parent == current:
+            break
+        current = current.parent
+    return None
 
 
-def notify_tkinter(title: str, message: str) -> None:
+def _resolve_autohotkey() -> str | None:
+    local_app_data = os.environ.get("LOCALAPPDATA") or os.environ.get("LocalAppData")
+    if not local_app_data:
+        # Raycast 隔离环境下 env 可能为空，回退到 HOME\AppData\Local
+        try:
+            local_app_data = str(pathlib.Path.home() / "AppData" / "Local")
+        except Exception:
+            local_app_data = ""
+    if local_app_data:
+        for name in ("AutoHotkey64.exe", "AutoHotkey32.exe"):
+            candidate = pathlib.Path(local_app_data) / "Programs" / "AutoHotkey" / "v2" / name
+            if candidate.is_file():
+                return str(candidate)
+    found = shutil.which("AutoHotkey.exe")
+    if found:
+        # 处理 Scoop shim（.shim 文件）
+        try:
+            shim = pathlib.Path(found).with_suffix(".shim")
+            if shim.is_file():
+                text = shim.read_text(encoding="utf-8", errors="ignore")
+                import re
+
+                m = re.search(r'path\s*=\s*"([^"]+)"', text)
+                if m:
+                    target = pathlib.Path(m.group(1))
+                    if target.name.lower() == "autohotkeyux.exe":
+                        install_root = target.parent.parent
+                        engine = install_root / "v2" / ("AutoHotkey64.exe" if os.environ.get("PROCESSOR_ARCHITECTURE", "").endswith("64") else "AutoHotkey32.exe")
+                        if engine.is_file():
+                            return str(engine)
+                    if target.is_file():
+                        return str(target)
+        except Exception:
+            pass
+        return found
+    program_files = os.environ.get("ProgramFiles") or r"C:\Program Files"
+    for candidate in (
+        pathlib.Path(program_files) / "AutoHotkey" / "v2" / "AutoHotkey64.exe",
+        pathlib.Path(program_files) / "AutoHotkey" / "v2" / "AutoHotkey32.exe",
+        pathlib.Path(program_files) / "AutoHotkey" / "v2" / "AutoHotkey.exe",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    # Scoop 常见路径兜底
+    for root in (os.environ.get("USERPROFILE"), os.environ.get("SCOOP")):
+        if not root:
+            continue
+        for candidate in (
+            pathlib.Path(root) / "scoop" / "apps" / "autohotkey" / "current" / "AutoHotkey64.exe",
+            pathlib.Path(root) / "scoop" / "apps" / "autohotkey" / "current" / "AutoHotkey32.exe",
+        ):
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def notify_shared(ntype: str, icon: str, text: str, duration: int = 0) -> None:
+    notify_dir = _resolve_notify_dir()
+    if notify_dir is None:
+        return
+    args: list[str] = [ntype, icon, text]
+    if duration > 0:
+        args.append(str(duration))
     try:
-        root = tk.Tk()
-        root.overrideredirect(True)
-        root.attributes("-topmost", True)
-        # 透明色背景 + Canvas 绘制卡片，实现圆角、图标与动画
-        root.attributes("-transparentcolor", "#ff00ff")
-
-        width = 420
-        height = 88
-        x = root.winfo_screenwidth() - width - 32
-        y = 72
-        root.geometry(f"{width}x{height}+{x}+{y}")
-        root.configure(bg="#ff00ff")
-
-        canvas = tk.Canvas(root, bg="#ff00ff", highlightthickness=0)
-        canvas.pack(fill=tk.BOTH, expand=True)
-        rounded_rect(
-            canvas, 0, 0, width - 1, height - 1, 14, fill="#1f1f23", outline="#3a3a40"
+        notify_exe = notify_dir / "notify.exe"
+        if notify_exe.is_file():
+            subprocess.Popen(
+                [str(notify_exe), *args],
+                cwd=str(notify_dir),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+            )
+            return
+        notify_ahk = notify_dir / "notify-cli.ahk"
+        if not notify_ahk.is_file():
+            return
+        ahk = _resolve_autohotkey()
+        if not ahk:
+            return
+        subprocess.Popen(
+            [ahk, str(notify_ahk), *args],
+            cwd=str(notify_dir),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
         )
-        # 顶部进度条（随剩余时间缩短）
-        bar = canvas.create_rectangle(16, 6, width - 16, 10, fill="#3b82f6", outline="")
-        # 标题与消息（无图标，左对齐）
-        canvas.create_text(
-            16,
-            20,
-            text=title,
-            anchor="nw",
-            fill="#ffffff",
-            font=("Microsoft YaHei UI", 13, "bold"),
-        )
-        canvas.create_text(
-            16,
-            48,
-            text=message,
-            anchor="nw",
-            fill="#c9c9cf",
-            font=("Microsoft YaHei UI", 10),
-            width=width - 32,
-        )
-
-        def animate() -> None:
-            root.attributes("-alpha", 0.0)
-            for step in range(1, 11):
-                root.attributes("-alpha", step / 10)
-                root.update()
-                time.sleep(0.02)
-            for step in range(40, 0, -1):
-                bar_right = 16 + int((width - 32) * step / 40)
-                canvas.coords(bar, 16, 6, bar_right, 10)
-                root.update()
-                time.sleep(0.05)
-            for step in range(10, 0, -1):
-                root.attributes("-alpha", step / 10)
-                root.update()
-                time.sleep(0.025)
-            root.destroy()
-
-        root.after(50, animate)
-        root.mainloop()
-    except tk.TclError:
+    except Exception:
         return
 
 
-def rounded_rect(
-    canvas: tk.Canvas,
-    x1: int,
-    y1: int,
-    x2: int,
-    y2: int,
-    radius: int,
-    **kwargs: Any,
-) -> int:
-    points = [
-        x1 + radius,
-        y1,
-        x2 - radius,
-        y1,
-        x2,
-        y1,
-        x2,
-        y1 + radius,
-        x2,
-        y2 - radius,
-        x2,
-        y2,
-        x2 - radius,
-        y2,
-        x1 + radius,
-        y2,
-        x1,
-        y2,
-        x1,
-        y2 - radius,
-        x1,
-        y1 + radius,
-        x1,
-        y1,
-    ]
-    return canvas.create_polygon(points, smooth=True, **kwargs)
+def notify(title: str, message: str) -> None:
+    if _SILENT_MODE:
+        return
+    # 映射到统一 HUD 的 4 种语义类型
+    if title == "OCR 已复制":
+        notify_shared("success", "✓", message, 900)
+    elif title == "OCR 未识别到文字":
+        notify_shared("error", "!", "未识别到文字", 1400)
+    elif title == "OCR 已取消":
+        notify_shared("info", "−", "OCR 已取消", 750)
+    elif title == "OCR 未配置":
+        text = message if message else title
+        notify_shared("error", "×", text[:120], 1400)
+    elif title == "OCR 失败":
+        text = message if message else title
+        notify_shared("error", "×", text[:120] if text != title else "OCR 失败", 1400)
+    else:
+        text = f"{title} {message}".strip()[:120] if message else title
+        notify_shared("error", "×", text, 1400)
 
 
 def load_model_paths() -> dict[str, str]:
@@ -221,7 +242,7 @@ def recognize(engine: Any, image: Image.Image, result_file: str | None = None) -
         text = "\n".join(line[1] for line in result).strip()
 
     if result_file is not None:
-        # Raycast 流程：结果交调用方以系统气泡展示，这里只写文件并复制剪贴板
+        # Raycast 流程：结果交调用方以统一 HUD 展示，这里只写文件并复制剪贴板
         write_result(result_file, text)
         if text:
             copy_to_clipboard(text)
@@ -268,6 +289,7 @@ def run_ocr_from_clipboard(
 
 
 def main() -> int:
+    global _SILENT_MODE
     inject_screenshot = "--no-screenshot" not in sys.argv
     result_file = None
     args = sys.argv[1:]
@@ -275,6 +297,9 @@ def main() -> int:
         position = args.index("--result-file")
         if position + 1 < len(args):
             result_file = args[position + 1]
+
+    # Raycast 托管时静默，统一由 screenshot-ocr.ps1 的 Show-ToolboxNotify 负责
+    _SILENT_MODE = result_file is not None
 
     try:
         return run_ocr_from_clipboard(

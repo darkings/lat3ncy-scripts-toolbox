@@ -1,4 +1,5 @@
 #Requires AutoHotkey v2.0
+#Include ..\..\..\shared\notify\run-nowindow.ahk
 
 class SmartPasteClipboard {
     Capture() => ClipboardAll()
@@ -222,12 +223,11 @@ class SmartPaste {
             }
         }
 
+        ; 探测不到目录时按原生粘贴处理，不再报失败。
         if destination
             this.SaveClipboardImage(destination)
-        else {
-            Notify.Error("!", "请选择目录或打开文件后重试")
+        else
             Send "^v"
-        }
     }
 
     static SaveClipboardImage(destination) {
@@ -241,7 +241,7 @@ class SmartPaste {
             . " -ResultFile " this.QuoteArgument(resultFile)
 
         try {
-            exitCode := RunWait(command, , "Hide")
+            exitCode := ProcessNoWindow.RunWait(command)
             if (exitCode != 0 || !FileExist(resultFile)) {
                 Notify.Error("×", "图片保存失败")
                 return false

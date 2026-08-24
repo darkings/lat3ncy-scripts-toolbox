@@ -1,4 +1,5 @@
 #Requires AutoHotkey v2.0
+#Include ..\..\shared\notify\run-nowindow.ahk
 
 class SpeakSelectedText {
     static TtsPid := 0
@@ -51,6 +52,66 @@ class SpeakSelectedText {
         }
     }
 
+    static AudioSwitcherExe() {
+        SplitPath A_LineFile, , &featuresDir
+        SplitPath featuresDir, , &ahkDir
+        SplitPath ahkDir, , &repoDir
+        return repoDir "\tools\audio-switcher\audio-switcher.exe"
+    }
+
+    static IsAutoSwitchEnabled() {
+        SplitPath A_LineFile, , &featuresDir
+        SplitPath featuresDir, , &ahkDir
+        SplitPath ahkDir, , &repoDir
+        cfg := repoDir "\tools\audio-switcher\config.toml"
+        if !FileExist(cfg)
+            return false
+        try {
+            text := FileRead(cfg, "UTF-8")
+            if RegExMatch(text, "m)^\s*auto_switch_before_play\s*=\s*true\s*$") {
+                return true
+            }
+        } catch {
+            ; 配置读取失败视为关闭预热
+        }
+        return false
+    }
+
+    static EnsureHeadset() {
+        exe := this.AudioSwitcherExe()
+        if !FileExist(exe) {
+            this.Log("预热跳过：audio-switcher.exe 未找到")
+            return
+        }
+        temp := A_Temp "\lat3ncy-audio-ensure-" A_TickCount "-" Random(1000,9999) ".txt"
+        try FileDelete A_Temp "\lat3ncy-audio-ensure.txt"
+        try FileDelete temp
+        try {
+            try {
+                ProcessNoWindow.RunWait('"' exe '" --ensure-headset', temp)
+            } catch as runErr {
+                if InStr(runErr.Message, "无法创建输出文件") {
+                    this.Log("预热耳机输出文件失败，fallback 直接执行: " runErr.Message)
+                    ProcessNoWindow.RunWait('"' exe '" --ensure-headset', "")
+                    outFallback := ""
+                    ; 无输出文件时不读结果，仅记录已执行
+                    this.Log("预热耳机: 已执行 fallback（无输出）")
+                    return
+                }
+                throw runErr
+            }
+            out := ""
+            try out := Trim(FileRead(temp, "UTF-8"))
+            if (out != "")
+                this.Log("预热耳机: " out)
+            else
+                this.Log("预热耳机: 无输出")
+        } catch as err {
+            this.Log("预热耳机异常: " err.Message)
+        }
+        try FileDelete temp
+    }
+
     static Speak(_hotkeyName := "", receiverProbe := unset) {
         if IsSet(receiverProbe)
             return receiverProbe.Call(this)
@@ -80,6 +141,10 @@ class SpeakSelectedText {
             }
 
             this.StopCurrent()
+            if (this.IsAutoSwitchEnabled()) {
+                this.Log("检测到 tts.auto_switch_before_play=true，尝试预热 AirPods")
+                this.EnsureHeadset()
+            }
 
             try {
                 if FileExist(this.InputFilePath)

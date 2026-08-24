@@ -3,9 +3,13 @@
 ; ============================================================
 ; CapsLock 输入法 / 大写状态机
 ;
-; - 短按 CapsLock：切换中英文。
-; - 长按达到 500ms：立即进入英文大写，不等待松键。
+; - 短按 CapsLock（≤ TapMaxMs）：切换中英文。
+; - 按住超过短按、但未到长按就松开：视为取消组合，不切输入法。
+; - 长按达到 HoldThreshold：立即进入英文大写，不等待松键。
 ; - 大写模式下再次按 CapsLock：立即退出，并优先恢复进入前的 IME 状态。
+; - 本次按住期间若已进入大写，再按下组合键：撤回大写，只执行工具。
+; - 退出大写的那一次按住，不把同时按下的字母当成工具组合。
+; - 组合键松开后短暂锁定输入法切换，避免连带再点一次 Caps。
 ; - CapsLock 作为 Leader 时，由路由层先调用 MarkCapsChordUsed()。
 ;
 ; 本文件只实现功能，不读取 Shortcuts，也不注册热键。
@@ -13,12 +17,18 @@
 
 class CapsLockIme {
     static HoldThreshold := 500
+    static TapMaxMs := 250
+    static ChordImeLockoutMs := 180
     static MessageTimeout := 80
     static RestoreImeAfterCaps := true
 
     static _pressed := false
     static _chordUsed := false
     static _longPressTriggered := false
+    static _exitingCaps := false
+    static _downTick := 0
+    static _imeLockoutUntil := 0
+    static _lastReleaseAction := ""
     static _imeBeforeCaps := "unknown"
 
     static WM_IME_CONTROL := 0x0283
@@ -43,7 +53,6 @@ class CapsLockIme {
     }
 
     static OnKeyDown() {
-        NotifyRenderer.Log("CapsLock KeyDown: pressed=" this._pressed " isCapsToggled=" GetKeyState("CapsLock", "T"))
         ; 过滤按住 CapsLock 时产生的键盘自动重复。
         if this._pressed
             return
@@ -51,10 +60,15 @@ class CapsLockIme {
         this._pressed := true
         this._chordUsed := false
         this._longPressTriggered := false
+        this._exitingCaps := false
+        this._downTick := A_TickCount
+        this._lastReleaseAction := ""
 
         ; 大写已开启时，再按 CapsLock 立即退出，不参与短按/长按判断。
+        ; 这一次按住期间的字母不当组合键，避免退出大写时误触发工具。
         if GetKeyState("CapsLock", "T") {
             this._longPressTriggered := true
+            this._exitingCaps := true
             this.ExitCapsMode()
             return
         }
@@ -64,21 +78,29 @@ class CapsLockIme {
     }
 
     static OnKeyUp() {
-        NotifyRenderer.Log("CapsLock KeyUp: pressed=" this._pressed " chordUsed=" this._chordUsed " longPress=" this._longPressTriggered)
         if !this._pressed
             return
 
         this._pressed := false
         SetTimer this.LongPressCallback, 0
 
-        shouldToggleIme := !this._chordUsed && !this._longPressTriggered
+        holdMs := Max(0, A_TickCount - this._downTick)
+        shouldToggleIme := (
+            !this._chordUsed
+            && !this._longPressTriggered
+            && !this._exitingCaps
+            && holdMs <= this.TapMaxMs
+            && A_TickCount >= this._imeLockoutUntil
+        )
 
+        this._lastReleaseAction := shouldToggleIme ? "ime" : "idle"
         this._chordUsed := false
         this._longPressTriggered := false
+        this._exitingCaps := false
+        this._downTick := 0
 
         if shouldToggleIme {
             newState := this.ToggleIme()
-            NotifyRenderer.Log("  ToggleIme returned: " newState)
             if (newState = "chinese")
                 Notify.State("中", "中")
             else if (newState = "english")
@@ -94,6 +116,7 @@ class CapsLockIme {
             !this._pressed
             || this._chordUsed
             || this._longPressTriggered
+            || this._exitingCaps
             || !GetKeyState("CapsLock", "P")
         )
             return
@@ -105,15 +128,40 @@ class CapsLockIme {
     ; Router 在执行 CapsLock & key 功能前调用。
     static MarkChordUsed() {
         ; 正常情况下 key-down 已先执行；物理状态兜底可处理极端线程顺序。
-        if !this._pressed && GetKeyState("CapsLock", "P")
+        if !this._pressed && GetKeyState("CapsLock", "P") {
             this._pressed := true
+            this._downTick := A_TickCount
+        }
 
         if !this._pressed
             return false
 
+        ; 退出大写的这一按，不把同时按下的字母当工具组合。
+        if this._exitingCaps
+            return false
+
         this._chordUsed := true
         SetTimer this.LongPressCallback, 0
+        this._imeLockoutUntil := A_TickCount + this.ChordImeLockoutMs
+
+        ; 犹豫太久才按下字母：长按定时器可能已经进了大写。先撤掉，只执行工具。
+        if this._longPressTriggered && GetKeyState("CapsLock", "T")
+            this.AbortCapsModeForChord()
+
         return true
+    }
+
+    static AbortCapsModeForChord() {
+        SetCapsLockState "Off"
+
+        desiredState := (
+            this.RestoreImeAfterCaps
+            && this._imeBeforeCaps != "unknown"
+        ) ? this._imeBeforeCaps : "english"
+
+        this.SetImeState(desiredState)
+        this._imeBeforeCaps := "unknown"
+        this._longPressTriggered := false
     }
 
     static EnterCapsMode() {
@@ -122,7 +170,7 @@ class CapsLockIme {
         ; 大写输入必须使用英文；直接 API 失败时 SetImeState 会做受控回退。
         this.SetImeState("english")
         SetCapsLockState "On"
-        Notify.State("CAPS", "CAPS")
+        Notify.State("⇪", "⇪")
     }
 
     static ExitCapsMode() {

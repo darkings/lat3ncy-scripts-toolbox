@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 
 # @raycast.schemaVersion 1
 # @raycast.title Restart AutoHotkey
@@ -10,6 +10,12 @@
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
+
+trap {
+  $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
+  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  exit 1
+}
 
 $repositoryRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $mainScript = Join-Path $repositoryRoot 'ahk\main.ahk'
@@ -25,17 +31,80 @@ $toolboxPathPattern = 'lat3ncy-scripts-toolbox[\\/]ahk[\\/]main\.ahk'
 
 function Resolve-AutoHotkeyV2Executable
 {
-  # 优先标准 v2 安装位置（官方安装程序默认安装到 LOCALAPPDATA）
-  $standardV2 = Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey\v2'
-  foreach ($engineName in @('AutoHotkey64.exe', 'AutoHotkey32.exe'))
+  # 优先标准 v2 安装位置（官方安装程序默认安装到 LOCALAPPDATA），兼容 Raycast 隔离环境
+  $localAppData = $env:LOCALAPPDATA
+  if (-not $localAppData) {
+    try { $localAppData = [Environment]::GetFolderPath('LocalApplicationData') } catch {}
+  }
+  if ($localAppData)
   {
-    $candidate = Join-Path $standardV2 $engineName
-    if (Test-Path -LiteralPath $candidate -PathType Leaf)
+    $standardV2 = Join-Path $localAppData 'Programs\AutoHotkey\v2'
+    foreach ($engineName in @('AutoHotkey64.exe', 'AutoHotkey32.exe'))
     {
-      return $candidate
+      $candidate = Join-Path $standardV2 $engineName
+      if (Test-Path -LiteralPath $candidate -PathType Leaf)
+      {
+        return $candidate
+      }
     }
   }
-  return (Get-Command AutoHotkey.exe -ErrorAction Stop).Source
+
+  $command = Get-Command AutoHotkey.exe -ErrorAction SilentlyContinue
+  if ($command)
+  {
+    $executable = $command.Source
+    $shimFile = [IO.Path]::ChangeExtension($executable, '.shim')
+    if (Test-Path -LiteralPath $shimFile)
+    {
+      try {
+        $shimText = Get-Content -Raw -LiteralPath $shimFile
+        if ($shimText -match '(?m)^path\s*=\s*"([^"]+)"')
+        {
+          $shimTarget = $Matches[1]
+          if ([IO.Path]::GetFileName($shimTarget) -ieq 'AutoHotkeyUX.exe')
+          {
+            $installRoot = Split-Path (Split-Path $shimTarget -Parent) -Parent
+            $engineName = if ([Environment]::Is64BitOperatingSystem) { 'AutoHotkey64.exe' } else { 'AutoHotkey32.exe' }
+            $engine = Join-Path (Join-Path $installRoot 'v2') $engineName
+            if (Test-Path -LiteralPath $engine) { return $engine }
+          }
+          if (Test-Path -LiteralPath $shimTarget) { return $shimTarget }
+        }
+      } catch {}
+    }
+    return $executable
+  }
+
+  $programFiles = $env:ProgramFiles
+  if (-not $programFiles) {
+    try { $programFiles = [Environment]::GetFolderPath('ProgramFiles') } catch {}
+  }
+  if ($programFiles)
+  {
+    foreach ($candidate in @(
+        (Join-Path $programFiles 'AutoHotkey\v2\AutoHotkey64.exe'),
+        (Join-Path $programFiles 'AutoHotkey\v2\AutoHotkey32.exe'),
+        (Join-Path $programFiles 'AutoHotkey\v2\AutoHotkey.exe')
+      ))
+    {
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+  }
+
+  # Scoop 常见路径兜底
+  $scoopRoots = @($env:USERPROFILE, $env:SCOOP)
+  foreach ($root in $scoopRoots | Where-Object { $_ })
+  {
+    foreach ($candidate in @(
+        (Join-Path $root 'scoop\apps\autohotkey\current\AutoHotkey64.exe'),
+        (Join-Path $root 'scoop\apps\autohotkey\current\AutoHotkey32.exe')
+      ))
+    {
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+  }
+
+  return $null
 }
 
 function Get-ToolboxAutoHotkeyProcess
@@ -61,6 +130,11 @@ if ($toolboxProcesses)
 }
 
 $autoHotkey = Resolve-AutoHotkeyV2Executable
+if (-not $autoHotkey)
+{
+  Write-Output '× 未找到 AutoHotkey'
+  exit 1
+}
 $workingDirectory = Split-Path $resolvedMainScript -Parent
 $commandLine = '"{0}" "{1}"' -f $autoHotkey, $resolvedMainScript
 
@@ -83,8 +157,4 @@ if (-not $reloadedProcesses)
 }
 
 $processIds = ($reloadedProcesses.ProcessId | Sort-Object -Unique) -join ', '
-$shown = Show-ToolboxNotify -Type 'success' -Icon '✓' -Text 'AutoHotkey 已重载'
-if (-not $shown)
-{
-  Write-Output "✓ AutoHotkey 已重载 (PID: $processIds)"
-}
+Write-Output "✓ AutoHotkey 已重载 (PID: $processIds)"

@@ -1,4 +1,4 @@
-# Update-ThemeSchedule.ps1
+﻿# Update-ThemeSchedule.ps1
 # 根据日出/日落时间或固定时间自动调度 Windows 深浅色模式/主题/壁纸切换
 # 计划任务:
 #   Theme-Schedule-Update  每天 00:10 运行本脚本,更新当天切换时间
@@ -11,6 +11,7 @@ $ErrorActionPreference = 'Continue'
 $config = Get-ThemeConfig
 $LightTask = 'Theme-Light'
 $DarkTask  = 'Theme-Dark'
+$UpdateTask = 'Theme-Schedule-Update'
 $LogFile   = Join-Path $PSScriptRoot 'theme-scheduler.log'
 
 function Write-Log
@@ -127,11 +128,13 @@ else
   Write-Log ('Location: {0} ({1}, {2})' -f $(if ($coords) { $coords.Source } else { 'fallback' }), $riseTime.ToString('HH:mm'), $setTime.ToString('HH:mm'))
 }
 
-# ---------- 更新计划任务时间(Set-ScheduledTask,无需密码) ----------
+# ---------- 更新计划任务时间，并保持 Hidden + 无窗口 PowerShell 动作 ----------
+$lightScript = Join-Path $PSScriptRoot 'Set-Theme-Light.ps1'
+$darkScript = Join-Path $PSScriptRoot 'Set-Theme-Dark.ps1'
 try
 {
   $lightTrigger = New-ScheduledTaskTrigger -Daily -At $riseTime
-  Set-ScheduledTask -TaskName $LightTask -Trigger $lightTrigger | Out-Null
+  Repair-ThemeScheduledTaskWindow -TaskName $LightTask -ScriptPath $lightScript -Trigger $lightTrigger
   Write-Log ("Theme-Light -> {0}: OK" -f $riseTime.ToString('HH:mm'))
 }
 catch
@@ -142,10 +145,21 @@ catch
 try
 {
   $darkTrigger = New-ScheduledTaskTrigger -Daily -At $setTime
-  Set-ScheduledTask -TaskName $DarkTask -Trigger $darkTrigger | Out-Null
+  Repair-ThemeScheduledTaskWindow -TaskName $DarkTask -ScriptPath $darkScript -Trigger $darkTrigger
   Write-Log ("Theme-Dark -> {0}: OK" -f $setTime.ToString('HH:mm'))
 }
 catch
 {
   Write-Log ("Theme-Dark -> {0}: FAILED {1}" -f $setTime.ToString('HH:mm'), $_.Exception.Message)
+}
+
+try
+{
+  $updateScript = Join-Path $PSScriptRoot 'Update-ThemeSchedule.ps1'
+  Repair-ThemeScheduledTaskWindow -TaskName $UpdateTask -ScriptPath $updateScript
+  Write-Log 'Theme-Schedule-Update: OK'
+}
+catch
+{
+  Write-Log ("Theme-Schedule-Update: FAILED {0}" -f $_.Exception.Message)
 }

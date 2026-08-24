@@ -11,6 +11,23 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
+trap {
+  $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
+  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  exit 1
+}
+
+# 截图工具的录屏模式没有公开命令行参数，只能注入系统热键 Win+Shift+R
+# 直达录制模式（keybd_event 为低层注入，可触发系统注册热键）。
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class ScreenRecordKey {
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+}
+"@
+
 # 截图工具的录屏模式没有公开命令行参数，只能注入系统热键 Win+Shift+R
 # 直达录制模式（keybd_event 为低层注入，可触发系统注册热键）。
 Add-Type -TypeDefinition @"
@@ -38,16 +55,8 @@ Start-Sleep -Milliseconds 60
 Start-Sleep -Milliseconds 500
 if (-not (Get-Process -Name 'SnippingTool' -ErrorAction SilentlyContinue))
 {
-  $shown = Show-ToolboxNotify -Type 'error' -Icon '×' -Text '无法打开录屏工具'
-  if (-not $shown)
-  {
-    Write-Output '× 无法打开录屏工具'
-  }
+  Show-SystemToast -Title '× 录屏失败' -Message '无法打开录屏工具' | Out-Null
   exit 1
 }
 
-$shown = Show-ToolboxNotify -Type 'state' -Icon '●' -Text '开始录屏'
-if (-not $shown)
-{
-  Write-Output '● 开始录屏'
-}
+exit 0

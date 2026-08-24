@@ -18,10 +18,6 @@ class ToggleHiddenFiles {
             action := this.Action(currentValue)
             RegWrite action.value, "REG_DWORD", registryKey, "Hidden"
             this.RefreshExplorerWindows()
-            if action.visible
-                Notify.State("◉", "显示隐藏文件")
-            else
-                Notify.State("○", "隐藏文件")
         } catch {
             Notify.Error("×", "切换隐藏文件失败")
         }

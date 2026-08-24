@@ -10,6 +10,13 @@
 
 $ErrorActionPreference = 'Stop'
 
+trap {
+  . (Join-Path $PSScriptRoot '_lib\notify.ps1')
+  $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
+  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  exit 1
+}
+
 $powerShell = (Get-Command pwsh.exe -ErrorAction Stop).Source
 $powerShellArguments = @(
     '-NoLogo'

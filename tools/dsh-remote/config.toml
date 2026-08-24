@@ -1,0 +1,27 @@
+# ============================================================
+# DSH Remote - Tailscale Serve 手机远程访问配置
+# ============================================================
+
+[server]
+# 本地 DSH 端口：0=自动探测（优先读 .store.dat，其次探测监听端口），否则填固定值
+port = 0
+# Tailscale Serve 对外 https 端口（固定 443）
+https_port = 443
+
+[relay]
+# 通过本地 relay 重写 Host/Origin，绕过 DSH 对非 loopback API 请求的安全拒绝
+enabled = true
+# relay 监听端口；必须与 server.port 不同
+port = 3090
+
+[watcher]
+# 轮询间隔（秒），检测 DSH 进程启停
+poll_interval = 5
+# DSH 关闭后是否自动关闭暴露（true=短暂暴露，false=常驻暴露）
+auto_off = true
+# 等待 DSH 端口就绪的超时（秒）
+probe_timeout = 12
+
+[general]
+# 是否弹出 HUD 通知（走 shared/notify）
+show_notification = true

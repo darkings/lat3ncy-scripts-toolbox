@@ -8,6 +8,12 @@ namespace Lat3ncyToolbox
 {
     public class AnchorLocator
     {
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
 
@@ -40,12 +46,16 @@ namespace Lat3ncyToolbox
             public RECT rcCaret;
         }
 
+        private const int COORD_BIAS = 8192;
+
         private static int Encode(int x, int y, int sourceId)
         {
-            if (x <= 0 || y <= 0 || x > 10000 || y > 10000) return 0;
-            int ex = x & 0x3FFF;
-            int ey = (y & 0x3FFF) << 14;
-            int es = (sourceId & 0xF) << 28;
+            int bx = x + COORD_BIAS;
+            int by = y + COORD_BIAS;
+            if (bx < 0 || bx > 16383 || by < 0 || by > 16383) return 0;
+            int ex = bx & 0x3FFF;
+            int ey = (by & 0x3FFF) << 14;
+            int es = (sourceId & 0x7) << 28;
             return ex | ey | es;
         }
 
@@ -54,6 +64,18 @@ namespace Lat3ncyToolbox
         {
             try
             {
+                try
+                {
+                    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = (IntPtr)(-4)
+                    if (!SetProcessDpiAwarenessContext(new IntPtr(-4)))
+                    {
+                        SetProcessDPIAware();
+                    }
+                }
+                catch
+                {
+                }
+
                 IntPtr targetHwnd = IntPtr.Zero;
                 if (args.Length > 0)
                 {
@@ -87,7 +109,7 @@ namespace Lat3ncyToolbox
                             {
                                 POINT pt = new POINT { X = gui.rcCaret.Left, Y = gui.rcCaret.Bottom };
                                 ClientToScreen(gui.hwndCaret, ref pt);
-                                if (pt.X > 0 && pt.Y > 0 && pt.X < 10000 && pt.Y < 10000)
+                                if (pt.X >= -8000 && pt.Y >= -8000 && pt.X <= 8000 && pt.Y <= 8000)
                                 {
                                     return Encode(pt.X, pt.Y, 1);
                                 }
@@ -120,7 +142,7 @@ namespace Lat3ncyToolbox
                                 {
                                     int cx = (int)rects[0].Left;
                                     int cy = (int)(rects[0].Top + rects[0].Height);
-                                    if (cx > 0 && cy > 0 && cx < 10000 && cy < 10000)
+                                    if (cx >= -8000 && cy >= -8000 && cx <= 8000 && cy <= 8000)
                                     {
                                         return Encode(cx, cy, 2);
                                     }
@@ -130,11 +152,11 @@ namespace Lat3ncyToolbox
 
                         // 2. BoundingRectangle (Focused Control / Input Box fallback)
                         System.Windows.Rect b = focused.Current.BoundingRectangle;
-                        if (b.Width > 10 && b.Height > 10 && b.Width < 1920 && b.Height < 1080)
+                        if (b.Width > 5 && b.Height > 5 && b.Height <= 200 && b.Width < 8000)
                         {
                             int cx = (int)(b.Left + b.Width / 2);
                             int cy = (int)b.Bottom;
-                            if (cx > 0 && cy > 0 && cx < 10000 && cy < 10000)
+                            if (cx >= -8000 && cy >= -8000 && cx <= 8000 && cy <= 8000)
                             {
                                 return Encode(cx, cy, 3);
                             }

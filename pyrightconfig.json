@@ -1,3 +1,11 @@
 {
   "typeCheckingMode": "standard",
+  "include": [
+    "tools/tts",
+    "tools/raycast-scripts/ocr"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".worktrees"
+  ]
 }

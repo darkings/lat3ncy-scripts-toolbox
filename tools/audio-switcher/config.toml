@@ -1,0 +1,23 @@
+# ============================================================
+# Audio Switcher 配置
+# ============================================================
+# Caps+D 在扬声器与耳机间一键切换，未连时自动拉起 AirPods
+
+[preferred]
+# 耳机匹配：名称需包含其一，且不包含排除词
+headset_keywords = ["AirPods"]
+headset_exclude = ["Hands-Free", "Hands Free", "iPhone"]
+# 扬声器匹配：按顺序优先
+speaker_keywords = ["G27Q2", "NVIDIA High Definition Audio"]
+speaker_exclude = ["Virtual"]
+
+[behavior]
+# 未激活时等待 AirPods 建链超时与轮询间隔（开盖到 ACTIVE 约 2-5s，12s 更稳）
+connect_wait_ms = 12000
+poll_ms = 200
+# 热键防抖（AHK 侧）
+debounce_ms = 700
+
+[tts]
+# 朗读前是否自动确保耳机为默认设备，失败不阻塞朗读
+auto_switch_before_play = false

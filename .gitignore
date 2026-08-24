@@ -11,3 +11,9 @@ __pycache__/
 **/*.log
 /tools/raycast-scripts/ocr/*.png
 /tools/raycast-scripts/ocr/models/*.onnx
+
+# 根目录调试产物与截图，不进仓库。
+.tmp_caps/
+/test_*.ahk
+/test.txt
+/*.png

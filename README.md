@@ -44,7 +44,7 @@ AutoHotkey.exe .\ahk\main.ahk
 | `Ctrl + V`（`$^v`） | 智能粘贴：仅图片时介入保存为本地 PNG 文件；非图片内容原生无损透传 | `ahk/features/smart-paste/smart-paste.ahk` |
 | `Alt + 反引号`（`!sc029`） | 按当前 Z-order 快照循环切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
 | `Shift + Alt + 反引号`（`+!sc029`） | 沿快照反向切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
-| `Caps + D`（`~CapsLock & d`） | 切换播放器：`G27Q2 显示器` ↔ `Jie’s AirPods 立体声`，未连时自动拉起 AirPods（12s 内建链，`耳机未就绪` 时自动 `sudo/gsudo` 提权重试），已连秒切，回切不掉蓝牙 | `ahk/features/audio-switcher.ahk` + `tools/audio-switcher/audio-switcher.exe` |
+| `Caps + D`（`~CapsLock & d`） | 切换播放器：`G27Q2` ↔ `AirPods`，自动连接 | `ahk/features/audio-switcher.ahk` + `tools/audio-switcher/audio-switcher.exe` |
 
 同应用窗口切换在第一次触发时保存窗口顺序，按住 `Alt` 连续按反引号即可完整循环；松开 `Alt` 后清除快照。最小化、不可见、工具型以及被系统隐藏的窗口不会进入候选列表。Zed 只有一个可见顶层窗口时，快捷键会通过 `F13` / `F14` 桥接到 Zed 的 `multi_workspace::NextProject` / `multi_workspace::PreviousProject`，循环切换同一窗口中的项目。
 
@@ -243,13 +243,10 @@ python .\tools\tts\install-deps.py
 
 ## Audio Switcher
 
-`Caps+D` 在扬声器与耳机间一键互切，依 `tools/audio-switcher/config.toml` 定义首选设备。
+`Caps+D` 一键切换 `G27Q2 ↔ AirPods`。未连接时自动连接，手机占用时自动抢占，无需手动点蓝牙面板。
 
-- **立体声优先**：只启用 `A2DP Sink (0000110B/0000110D)`，排除 `Hands-Free / iPhone`，不碰 HFP 单声道
-- **未建链自动拉起**：`BluetoothSetServiceState(Enable)` + `WSASetService(WSALookupServiceBegin->RNR)` 复刻系统“连接”，轮询 `12s` 等 `ACTIVE` 后才 `SetDefault`
-- **提权抢占**：`耳机未就绪` 时自动 `sudo --inline` / `gsudo --wait` 提权重试 `Enable-PnpDevice`，`手机占用` 时先 `Disable→Enable` 抢占，无需手动点蓝牙面板
-- **永不掉线**：回切显示器不 `Disable` 蓝牙，下次秒连；注册表 `HKLM\...\MMDevices\Audio\Render` 找回已记住但未 `ACTIVE` 的 AirPods
-- **防抖**：`700ms` 内连按忽略，`ProcessNoWindow` 无黑窗，协议 `SWITCHED|ONLY_ONE|NO_DEVICE|ERROR|耳机未就绪`
+- 按 `tools/audio-switcher/config.toml` 识别首选设备，开盖即连
+- 必要时自动提权（`sudo` / `gsudo`），回切扬声器不掉蓝牙
 
 ```toml
 # tools/audio-switcher/config.toml

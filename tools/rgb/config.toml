@@ -1,0 +1,58 @@
+# Ambient Light — 省资源配置
+# OpenRGB 只复用系统服务已常驻的 SDK 6742，ambient 不会启动 OpenRGB.exe
+
+[capture]
+backend = "mss"        # mss | pil | dxcam | auto（auto: mss -> pil -> dxcam）
+output_w = 32            # 仅 pil / dxcam
+output_h = 32
+monitor = 1              # mss: 1=主屏；0=虚拟全桌面
+sample_step = 8          # mss 稀疏采样步长，320x180 / 8 ≈ 40x23
+fps_active = 12          # 中间帧更多，爬坡更细
+fps_idle = 6
+threshold = 6            # 小色差也推，否则 lerp 的中间色发不出去
+region = ""              # ""=中心320x180, "full"=全屏, 或 "0,0,800,600"
+
+[process]
+ema_alpha = 0.18         # 越小越跟得慢、越顺（0.12~0.22）
+# 切场黑帧 / 暗灰 UI 直接丢弃，不改 EMA、不推灯
+min_brightness = 22
+# 亮像素占比低于此值也当黑场（字幕/噪点不够代表整帧）
+min_valid_ratio = 0.12
+# 只有真正切场才瞬切；日常滑动走平滑。全程奶油感可改 999
+snap_delta = 80
+gamma = 1.0
+saturation_boost = 1.45
+# <1 打开二次插值，让每帧往目标色爬；1.0 等于关掉
+lerp_alpha = 0.35
+auto_off = false
+off_brightness = 2
+off_hold_s = 8.0
+
+[openrgb]
+enabled = true
+brightness = 100         # 0-100；机箱 ARGB 需要足够亮度
+mode = "Direct"
+# 设备名子串，命中任一即控制；不 fallback 全部设备，避免误控键盘
+device_match = ["gigabyte", "b550", "ds3h"]
+# 技嘉 D_LED1/D_LED2 默认 leds=0，不 resize 风扇不会亮
+# 先按常见 3 风扇 x 12 灯珠 = 36；不够再改大
+zone_sizes = { D_LED1 = 36, D_LED2 = 36 }
+
+[hi75]
+enabled = true
+path = "auto"            # auto=优先 Col06，或完整 HID 路径
+brightness = 100
+# 空=本进程直接 HID；填 dist/hi75/hi75.exe 则走独立键盘进程（--onedir，只有一个进程）
+exe = "dist/hi75/hi75.exe"
+# Direct 0x08：不闪，约 1s 必须重发当前色，否则掉回板载灯效
+led_count = 120
+keepalive_s = 0.70
+min_interval_s = 0.08    # 允许稍勤一点，Direct 0x08 撑得住
+min_delta = 8            # 键盘跟上中间色
+settle_s = 0.0           # 关掉“等稳再发”，避免停一下再跳
+settle_delta = 14
+stable_frames = 1
+
+[behavior]
+idle_timeout = 3.0       # 静止多久降至 idle fps
+log_interval = 5.0       # 日志最短间隔秒

@@ -1,0 +1,7 @@
+# OpenRGB / PawnIO 由 winget 安装到系统目录，不进仓库
+OpenRGB-App/
+PawnIO_setup.exe
+logs/
+__pycache__/
+build/
+dist/

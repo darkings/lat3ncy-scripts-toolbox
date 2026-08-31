@@ -1,0 +1,43 @@
+# ============================================================
+# 划词翻译配置（stdlib only，无 pip 依赖）
+# ============================================================
+
+# 引擎：
+#   tencent     腾讯云机器翻译 TextTranslate（默认，国内快）
+#   aliyun      阿里云机器翻译 TranslateGeneral
+#   google_gtx  无 Key 的 Google 网页翻译接口
+#   mymemory    MyMemory 公开接口
+# 普通网络/服务错误时按 首选引擎 -> google_gtx -> mymemory 自动回退。
+# 密钥缺失、无效或签名错误不会回退，AHK 会弹出系统 Toast。
+engine = "tencent"
+
+# 单次请求超时（秒）。AHK 侧 10s 杀进程，要给回退留余量。
+timeout_s = 4
+
+# 超过此长度截断后再译，避免 URL / 气泡过长。
+max_chars = 2000
+
+[cache]
+# %LOCALAPPDATA%\lat3ncy-toolbox\translate-cache\
+max_size_mb = 10
+max_files = 500
+
+# 密钥不要写进仓库。优先读环境变量：
+#   TENCENTCLOUD_SECRET_ID
+#   TENCENTCLOUD_SECRET_KEY
+# 也兼容 TENCENT_SECRET_ID / TENCENT_SECRET_KEY。
+# 环境变量未设置时才使用下面的配置值。
+[tencent]
+secret_id = ""
+secret_key = ""
+region = "ap-guangzhou"
+endpoint = "tmt.tencentcloudapi.com"
+project_id = 0
+
+# 备用：engine = "aliyun" 时才使用。
+#   ALIBABA_CLOUD_ACCESS_KEY_ID
+#   ALIBABA_CLOUD_ACCESS_KEY_SECRET
+[aliyun]
+access_key_id = ""
+access_key_secret = ""
+endpoint = "mt.cn-hangzhou.aliyuncs.com"

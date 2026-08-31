@@ -121,6 +121,11 @@ class HotkeyRouter {
             SpeakSelectedText.HotkeyCallback
         )
         this.RegisterCapsChord(
+            "划词翻译",
+            Shortcuts.TranslateSelectedText,
+            TranslateSelectedText.HotkeyCallback
+        )
+        this.RegisterCapsChord(
             "搜索选中文字",
             Shortcuts.SearchSelectedText,
             SearchSelectedText.HotkeyCallback
@@ -149,6 +154,11 @@ class HotkeyRouter {
             "显示隐藏文件",
             Shortcuts.ToggleHiddenFiles,
             ToggleHiddenFiles.HotkeyCallback
+        )
+        this.RegisterCapsChord(
+            "切换点文件",
+            Shortcuts.ToggleDotfiles,
+            ToggleDotfiles.HotkeyCallback
         )
         this.RegisterCapsChord(
             "显示文件扩展名",

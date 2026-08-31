@@ -5,7 +5,7 @@ function Get-DshRemoteConfig {
   $config = @{
     server = @{ port = 0; https_port = 443 }
     relay = @{ enabled = $true; port = 3090 }
-    watcher = @{ poll_interval = 5; auto_off = $true; probe_timeout = 12 }
+    watcher = @{ poll_interval = 60; auto_off = $true; probe_timeout = 12 }
     general = @{ show_notification = $true }
   }
   if (-not (Test-Path -LiteralPath $configFile -PathType Leaf)) { return $config }
@@ -39,103 +39,122 @@ function Get-DshRemoteConfig {
   return $config
 }
 
-function Get-DshPort {
-  param([int]$ConfiguredPort = 0)
-  # 1) 配置固定端口优先（显式指定才用，不写死默认）
-  if ($ConfiguredPort -gt 0) { return $ConfiguredPort }
-  # 2) 读 DSH 真实配置 .store.dat
+function Get-DshProcessSnapshot {
+  # GUI + DSH node 一次取齐，端口探测 / 运行判定 / 状态查询共用，避免同一轮重复扫进程。
+  $gui = @()
+  $node = @()
+  try {
+    $foundGui = Get-Process -Name "deepseek-harness-desktop" -ErrorAction SilentlyContinue
+    if ($foundGui) { $gui = @($foundGui) }
+  } catch {}
+  try {
+    $foundNode = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -like "*deepseek-harness*" }
+    if ($foundNode) { $node = @($foundNode) }
+  } catch {}
+  $guiPids = @($gui | ForEach-Object { $_.Id })
+  $nodePids = @($node | ForEach-Object { $_.ProcessId })
+  $portNodePids = @($node | Where-Object { $_.CommandLine -like "*--port*" } | ForEach-Object { $_.ProcessId })
+  return @{
+    Gui = $gui
+    Node = $node
+    GuiPids = $guiPids
+    NodePids = $nodePids
+    PortNodePids = $portNodePids
+    Running = (($guiPids.Count + $nodePids.Count) -gt 0)
+  }
+}
+
+function Test-DshProcessRunning {
+  param($Snapshot = $null)
+  if ($null -eq $Snapshot) { $Snapshot = Get-DshProcessSnapshot }
+  return [bool]$Snapshot.Running
+}
+
+function Get-DshPortInfo {
+  param(
+    [int]$ConfiguredPort = 0,
+    $Snapshot = $null
+  )
+  # 一次探测同时给出 Port 与 Source，避免 Get-DshPort / Get-DshPortSource 各扫一遍进程。
+  # 端口优先级保持不变：config -> .store.dat -> 进程监听 -> netstat -> 3081/3080 -> 3081。
+  if ($ConfiguredPort -gt 0) {
+    return @{ Port = $ConfiguredPort; Source = "config.toml:$ConfiguredPort" }
+  }
+
   $store = Join-Path $env:APPDATA "io.github.hairyf.deepseek-harness-desktop\.store.dat"
   if (Test-Path -LiteralPath $store) {
     try {
       $j = Get-Content -LiteralPath $store -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
       $p = $j.setting.port
-      # 兼容 Int64 / Int32 / string（JSON 数字可能是 Long）
       if ($null -ne $p -and "$p" -match "^\d+$") {
         $pi = [int]"$p"
-        if ($pi -gt 0 -and $pi -lt 65535) { return $pi }
+        if ($pi -gt 0 -and $pi -lt 65535) {
+          return @{ Port = $pi; Source = ".store.dat:$pi" }
+        }
       }
     } catch {}
   }
-  # 3) 动态探测：查找 deepseek-harness-desktop 或其 node 后端实际监听的端口（完全不写死）
+
+  if ($null -eq $Snapshot) { $Snapshot = Get-DshProcessSnapshot }
+  $tcpPids = @($Snapshot.GuiPids + $Snapshot.PortNodePids)
+  $allPids = @($Snapshot.GuiPids + $Snapshot.NodePids)
+
   try {
-    $probePids = @()
-    $dshProcs = Get-Process -Name "deepseek-harness-desktop" -ErrorAction SilentlyContinue
-    if ($dshProcs) { $probePids += $dshProcs.Id }
-    # 同时探测 DSH 的 node 后端 (deepseek-harness 下的 node.exe --host 127.0.0.1 --port XXXX)
-    try {
-      $nodeProcs = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*deepseek-harness*" -and $_.CommandLine -like "*--port*" }
-      if ($nodeProcs) { $probePids += $nodeProcs.ProcessId }
-    } catch {}
-    if ($probePids.Count -gt 0) {
-      $conns = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $probePids -contains $_.OwningProcess }
-      # 优先 127.0.0.1，其次 0.0.0.0，最后任意
+    if ($tcpPids.Count -gt 0) {
+      $conns = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $tcpPids -contains $_.OwningProcess }
       $local = $conns | Where-Object { $_.LocalAddress -eq "127.0.0.1" } | Sort-Object LocalPort | Select-Object -First 1
-      if ($local) { return [int]$local.LocalPort }
+      if ($local) {
+        return @{ Port = [int]$local.LocalPort; Source = "process:$($local.LocalPort) (pid $($local.OwningProcess))" }
+      }
       $any = $conns | Sort-Object LocalPort | Select-Object -First 1
-      if ($any) { return [int]$any.LocalPort }
+      if ($any) {
+        return @{ Port = [int]$any.LocalPort; Source = "process:$($any.LocalPort) (pid $($any.OwningProcess))" }
+      }
     }
   } catch {}
-  # 4) netstat 兜底（无 Get-NetTCPConnection 权限时）
+
   try {
     $out = netstat -ano 2>$null | Out-String
-    # 找 DSH / node pid 对应的 LISTENING 行
-    $probePids = @()
-    $dshPids = (Get-Process -Name "deepseek-harness-desktop" -ErrorAction SilentlyContinue).Id
-    if ($dshPids) { $probePids += @($dshPids) }
-    try {
-      $nodePids = (Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*deepseek-harness*" }).ProcessId
-      if ($nodePids) { $probePids += @($nodePids) }
-    } catch {}
-    foreach ($pId in $probePids) {
-      if ($out -match "127\.0\.0\.1:(\d+)\s+.*LISTENING\s+$pId") { return [int]$matches[1] }
-      if ($out -match "0\.0\.0\.0:(\d+)\s+.*LISTENING\s+$pId") { return [int]$matches[1] }
+    foreach ($pId in $allPids) {
+      if ($out -match "127\.0\.0\.1:(\d+)\s+.*LISTENING\s+$pId") {
+        $found = [int]$matches[1]
+        return @{ Port = $found; Source = "netstat:$found (pid $pId)" }
+      }
+      if ($out -match "0\.0\.0\.0:(\d+)\s+.*LISTENING\s+$pId") {
+        $found = [int]$matches[1]
+        return @{ Port = $found; Source = "netstat:$found (pid $pId)" }
+      }
     }
-    # 最后再试常见端口兜底（仅当上面都失败）- 直接探测 3081/3080 是否被监听
     foreach ($p in @(3081, 3080)) {
-      if ($out -match ":$p\s+.*LISTENING") { return $p }
+      if ($out -match ":$p\s+.*LISTENING") {
+        return @{ Port = $p; Source = "netstat:$p" }
+      }
     }
   } catch {}
-  # 5) Get-NetTCPConnection 全局兜底：直接查 3081/3080 谁在监听（不限制归属进程）
+
   try {
     foreach ($p in @(3081, 3080)) {
       $c = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-      if ($c) { return [int]$c.LocalPort }
+      if ($c) {
+        return @{ Port = [int]$c.LocalPort; Source = "netstat:$p (pid $($c.OwningProcess))" }
+      }
     }
   } catch {}
-  # 6) 实在拿不到才回退默认值（避免空值导致 serve 失败）
-  return 3081
+
+  return @{ Port = 3081; Source = "fallback:3081" }
+}
+
+function Get-DshPort {
+  param([int]$ConfiguredPort = 0)
+  $info = Get-DshPortInfo -ConfiguredPort $ConfiguredPort
+  return [int]$info.Port
 }
 
 function Get-DshPortSource {
   param([int]$ConfiguredPort = 0)
-  if ($ConfiguredPort -gt 0) { return "config.toml:$ConfiguredPort" }
-  $store = Join-Path $env:APPDATA "io.github.hairyf.deepseek-harness-desktop\.store.dat"
-  if (Test-Path -LiteralPath $store) {
-    try {
-      $j = Get-Content -LiteralPath $store -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
-      $p = $j.setting.port
-      if ($null -ne $p -and "$p" -match "^\d+$" -and [int]"$p" -gt 0) { return ".store.dat:$p" }
-    } catch {}
-  }
-  try {
-    $probePids = @()
-    $dshProcs = Get-Process -Name "deepseek-harness-desktop" -ErrorAction SilentlyContinue
-    if ($dshProcs) { $probePids += $dshProcs.Id }
-    try {
-      $nodeProcs = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*deepseek-harness*" }
-      if ($nodeProcs) { $probePids += $nodeProcs.ProcessId }
-    } catch {}
-    if ($probePids.Count -gt 0) {
-      $c = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $probePids -contains $_.OwningProcess } | Where-Object { $_.LocalAddress -eq "127.0.0.1" } | Select-Object -First 1
-      if ($c) { return "process:$($c.LocalPort) (pid $($c.OwningProcess))" }
-      $any = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $probePids -contains $_.OwningProcess } | Select-Object -First 1
-      if ($any) { return "process:$($any.LocalPort) (pid $($any.OwningProcess))" }
-    }
-    # 全局兜底：看 3081 是否有人监听
-    $fallback = Get-NetTCPConnection -LocalPort 3081 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($fallback) { return "netstat:3081 (pid $($fallback.OwningProcess))" }
-  } catch {}
-  return "fallback:3081"
+  $info = Get-DshPortInfo -ConfiguredPort $ConfiguredPort
+  return [string]$info.Source
 }
 
 function Test-IsAdmin {
@@ -335,6 +354,52 @@ function Invoke-DshSchtasks {
   return Invoke-DshElevatedProcess -FilePath $schtasks -CommandName "schtasks" -ArgumentList $SchArgs
 }
 
+function Get-DshWatcherTaskInfo {
+  # 优先 ScheduledTasks cmdlet：不依赖 schtasks 的 OEM 代码页，避免中文系统乱码。
+  $taskName = 'DSH-Remote-Watcher'
+  $info = @{
+    Exists = $false
+    Status = $null
+    LastRun = $null
+    TaskToRun = $null
+    Raw = ''
+  }
+
+  try {
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    $info.Exists = $true
+    $info.Status = [string]$task.State
+    try {
+      $taskInfo = Get-ScheduledTaskInfo -InputObject $task -ErrorAction Stop
+      if ($taskInfo.LastRunTime -and $taskInfo.LastRunTime -gt [datetime]'2000-01-01') {
+        $info.LastRun = $taskInfo.LastRunTime.ToString('yyyy-MM-dd HH:mm:ss')
+      }
+    } catch {}
+    $action = @($task.Actions) | Select-Object -First 1
+    if ($action) {
+      $info.TaskToRun = (([string]$action.Execute + ' ' + [string]$action.Arguments).Trim())
+    }
+    return $info
+  } catch {}
+
+  try {
+    $raw = (Invoke-DshSchtasks -SchArgs @('/Query', '/TN', $taskName, '/FO', 'LIST', '/V')).Output
+    $info.Raw = [string]$raw
+    if ($raw -and $raw -match [regex]::Escape($taskName) -and $raw -notmatch 'ERROR:') {
+      $info.Exists = $true
+      $info.Status = 'exists'
+      # schtasks 在中文系统上字段名常被 UTF-8 误读；日期和 powershell 命令行仍是 ASCII。
+      if ($raw -match '(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})') {
+        $info.LastRun = $matches[1]
+      }
+      if ($raw -match 'powershell\.exe[^\r\n]+Watch-DshRemote\.ps1') {
+        $info.TaskToRun = $matches[0].Trim()
+      }
+    }
+  } catch {}
+  return $info
+}
+
 function Invoke-TailscaleCommand {
   param([string]$Arguments)
   $tailscale = Resolve-DshNativeCommand "tailscale"
@@ -356,8 +421,16 @@ function Get-TailscaleServeStatus {
 }
 
 function Test-TailscaleServeOn {
-  param([int]$Port, [int]$HttpsPort = 443)
-  $status = Get-TailscaleServeStatus
+  param(
+    [int]$Port,
+    [int]$HttpsPort = 443,
+    [AllowNull()]
+    [object]$ServeStatus = $null
+  )
+  # $HttpsPort 留给调用方记录/日志；当前 status 文本用 :$Port + proxy 判定。
+  $unusedHttpsPort = $HttpsPort
+  [void]$unusedHttpsPort
+  $status = if ($PSBoundParameters.ContainsKey('ServeStatus')) { [string]$ServeStatus } else { Get-TailscaleServeStatus }
   if (-not $status -or $status -eq "__ACCESS_DENIED__") { return $false }
   return ($status -match [regex]::Escape(":$Port") -and $status -match "proxy")
 }

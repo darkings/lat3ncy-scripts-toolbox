@@ -11,6 +11,21 @@
 ; - 退出大写的那一次按住，不把同时按下的字母当成工具组合。
 ; - 组合键松开后短暂锁定输入法切换，避免连带再点一次 Caps。
 ; - CapsLock 作为 Leader 时，由路由层先调用 MarkCapsChordUsed()。
+; - 短按记住最近一次「中/英」。未开「每个窗口不同输入法」时，
+;   切窗口会把全局微软拼音打回中文；前台变化后按记忆静默恢复。
+;
+; 可改开关（只改 class 里这 5 个 static，改完重载 main.ahk）：
+;   PersistImeAcrossWindows  false = 关闭跨窗口恢复，只保留短按切换
+;   ImeWatchIntervalMs       前台窗口轮询间隔
+;   ImeRestoreDelayMs        切窗口后第一次恢复前等待（IME 还没就绪就加大）
+;   ImeRestorePollMs         恢复失败后的重试间隔
+;   ImeRestoreAttempts       最多尝试次数
+;
+; 预设（整段替换那 5 行）：
+;   关闭     false / 任意 / 任意 / 任意 / 任意
+;   默认     true / 100 / 80 / 50 / 4
+;   更稳     true / 120 / 150 / 80 / 6   ← 当前
+;   更激进   true / 80 / 40 / 30 / 3
 ;
 ; 本文件只实现功能，不读取 Shortcuts，也不注册热键。
 ; ============================================================
@@ -21,6 +36,12 @@ class CapsLockIme {
     static ChordImeLockoutMs := 180
     static MessageTimeout := 80
     static RestoreImeAfterCaps := true
+    ; --- 跨窗口恢复：改这里 ---
+    static PersistImeAcrossWindows := true
+    static ImeWatchIntervalMs := 120
+    static ImeRestoreDelayMs := 150
+    static ImeRestorePollMs := 80
+    static ImeRestoreAttempts := 6
 
     static _pressed := false
     static _chordUsed := false
@@ -30,6 +51,10 @@ class CapsLockIme {
     static _imeLockoutUntil := 0
     static _lastReleaseAction := ""
     static _imeBeforeCaps := "unknown"
+    static RememberedImeState := "unknown"
+    static _lastForegroundHwnd := 0
+    static _watcherStarted := false
+    static _restoreAttemptsLeft := 0
 
     static WM_IME_CONTROL := 0x0283
     static IMC_GETOPENSTATUS := 0x0005
@@ -160,6 +185,7 @@ class CapsLockIme {
         ) ? this._imeBeforeCaps : "english"
 
         this.SetImeState(desiredState)
+        this.RememberImeState(desiredState)
         this._imeBeforeCaps := "unknown"
         this._longPressTriggered := false
     }
@@ -196,14 +222,103 @@ class CapsLockIme {
         else
             Notify.Error("!", "输入法恢复失败")
 
+        if restored
+            this.RememberImeState(desiredState)
         this._imeBeforeCaps := "unknown"
     }
 
     static ToggleIme() {
-        ; 保留 Microsoft 拼音最自然的 Shift 中英文切换手感。
-        Send "{Shift}"
-        Sleep 40
-        return this.GetCurrentImeState()
+        ; 先读当前中/英，再设成相反状态。
+        ; 不能只靠模拟 Shift：Win11 微软拼音经常吃掉 SendInput 的 Shift，
+        ; 而且 40ms 后读到的仍是旧状态，会把英文记成中文，切窗口后又被打回去。
+        current := this.GetCurrentImeState()
+        if (current = "english")
+            desired := "chinese"
+        else if (current = "chinese")
+            desired := "english"
+        else if (this.RememberedImeState = "english")
+            desired := "chinese"
+        else
+            desired := "english"
+
+        if this.SetImeState(desired) {
+            this.RememberImeState(desired)
+            return desired
+        }
+
+        newState := this.GetCurrentImeState()
+        this.RememberImeState(newState)
+        return newState
+    }
+
+    ; 只记住明确的中/英。unknown 不能覆盖，避免误把下次恢复打反。
+    static RememberImeState(state) {
+        if (state != "chinese" && state != "english")
+            return
+        this.RememberedImeState := state
+        this.EnsureWindowWatcher()
+    }
+
+    static EnsureWindowWatcher() {
+        if this._watcherStarted || !this.PersistImeAcrossWindows
+            return
+        ; 只在生产入口 main.ahk 挂监视。契约测试、独立加载 stub
+        ; 的 A_ScriptName 都不是 main.ahk；写死调用 IsToolboxTestMode()
+        ; 会在独立加载时被当成未赋值变量并弹窗，把 runner 卡死。
+        if (A_ScriptName != "main.ahk")
+            return
+        for arg in A_Args {
+            if (arg = "--test")
+                return
+        }
+
+        this._watcherStarted := true
+        this._lastForegroundHwnd := WinExist("A")
+        SetTimer this.WindowWatchCallback, this.ImeWatchIntervalMs
+    }
+
+    static WatchForeground(*) {
+        if !this.PersistImeAcrossWindows
+            return
+        if this.ShouldSkipImeRestore()
+            return
+        if (this.RememberedImeState != "chinese" && this.RememberedImeState != "english")
+            return
+
+        hwnd := WinExist("A")
+        if !hwnd || hwnd = this._lastForegroundHwnd
+            return
+
+        this._lastForegroundHwnd := hwnd
+        this._restoreAttemptsLeft := this.ImeRestoreAttempts
+        SetTimer this.RestoreCallback, -this.ImeRestoreDelayMs
+    }
+
+    static RestoreRememberedIme(*) {
+        if !this.PersistImeAcrossWindows
+            return
+        if this.ShouldSkipImeRestore()
+            return
+
+        desired := this.RememberedImeState
+        if (desired != "chinese" && desired != "english")
+            return
+        if (this.GetCurrentImeState() = desired)
+            return
+
+        ; 静默恢复，不再弹「中/A」。用户已经用 Caps 选过一次。
+        this.SetImeState(desired)
+        if (this.GetCurrentImeState() = desired)
+            return
+        if (this._restoreAttemptsLeft <= 1)
+            return
+
+        this._restoreAttemptsLeft -= 1
+        SetTimer this.RestoreCallback, -this.ImeRestorePollMs
+    }
+
+    static ShouldSkipImeRestore() {
+        return this._pressed || this._exitingCaps || GetKeyState("CapsLock", "T")
     }
 
     ; 返回 "chinese"、"english" 或 "unknown"。
@@ -250,11 +365,11 @@ class CapsLockIme {
                 return true
         }
 
-        ; 仅在已知当前状态与目标相反时发送 Shift，避免 unknown 时反向切换。
+        ; 仅在已知当前状态与目标相反时发送左 Shift。
+        ; 必须用 SendEvent：微软拼音常常忽略 SendInput 的 Shift。
         currentState := this.GetCurrentImeState(hwnd)
         if (currentState != "unknown" && currentState != desiredState) {
-            Send "{Shift}"
-            Sleep 30
+            this.SendImeToggleShift()
             return this.GetCurrentImeState(hwnd) = desiredState
         }
 
@@ -303,6 +418,14 @@ class CapsLockIme {
         }
     }
 
+    ; 左 Shift 点按。SendEvent 才能进到 IME 消息队列。
+    static SendImeToggleShift() {
+        SendEvent "{LShift down}"
+        Sleep 30
+        SendEvent "{LShift up}"
+        Sleep 40
+    }
+
     static SetImeByImm32(hwnd, openIme) {
         inputContext := 0
         try {
@@ -313,6 +436,15 @@ class CapsLockIme {
             )
             if !inputContext
                 return false
+
+            ; Win11 微软拼音的中/英首先是 IME 开/关，其次才是 native conversion bit。
+            ; 只改 conversion、不 ImmSetOpenStatus，英文经常切不进去。
+            DllCall(
+                "Imm32\ImmSetOpenStatus",
+                "Ptr", inputContext,
+                "Int", openIme ? 1 : 0,
+                "Int"
+            )
 
             convMode := 0
             sentMode := 0
@@ -400,6 +532,20 @@ class CapsLockIme {
             if !imeHwnd
                 return false
 
+            ; IMC_SETOPENSTATUS：关 IME = 英文，开 IME = 中文。
+            openResult := 0
+            opened := DllCall(
+                "User32\SendMessageTimeoutW",
+                "Ptr", imeHwnd,
+                "UInt", this.WM_IME_CONTROL,
+                "Ptr", this.IMC_SETOPENSTATUS,
+                "Ptr", openIme ? 1 : 0,
+                "UInt", this.SMTO_ABORTIFHUNG,
+                "UInt", this.MessageTimeout,
+                "UPtr*", &openResult,
+                "Ptr"
+            )
+
             convMode := 0
             succeeded := DllCall(
                 "User32\SendMessageTimeoutW",
@@ -413,7 +559,7 @@ class CapsLockIme {
                 "Ptr"
             )
             if !succeeded
-                return false
+                return !!opened
 
             newConvMode := openIme ? (convMode | 1) : (convMode & ~1)
             result := 0
@@ -428,7 +574,7 @@ class CapsLockIme {
                 "UPtr*", &result,
                 "Ptr"
             )
-            return !!succeeded
+            return !!opened || !!succeeded
         } catch {
             return false
         }
@@ -506,4 +652,6 @@ MarkCapsChordUsed(*) {
 CapsLockIme.HotkeyCallback := ObjBindMethod(CapsLockIme, "Handle")
 CapsLockIme.KeyUpCallback := ObjBindMethod(CapsLockIme, "HandleKeyUp")
 CapsLockIme.LongPressCallback := ObjBindMethod(CapsLockIme, "HandleLongPress")
+CapsLockIme.WindowWatchCallback := ObjBindMethod(CapsLockIme, "WatchForeground")
+CapsLockIme.RestoreCallback := ObjBindMethod(CapsLockIme, "RestoreRememberedIme")
 

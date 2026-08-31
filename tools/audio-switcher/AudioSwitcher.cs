@@ -112,6 +112,8 @@ namespace Lat3ncyToolbox
         const int DeviceStateMaskAll = 0x0000000F;
         static int ConnectWaitMs = 12000;
         static int ConnectPollMs = 200;
+        // Enable-PnpDevice 常 8s+ 超时，默认关闭；需要时在 config.toml 打开。
+        static bool PnpFallbackEnabled = false;
         static bool DebugMode = false;
         static string DebugLog { get { return System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lat3ncy-audio-debug.log"); } }
         static void LogDebug(string msg) {
@@ -225,6 +227,8 @@ namespace Lat3ncyToolbox
                 if (w.HasValue) ConnectWaitMs = Math.Max(1000, Math.Min(30000, w.Value));
                 int? p = ParseInt(text, "poll_ms");
                 if (p.HasValue) ConnectPollMs = Math.Max(50, Math.Min(1000, p.Value));
+                bool? pnp = ParseBool(text, "pnp_fallback");
+                if (pnp.HasValue) PnpFallbackEnabled = pnp.Value;
             } catch {}
         }
 
@@ -249,6 +253,19 @@ namespace Lat3ncyToolbox
                 var m = System.Text.RegularExpressions.Regex.Match(text, key + "\\s*=\\s*(\\d+)");
                 if (!m.Success) return null;
                 int v; if (int.TryParse(m.Groups[1].Value, out v)) return v;
+            } catch {}
+            return null;
+        }
+
+        static bool? ParseBool(string text, string key)
+        {
+            try {
+                var m = System.Text.RegularExpressions.Regex.Match(
+                    text,
+                    key + "\\s*=\\s*(true|false)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (!m.Success) return null;
+                return string.Equals(m.Groups[1].Value, "true", StringComparison.OrdinalIgnoreCase);
             } catch {}
             return null;
         }
@@ -409,6 +426,15 @@ namespace Lat3ncyToolbox
             public string Name;
             public bool IsDefault;
             public int State;
+        }
+
+        // Enable/WSA/PNP 的结果与蓝牙层状态分开，避免「经典蓝牙已连」被当成立体声已就绪。
+        public class HeadsetConnectAttempt
+        {
+            public DeviceInfo ActiveHeadset;
+            public bool LinkActionSucceeded;
+            public bool BluetoothConnected;
+            public bool Remembered;
         }
 
         static bool ContainsIgnore(string text, string needle)
@@ -643,24 +669,12 @@ namespace Lat3ncyToolbox
                             info = fresh;
 
                         LogInstalledServicesForDevice(radio, info);
-                        // 先尝试禁用再启用，模拟面板“断开手机→连本机”的握手，87 视为无效参数不算成功
+                        // 只 Enable A2DP / Advanced Audio，绝不 Disable，避免把已连耳机踢掉。
+                        // 0=已改状态；87=参数无效/已是该状态，不能当成“刚建链成功”。
                         Guid svcA = A2dpSinkUuid;
                         uint errA = BluetoothSetServiceState(radio, ref info, ref svcA, BluetoothServiceEnable);
-                        // 若已连手机，先 Disable 再 Enable 更易抢占
-                        if (errA != 0) {
-                            uint errDis = BluetoothSetServiceState(radio, ref info, ref svcA, 0); // Disable=0
-                            LogDebug("   BluetoothSetServiceState A2DP Disable err=" + errDis);
-                            System.Threading.Thread.Sleep(400);
-                            errA = BluetoothSetServiceState(radio, ref info, ref svcA, BluetoothServiceEnable);
-                        }
                         Guid svcB = AdvancedAudioUuid;
                         uint errB = BluetoothSetServiceState(radio, ref info, ref svcB, BluetoothServiceEnable);
-                        if (errB != 0) {
-                            uint errDis2 = BluetoothSetServiceState(radio, ref info, ref svcB, 0);
-                            LogDebug("   BluetoothSetServiceState Adv Disable err=" + errDis2);
-                            System.Threading.Thread.Sleep(200);
-                            errB = BluetoothSetServiceState(radio, ref info, ref svcB, BluetoothServiceEnable);
-                        }
                         LogDebug("  BluetoothSetServiceState A2DP err=" + errA + " Adv err=" + errB + " for " + nameCheck + " addr=" + FormatBtAddress(info.Address));
                         if (errA == 0 || errB == 0)
                             enabled = true;
@@ -834,6 +848,73 @@ namespace Lat3ncyToolbox
                 (address >> 16) & 0xFF,
                 (address >> 8) & 0xFF,
                 address & 0xFF);
+        }
+
+        // 已配对耳机当前是否已在蓝牙层连接（HFP / A2DP 都算）。
+        // 只用来区分「盒子在但没立体声」和「未取出」，不再作为空等 ACTIVE 的理由。
+        static bool PreferredHeadsetBluetoothConnected()
+        {
+            try {
+                var radioParams = new BluetoothFindRadioParams();
+                radioParams.dwSize = Marshal.SizeOf(typeof(BluetoothFindRadioParams));
+                IntPtr radio;
+                IntPtr findRadio = BluetoothFindFirstRadio(ref radioParams, out radio);
+                if (findRadio == IntPtr.Zero || radio == IntPtr.Zero)
+                    return false;
+
+                try {
+                    do {
+                        var search = new BluetoothDeviceSearchParams();
+                        search.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceSearchParams));
+                        search.fReturnAuthenticated = 1;
+                        search.fReturnRemembered = 1;
+                        search.fReturnUnknown = 0;
+                        search.fReturnConnected = 1;
+                        search.fIssueInquiry = 0;
+                        search.cTimeoutMultiplier = 0;
+                        search.hRadio = radio;
+
+                        var info = new BluetoothDeviceInfo();
+                        info.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                        IntPtr findDevice = BluetoothFindFirstDevice(ref search, ref info);
+                        if (findDevice != IntPtr.Zero) {
+                            try {
+                                do {
+                                    if (info.Address == 0) {
+                                        info = new BluetoothDeviceInfo();
+                                        info.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                                        continue;
+                                    }
+                                    string nameCheck = info.szName;
+                                    var fresh = new BluetoothDeviceInfo();
+                                    fresh.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                                    fresh.Address = info.Address;
+                                    uint q = BluetoothGetDeviceInfo(radio, ref fresh);
+                                    if (q == 0 && !string.IsNullOrEmpty(fresh.szName))
+                                        nameCheck = fresh.szName;
+                                    int connected = (q == 0) ? fresh.fConnected : info.fConnected;
+                                    if (IsPreferredHeadset(nameCheck) && connected != 0) {
+                                        LogDebug(" PreferredHeadsetBluetoothConnected name=" + nameCheck);
+                                        return true;
+                                    }
+                                    info = new BluetoothDeviceInfo();
+                                    info.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                                } while (BluetoothFindNextDevice(findDevice, ref info));
+                            } finally {
+                                BluetoothFindDeviceClose(findDevice);
+                            }
+                        }
+                        CloseHandle(radio);
+                        radio = IntPtr.Zero;
+                    } while (BluetoothFindNextRadio(findRadio, out radio) && radio != IntPtr.Zero);
+                } finally {
+                    if (radio != IntPtr.Zero)
+                        CloseHandle(radio);
+                    BluetoothFindRadioClose(findRadio);
+                }
+            } catch {
+            }
+            return false;
         }
 
         static bool TryFindAirPodsAddress(out ulong address)
@@ -1035,28 +1116,73 @@ namespace Lat3ncyToolbox
 
         // 未连接时只做安全尝试：启用已存在的 A2DP 节点，并注册音频配置文件。
         // 不对 UNPLUGGED 终点 SetDefault（会 0xE000020B，也不会建链）。
-        static bool ConnectPreferredHeadset()
+        static HeadsetConnectAttempt ConnectPreferredHeadset()
         {
             LogDebug("ConnectPreferredHeadset start Enable+WSASet");
             bool e1 = EnableAirPodsA2dp();
             LogDebug(" EnableAirPodsA2dp=" + e1);
             bool e2 = ConnectAirPodsAudioProfile();
             LogDebug(" ConnectAirPodsAudioProfile=" + e2);
-            LogDebug(" ConnectPreferredHeadset try Pnp fallback");
-            try { EnableViaPnpFallback(); } catch {}
+            bool e3 = false;
+            if (PnpFallbackEnabled) {
+                LogDebug(" ConnectPreferredHeadset try Pnp fallback");
+                try { e3 = EnableViaPnpFallback(); } catch {}
+            } else {
+                LogDebug(" ConnectPreferredHeadset skip Pnp fallback");
+            }
+
+            var attempt = new HeadsetConnectAttempt();
+            // err=87 / WSA 10022 都不是成功；只有 API 返回 0 才算真正改了链路。
+            attempt.LinkActionSucceeded = e1 || e2 || e3;
 
             string ignored;
             List<DeviceInfo> candidates = GetDevices(DeviceStateMaskAll, out ignored)
                 .FindAll(d => IsPreferredHeadset(d.Name));
             AddRememberedHeadsetIds(candidates);
-            if (candidates.Count == 0)
-                return false;
+            attempt.Remembered = candidates.Count > 0;
 
             for (int i = 0; i < candidates.Count; i++) {
-                if ((candidates[i].State & DeviceStateActive) != 0)
-                    return true;
+                if ((candidates[i].State & DeviceStateActive) != 0) {
+                    attempt.ActiveHeadset = candidates[i];
+                    LogDebug(" ConnectPreferredHeadset already ACTIVE " + candidates[i].Name);
+                    return attempt;
+                }
             }
-            return true;
+
+            attempt.BluetoothConnected = PreferredHeadsetBluetoothConnected();
+            LogDebug(" PreferredHeadsetBluetoothConnected=" + attempt.BluetoothConnected
+                + " link=" + attempt.LinkActionSucceeded
+                + " remembered=" + attempt.Remembered);
+            return attempt;
+        }
+
+        static int FinishHeadsetConnect(HeadsetConnectAttempt attempt, int activeCount)
+        {
+            if (attempt.ActiveHeadset != null)
+                return SwitchToDevice(attempt.ActiveHeadset, "音频切换失败");
+
+            // 只有 Enable/WSA/PNP 真正成功才等 ACTIVE；蓝牙已连但没立体声立即失败。
+            if (attempt.LinkActionSucceeded) {
+                DeviceInfo connected = WaitForActiveHeadset();
+                if (connected != null)
+                    return SwitchToDevice(connected, "音频切换失败");
+                Console.WriteLine("ERROR|连接超时");
+                return 1;
+            }
+            if (attempt.BluetoothConnected) {
+                Console.WriteLine("ERROR|蓝牙已连但立体声未就绪");
+                return 1;
+            }
+            if (activeCount == 0 && !attempt.Remembered) {
+                Console.WriteLine("NO_DEVICE|无可用音频播放设备");
+                return 1;
+            }
+            if (attempt.Remembered) {
+                Console.WriteLine("ERROR|耳机未取出或不在附近");
+                return 1;
+            }
+            Console.WriteLine("ERROR|耳机未就绪");
+            return 1;
         }
 
         static int SwitchToDevice(DeviceInfo device, string failText)
@@ -1067,7 +1193,7 @@ namespace Lat3ncyToolbox
             }
             // 只对当前 ACTIVE 终点设默认。未建链的 MMDevice ID 会触发 0xE000020B。
             if ((device.State & DeviceStateActive) == 0) {
-                Console.WriteLine("ERROR|耳机未就绪");
+                Console.WriteLine("ERROR|耳机未激活");
                 return 1;
             }
             if (SetDefault(device.Id)) {
@@ -1093,15 +1219,7 @@ namespace Lat3ncyToolbox
                 return 0;
             }
             if (headset != null) return SwitchToDevice(headset, "音频切换失败");
-            ConnectPreferredHeadset();
-            DeviceInfo connected = WaitForActiveHeadset();
-            if (connected != null) return SwitchToDevice(connected, "音频切换失败");
-            if (active.Count == 0 && !HasRememberedHeadset()) {
-                Console.WriteLine("NO_DEVICE|无可用音频播放设备");
-                return 1;
-            }
-            Console.WriteLine("ERROR|耳机未就绪");
-            return 1;
+            return FinishHeadsetConnect(ConnectPreferredHeadset(), active.Count);
         }
 
         // Caps+D：G27Q2 <-> AirPods 立体声。只改默认输出。
@@ -1130,19 +1248,7 @@ namespace Lat3ncyToolbox
             if (headset != null)
                 return SwitchToDevice(headset, "音频切换失败");
 
-            // 耳机未激活：尝试公开连接路径，等立体声变成 ACTIVE。
-            ConnectPreferredHeadset();
-            DeviceInfo connected = WaitForActiveHeadset();
-            if (connected != null)
-                return SwitchToDevice(connected, "音频切换失败");
-
-            // 当前机器没有任何 ACTIVE 终点，也没有记住的 AirPods：才报无设备。
-            if (active.Count == 0 && !HasRememberedHeadset()) {
-                Console.WriteLine("NO_DEVICE|无可用音频播放设备");
-                return 1;
-            }
-            Console.WriteLine("ERROR|耳机未就绪");
-            return 1;
+            return FinishHeadsetConnect(ConnectPreferredHeadset(), active.Count);
         }
 
         public static int Main(string[] args)
@@ -1207,11 +1313,11 @@ namespace Lat3ncyToolbox
                     return 1;
                 }
 
-                Console.WriteLine("Usage: audio-switcher.exe [--toggle | --ensure-headset | --list | --get | --set <name/id>]");
+                Console.WriteLine("Usage: audio-switcher.exe [--toggle | --ensure-headset | --list | --get | --set <name/id> | --debug-dump]");
                 return 0;
             } catch (Exception ex) {
                 if (IsNoSuchDevinst(ex)) {
-                    Console.WriteLine("ERROR|耳机未就绪");
+                    Console.WriteLine("ERROR|设备节点不存在");
                     return 1;
                 }
                 Console.WriteLine("ERROR|音频切换失败");

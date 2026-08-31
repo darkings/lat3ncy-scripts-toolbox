@@ -3,7 +3,8 @@
 
 class SpeakSelectedText {
     static TtsPid := 0
-    static InputFilePath := A_Temp "\lat3ncy-tts-input.txt"
+    static LastInputFile := ""
+    static WatchBound := ""
 
     static LogPath() {
         SplitPath A_LineFile, , &featuresDir
@@ -28,11 +29,7 @@ class SpeakSelectedText {
     }
 
     static ResolvePython() {
-        if FileExist("D:\Applications\Scoop\apps\python312\current\pythonw.exe")
-            return "D:\Applications\Scoop\apps\python312\current\pythonw.exe"
-        if FileExist(A_AppData "\..\Local\Programs\Python\Python312\pythonw.exe")
-            return A_AppData "\..\Local\Programs\Python\Python312\pythonw.exe"
-        return "pythonw.exe"
+        return ToolboxPython.ResolveW()
     }
 
     static ResolveScript() {
@@ -42,13 +39,40 @@ class SpeakSelectedText {
         return repoDir "\tools\tts\tts_player.py"
     }
 
+    static NewInputFile() {
+        return A_Temp "\lat3ncy-tts-in-" A_TickCount "-" Random(1000, 9999) ".txt"
+    }
+
+    static ClearPidWatch() {
+        if (this.WatchBound != "") {
+            try SetTimer(this.WatchBound, 0)
+            this.WatchBound := ""
+        }
+    }
+
+    static WatchPid(*) {
+        if (this.TtsPid && ProcessExist(this.TtsPid))
+            return
+        this.TtsPid := 0
+        if (this.LastInputFile != "") {
+            try FileDelete this.LastInputFile
+            this.LastInputFile := ""
+        }
+        this.ClearPidWatch()
+    }
+
     static StopCurrent() {
         DllCall("winmm\mciSendStringW", "Str", "close all", "Ptr", 0, "UInt", 0, "Ptr", 0)
         DllCall("winmm\PlaySoundW", "Ptr", 0, "Ptr", 0, "UInt", 0)
+        this.ClearPidWatch()
         if (this.TtsPid && ProcessExist(this.TtsPid)) {
             try ProcessClose(this.TtsPid)
             this.Log("打断前次任务 PID: " this.TtsPid)
-            this.TtsPid := 0
+        }
+        this.TtsPid := 0
+        if (this.LastInputFile != "") {
+            try FileDelete this.LastInputFile
+            this.LastInputFile := ""
         }
     }
 
@@ -83,18 +107,17 @@ class SpeakSelectedText {
             this.Log("预热跳过：audio-switcher.exe 未找到")
             return
         }
-        temp := A_Temp "\lat3ncy-audio-ensure-" A_TickCount "-" Random(1000,9999) ".txt"
+        temp := A_Temp "\lat3ncy-audio-ensure-" A_TickCount "-" Random(1000, 9999) ".txt"
         try FileDelete A_Temp "\lat3ncy-audio-ensure.txt"
-        try FileDelete temp
         try {
+            try FileDelete temp
             try {
-                ProcessNoWindow.RunWait('"' exe '" --ensure-headset', temp)
+                ; 预热失败不阻塞朗读；超时略大于 C# 12s 等待，避免父进程先杀子进程。
+                ProcessNoWindow.RunWait('"' exe '" --ensure-headset', temp, 18000)
             } catch as runErr {
                 if InStr(runErr.Message, "无法创建输出文件") {
                     this.Log("预热耳机输出文件失败，fallback 直接执行: " runErr.Message)
-                    ProcessNoWindow.RunWait('"' exe '" --ensure-headset', "")
-                    outFallback := ""
-                    ; 无输出文件时不读结果，仅记录已执行
+                    ProcessNoWindow.RunWait('"' exe '" --ensure-headset', "", 18000)
                     this.Log("预热耳机: 已执行 fallback（无输出）")
                     return
                 }
@@ -108,15 +131,16 @@ class SpeakSelectedText {
                 this.Log("预热耳机: 无输出")
         } catch as err {
             this.Log("预热耳机异常: " err.Message)
+        } finally {
+            try FileDelete temp
         }
-        try FileDelete temp
     }
 
     static Speak(_hotkeyName := "", receiverProbe := unset) {
         if IsSet(receiverProbe)
             return receiverProbe.Call(this)
 
-        this.Log("=== 触发快捷键 Ctrl+Alt+S ===")
+        this.Log("=== 触发快捷键 Caps+S ===")
         savedClipboard := ClipboardAll()
         try {
             A_Clipboard := ""
@@ -146,22 +170,26 @@ class SpeakSelectedText {
                 this.EnsureHeadset()
             }
 
+            inputFile := this.NewInputFile()
             try {
-                if FileExist(this.InputFilePath)
-                    FileDelete this.InputFilePath
-                FileAppend raw, this.InputFilePath, "UTF-8"
+                try FileDelete inputFile
+                FileAppend raw, inputFile, "UTF-8"
 
                 pythonExe := this.ResolvePython()
                 scriptPath := this.ResolveScript()
-                cmd := '"' pythonExe '" "' scriptPath '" --input-file "' this.InputFilePath '"'
+                cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '"'
                 this.Log("执行命令: " cmd)
 
-                pid := 0
-                Run cmd, , "Hide", &pid
+                ; 非等待启动：CREATE_NO_WINDOW，不建 Job，返回 PID 给 WatchPid 清临时文件。
+                pid := ProcessNoWindow.Run(cmd)
                 this.TtsPid := pid
+                this.LastInputFile := inputFile
+                this.WatchBound := ObjBindMethod(this, "WatchPid")
+                SetTimer(this.WatchBound, 400)
                 this.Log("启动成功, PID: " pid)
             } catch as err {
                 this.Log("启动朗读异常: " err.Message)
+                try FileDelete inputFile
                 Notify.Error("×", "朗读失败")
             }
         } finally {

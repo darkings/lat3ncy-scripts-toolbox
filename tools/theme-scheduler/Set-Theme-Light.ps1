@@ -9,14 +9,8 @@ if ($config.general.switch_type -eq 'theme' -and $config.theme_settings.light_th
 }
 else
 {
-  if ($config.mode_settings.switch_apps)
-  {
-    Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name AppsUseLightTheme -Value 1
-  }
-  if ($config.mode_settings.switch_system)
-  {
-    Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name SystemUsesLightTheme -Value 1
-  }
+  # mode：写 Apps/System 注册表，再按 switch_system 决定是否重启 Explorer 刷新托盘
+  Set-WindowsColorMode -Mode 'light' -Config $config
 }
 
 if ($config.wallpaper.enabled -and $config.wallpaper.light_wallpaper)

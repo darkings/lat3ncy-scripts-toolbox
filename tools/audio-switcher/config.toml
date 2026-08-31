@@ -15,6 +15,11 @@ speaker_exclude = ["Virtual"]
 # 未激活时等待 AirPods 建链超时与轮询间隔（开盖到 ACTIVE 约 2-5s，12s 更稳）
 connect_wait_ms = 12000
 poll_ms = 200
+# Enable-PnpDevice 常 8s+ 超时且会提权，默认关闭；仅在 A2DP/WSA 都失败时再考虑打开
+pnp_fallback = false
+# 默认关闭。仅当本项为 true 且错误详情明确是权限问题时，AHK 才会 sudo 重试。
+# 普通 ERROR|耳机未就绪 不会自动提权。
+auto_elevate = false
 # 热键防抖（AHK 侧）
 debounce_ms = 700
 

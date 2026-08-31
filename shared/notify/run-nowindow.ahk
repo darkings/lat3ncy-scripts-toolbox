@@ -6,6 +6,7 @@
 ; 按需调用，不预热、不常驻。
 class ProcessNoWindow {
     static CREATE_NO_WINDOW := 0x08000000
+    static CREATE_SUSPENDED := 0x00000004
     static STARTF_USESHOWWINDOW := 0x00000001
     static STARTF_USESTDHANDLES := 0x00000100
     static GENERIC_WRITE := 0x40000000
@@ -15,11 +16,17 @@ class ProcessNoWindow {
     static FILE_ATTRIBUTE_NORMAL := 0x80
     static INFINITE := 0xFFFFFFFF
     static INVALID_HANDLE := -1
+    static WAIT_TIMEOUT := 258
+    static JobObjectExtendedLimitInformation := 9
+    static JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE := 0x2000
+    ; x64: 144；x86: Basic 对齐后 48 + IO_COUNTERS 48 + 4*SIZE_T 16 = 112。
+    static JobExtendedInfoSize := A_PtrSize = 8 ? 144 : 112
 
     ; command: 完整命令行，第一个 token 是可执行文件
-    ; wait: true 时等退出并返回退出码；false 时启动成功即返回 0
+    ; wait: true 时等退出并返回退出码；false 时启动成功即返回 PID
     ; stdoutFile: 非空则把 stdout/stderr 写到该文件（音频切换读取结果用）
-    static Run(command, wait := false, stdoutFile := "") {
+    ; timeoutMs: 仅 wait=true 时生效；>0 超时则杀进程树并抛「超时」
+    static Run(command, wait := false, stdoutFile := "", timeoutMs := 0) {
         command := Trim(command)
         if (command = "")
             throw Error("ProcessNoWindow 命令不能为空")
@@ -52,6 +59,10 @@ class ProcessNoWindow {
         StrPut command, commandBuf, "UTF-16"
 
         inheritHandles := stdoutHandle ? 1 : 0
+        createFlags := this.CREATE_NO_WINDOW
+        ; 等待模式先挂起，加入 Job 后再 Resume，避免孙子进程逃出 Job。
+        if wait
+            createFlags |= this.CREATE_SUSPENDED
         ok := DllCall(
             "CreateProcessW",
             "Ptr", 0,
@@ -59,7 +70,7 @@ class ProcessNoWindow {
             "Ptr", 0,
             "Ptr", 0,
             "Int", inheritHandles,
-            "UInt", this.CREATE_NO_WINDOW,
+            "UInt", createFlags,
             "Ptr", 0,
             "Ptr", 0,
             "Ptr", si,
@@ -74,22 +85,73 @@ class ProcessNoWindow {
 
         hProcess := NumGet(pi, 0, "Ptr")
         hThread := NumGet(pi, A_PtrSize, "Ptr")
+        ; PROCESS_INFORMATION.dwProcessId 紧跟两个 HANDLE。
+        pid := NumGet(pi, A_PtrSize * 2, "UInt")
+        hJob := 0
+        assignedToJob := false
         exitCode := 0
         try {
             if wait {
-                DllCall("WaitForSingleObject", "Ptr", hProcess, "UInt", this.INFINITE)
+                ; Job 建失败也必须 Resume，否则子进程会一直挂起。
+                hJob := this.TryCreateKillOnCloseJob(hProcess)
+                assignedToJob := hJob != 0
+                DllCall("ResumeThread", "Ptr", hThread, "UInt")
+                waitMs := (timeoutMs > 0) ? timeoutMs : this.INFINITE
+                waitResult := DllCall("WaitForSingleObject", "Ptr", hProcess, "UInt", waitMs, "UInt")
+                if (waitResult = this.WAIT_TIMEOUT) {
+                    this.TerminateTree(hJob, assignedToJob, hProcess)
+                    DllCall("WaitForSingleObject", "Ptr", hProcess, "UInt", 2000)
+                    throw Error("超时")
+                }
                 if !DllCall("GetExitCodeProcess", "Ptr", hProcess, "UInt*", &exitCode)
                     throw Error("GetExitCodeProcess 失败: " A_LastError)
             }
         } finally {
+            if hJob
+                DllCall("CloseHandle", "Ptr", hJob)
             DllCall("CloseHandle", "Ptr", hThread)
             DllCall("CloseHandle", "Ptr", hProcess)
         }
-        return exitCode
+        ; 等待模式保持退出码契约；非等待模式返回 PID，供 TTS 这类需要 WatchPid 的调用方使用。
+        return wait ? exitCode : pid
     }
 
-    static RunWait(command, stdoutFile := "") {
-        return this.Run(command, true, stdoutFile)
+    static RunWait(command, stdoutFile := "", timeoutMs := 0) {
+        return this.Run(command, true, stdoutFile, timeoutMs)
+    }
+
+    ; 等待模式才建 Job。非等待模式若立刻 CloseHandle(job)，KILL_ON_JOB_CLOSE 会把刚启动的进程杀掉。
+    static TryCreateKillOnCloseJob(hProcess) {
+        hJob := DllCall("CreateJobObjectW", "Ptr", 0, "Ptr", 0, "Ptr")
+        if !hJob
+            return 0
+        info := Buffer(this.JobExtendedInfoSize, 0)
+        ; LimitFlags 在 BASIC 里偏移 16（两枚 Int64 之后），x86/x64 相同。
+        NumPut("UInt", this.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, info, 16)
+        if !DllCall(
+            "SetInformationJobObject",
+            "Ptr", hJob,
+            "Int", this.JobObjectExtendedLimitInformation,
+            "Ptr", info,
+            "UInt", this.JobExtendedInfoSize,
+            "Int"
+        ) {
+            DllCall("CloseHandle", "Ptr", hJob)
+            return 0
+        }
+        if !DllCall("AssignProcessToJobObject", "Ptr", hJob, "Ptr", hProcess, "Int") {
+            DllCall("CloseHandle", "Ptr", hJob)
+            return 0
+        }
+        return hJob
+    }
+
+    static TerminateTree(hJob, assignedToJob, hProcess) {
+        if (assignedToJob && hJob) {
+            DllCall("TerminateJobObject", "Ptr", hJob, "UInt", 1)
+            return
+        }
+        DllCall("TerminateProcess", "Ptr", hProcess, "UInt", 1)
     }
 
     ; 创建可被子进程继承的写句柄，父进程在 CreateProcess 后立刻关掉自己的副本。

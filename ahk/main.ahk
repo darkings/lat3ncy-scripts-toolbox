@@ -61,6 +61,9 @@ IsToolboxTestMode() {
 #Include ..\shared\notify\renderer.ahk
 #Include ..\shared\notify\notify.ahk
 
+; 本机 pythonw 解析：朗读 / 翻译共用，由入口统一加载，避免两个 feature 各自 include
+#Include ..\shared\python.ahk
+
 ; ============================================================
 ; 功能实现层：只加载功能，不在模块内部注册快捷键
 ; ============================================================
@@ -89,11 +92,17 @@ IsToolboxTestMode() {
 ; 切换隐藏文件：一键切换资源管理器中隐藏文件的显示/隐藏状态 [快捷键: Caps + . (CapsLock & .)]
 #Include features\toggle-hidden-files.ahk
 
+; 切换点文件：给当前文件夹顶层 . 开头条目写入/清除 Hidden 属性 [快捷键: Caps + , (CapsLock & ,)]
+#Include features\toggle-dotfiles.ahk
+
 ; 切换文件扩展名：一键显示或隐藏资源管理器中的文件扩展名 [快捷键: Caps + X (CapsLock & x)]
 #Include features\toggle-file-extensions.ahk
 
 ; 朗读选中文字：智能中英文双语音色极速发音，再次按下即时打断 [快捷键: Caps + S (CapsLock & s)]
 #Include features\speak-selected-text.ahk
+
+; 划词翻译：中英互译，光标处显示译文 [快捷键: Caps + F (CapsLock & f)]
+#Include features\translate-selected-text.ahk
 
 ; 音频输出切换：一键在可用音频播放设备之间循环切换 [快捷键: Caps + D (CapsLock & d)]
 #Include features\audio-switcher.ahk
@@ -106,5 +115,8 @@ IsToolboxTestMode() {
 
 ; 统一路由层必须在全部 feature 之后加载。
 #Include hotkey-router.ahk
+
+; 启动时清掉丢失引用的自定义 HUD，避免旧弹窗一直钉在桌面上。
+try NotifyRenderer.CloseOrphans()
 
 ToolboxStarting := false

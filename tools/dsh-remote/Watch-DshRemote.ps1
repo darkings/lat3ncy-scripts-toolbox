@@ -19,6 +19,7 @@ $httpsPort = if ($cfg.server.https_port) { [int]$cfg.server.https_port } else { 
 $relayEnabled = $true
 if ($null -ne $cfg.relay.enabled) { $relayEnabled = [bool]$cfg.relay.enabled }
 $relayPort = if ($cfg.relay.port) { [int]$cfg.relay.port } else { 3090 }
+# 对账周期默认 60s。命令行 / 配置小于 30s 会被抬到至少 30s，避免空转。
 $reconcileSec = 60
 if ($PollInterval -gt 0) { $reconcileSec = [Math]::Max(30, $PollInterval) }
 else {
@@ -29,9 +30,30 @@ $autoOff = $true
 if ($null -ne $cfg.watcher.auto_off) { $autoOff = [bool]$cfg.watcher.auto_off }
 $probeTimeout = if ($cfg.watcher.probe_timeout) { [int]$cfg.watcher.probe_timeout } else { 12 }
 
+# 上次已记录的 relay PID；复用已有进程时不再刷 "Relay ready"。
+$script:LastRelayPid = 0
+# 本会话是否见过 DSH 在跑。开机残留 Serve 清理不能弹「已关闭」。
+$script:SeenDshThisSession = $false
 $logFile = Join-Path $PSScriptRoot "watcher.log"
+# 超过 5 MB 时轮转为 watcher.log.1，只保留一份旧日志，避免无限追加。
+$logMaxBytes = 5MB
+function Invoke-WatcherLogRotation {
+  try {
+    if (-not (Test-Path -LiteralPath $logFile)) { return }
+    $item = Get-Item -LiteralPath $logFile
+    if ($item.Length -lt $logMaxBytes) { return }
+    $rotated = Join-Path $PSScriptRoot "watcher.log.1"
+    if (Test-Path -LiteralPath $rotated) {
+      Remove-Item -LiteralPath $rotated -Force
+    }
+    Move-Item -LiteralPath $logFile -Destination $rotated -Force
+  } catch {
+    # 轮转失败时继续追加，不能让 Watcher 因日志 IO 退出。
+  }
+}
 function Write-Log([string]$msg) {
   $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+  Invoke-WatcherLogRotation
   "[$ts] $msg" | Out-File -LiteralPath $logFile -Append -Encoding UTF8
   Write-Host "[$ts] $msg"
 }
@@ -52,31 +74,27 @@ try {
   Write-Log "WARN: watcher singleton mutex unavailable: $($_.Exception.Message)"
 }
 
-function Test-DshProcessRunning {
-  # 综合判定：GUI 进程存在 或 node 后端存在 或端口已监听 即视为运行中（避免 GUI 与 node 分离导致的误判）
-  try {
-    if ($null -ne (Get-Process -Name "deepseek-harness-desktop" -ErrorAction SilentlyContinue)) { return $true }
-  } catch {}
-  try {
-    $node = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*deepseek-harness*" }
-    if ($node) { return $true }
-  } catch {}
-  return $false
-}
-
 function Sync-RemoteState {
-  $resolvedPort = Get-DshPort -ConfiguredPort $portCfg
-  $portSource = Get-DshPortSource -ConfiguredPort $portCfg
+  $snapshot = Get-DshProcessSnapshot
+  $portInfo = Get-DshPortInfo -ConfiguredPort $portCfg -Snapshot $snapshot
+  $resolvedPort = [int]$portInfo.Port
+  $portSource = [string]$portInfo.Source
   $targetPort = if ($relayEnabled) { $relayPort } else { $resolvedPort }
-  $dshRunning = Test-DshProcessRunning
+  $dshRunning = Test-DshProcessRunning -Snapshot $snapshot
   # 端口监听也视为运行（强化：即使进程查询受限，只要 3081 在 Listen 就认为 DSH 在线）
   if (-not $dshRunning) {
     try { if (Test-DshListening -Port $resolvedPort) { $dshRunning = $true } } catch {}
   }
+  if ($dshRunning) { $script:SeenDshThisSession = $true }
   if ($dshRunning -and $relayEnabled) {
     try {
       $relayProc = Start-DshRelay -TargetPort $resolvedPort -ListenPort $relayPort
-      Write-Log "Relay ready: 127.0.0.1:$relayPort -> 127.0.0.1:$resolvedPort (pid $($relayProc.ProcessId))"
+      $relayPid = [int]$relayProc.ProcessId
+      # 已在跑的 relay 每轮对账都会走到这里，只在 PID 变化时记一条。
+      if ($relayPid -ne $script:LastRelayPid) {
+        Write-Log "Relay ready: 127.0.0.1:$relayPort -> 127.0.0.1:$resolvedPort (pid $relayPid)"
+        $script:LastRelayPid = $relayPid
+      }
     } catch {
       Write-Log "FAIL: loopback relay unavailable: $($_.Exception.Message)"
       return
@@ -88,7 +106,7 @@ function Sync-RemoteState {
     Write-Log "WARN: tailscaled still Access denied even via sudo - skip (check sudo config)"
     return
   }
-  $serveOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort
+  $serveOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort -ServeStatus $raw
 
   if ($dshRunning -and -not $serveOn) {
     Write-Log "DSH running but Serve OFF -> exposing :$targetPort (source: $portSource, backend :$resolvedPort)"
@@ -106,7 +124,7 @@ function Sync-RemoteState {
       $out = $r.Output
       Write-Log ("tailscale serve on : " + $out.Trim())
       Start-Sleep -Milliseconds 800
-      $serveOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort
+      $serveOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort -ServeStatus (Get-TailscaleServeStatus)
       if ($serveOn) {
         $hn = Get-TailscaleHostname
         if ($relayEnabled) {
@@ -125,7 +143,12 @@ function Sync-RemoteState {
   }
 
   if (-not $dshRunning -and $serveOn -and $autoOff) {
-    Write-Log "DSH not running but Serve ON -> disabling (auto_off=true)"
+    $leftover = -not $script:SeenDshThisSession
+    if ($leftover) {
+      Write-Log "Serve ON but DSH never started this session -> silently disabling leftover expose"
+    } else {
+      Write-Log "DSH not running but Serve ON -> disabling (auto_off=true)"
+    }
     try {
       $r = Invoke-TailscaleServe -ServeArgs "--https=$httpsPort off"
       $out = $r.Output
@@ -133,8 +156,12 @@ function Sync-RemoteState {
       if ($relayEnabled) {
         $stoppedRelay = Stop-DshRelay -ListenPort $relayPort
         if ($stoppedRelay -gt 0) { Write-Log "Relay stopped ($stoppedRelay process)" }
+        $script:LastRelayPid = 0
       }
-      if (-not $NoNotify) { Invoke-DshRemoteNotify -Type "info" -Text "DSH closed, remote disconnected" }
+      # 开机残留 Serve 不是用户关了 DSH，不要弹「已关闭」。
+      if (-not $leftover -and -not $NoNotify) {
+        Invoke-DshRemoteNotify -Type "info" -Text "DSH closed, remote disconnected"
+      }
     } catch {
       Write-Log "FAIL: tailscale serve off error: $($_.Exception.Message)"
     }
@@ -147,7 +174,7 @@ function Sync-RemoteState {
   }
 }
 
-Write-Log "Watcher started (event-driven WITHIN 2s + reconcile ${reconcileSec}s, auto_off=$autoOff) IsAdmin=$(Test-IsAdmin) SudoAvailable=$(Test-SudoAvailable)"
+Write-Log "Watcher started pid=$PID (event-driven WITHIN 2s + reconcile ${reconcileSec}s, auto_off=$autoOff) IsAdmin=$(Test-IsAdmin) SudoAvailable=$(Test-SudoAvailable)"
 # With sudo inline mode (UAC ConsentPromptBehaviorAdmin=0), non-admin can still manage Serve via sudo
 $probeAccess = Get-TailscaleServeStatus
 if ($probeAccess -eq "__ACCESS_DENIED__") {
@@ -243,19 +270,17 @@ try {
           if ($evt -and $evt.TargetInstance -and $evt.TargetInstance.CommandLine -like "*deepseek-harness*") { $isDshNode = $true }
           elseif ($evt -and $evt.TargetInstance -and $evt.TargetInstance.CommandLine -like "*dsh*") { $isDshNode = $true }
         } catch {}
-        # 若无法取到 CommandLine（WMI 限制），则通过后续 Sync-RemoteState 的端口/进程判定兜底，仍执行一次对账但加防抖
+        # CommandLine 读不到时忽略这次 node 事件，避免任意 node.exe 都唤醒对账。
+        # DSH GUI 事件和 60s 周期对账仍会覆盖 Serve / relay。
         if ($isDshNode) {
           $action = if ($src -eq "DSH_NodeCreate") { "created" } else { "deleted" }
           Write-Log ("Event: DSH node {0}" -f $action)
           Start-Sleep -Milliseconds 1200
           Sync-RemoteState
           $lastReconcile = Get-Date
-        } else {
-          # 非 DSH 的 node 事件忽略，但为了避免漏判，仍在事件后做一次轻量对账（若端口发生变化会被 capture）
-          # 此处不重置 lastReconcile，避免高频 node 触发导致频繁 serve 操作，仅记录
-          $action2 = if ($src -eq "DSH_NodeCreate") { "created" } else { "deleted" }
-          Write-Log ("Event: node {0} (non-DSH, ignored)" -f $action2)
         }
+        # 非 DSH 的 node.exe 启停忽略：不写日志、不对账、不重置 lastReconcile。
+        # Serve / relay 仍由 DSH 进程事件和 60s 周期对账覆盖。
       } else {
         Remove-Event -EventIdentifier $ev.EventIdentifier -ErrorAction SilentlyContinue
         Sync-RemoteState
@@ -263,7 +288,7 @@ try {
       }
       if ($ev.EventIdentifier) { Remove-Event -EventIdentifier $ev.EventIdentifier -ErrorAction SilentlyContinue }
     } else {
-      Write-Log "Reconcile (periodic ${reconcileSec}s)"
+      # 状态未变时 Sync-RemoteState 自己保持安静，这里不再每轮写周期心跳。
       Sync-RemoteState
       $lastReconcile = Get-Date
     }

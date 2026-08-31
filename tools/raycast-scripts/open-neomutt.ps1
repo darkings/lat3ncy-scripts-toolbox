@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 
 # @raycast.schemaVersion 1
 # @raycast.title NeoMutt
@@ -17,12 +17,17 @@ trap {
   exit 1
 }
 
-$powerShell = (Get-Command pwsh.exe -ErrorAction Stop).Source
-$powerShellArguments = @(
-    '-NoLogo'
-    '-NoExit'
-    '-Command'
-    '"wsl.exe --cd ~ --exec neomutt"'
-)
-
-Start-Process -FilePath $powerShell -ArgumentList $powerShellArguments
+$wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+if ($wt) {
+    Start-Process -FilePath $wt.Source -ArgumentList 'wsl.exe --cd ~ neomutt'
+} else {
+    $powerShell = (Get-Command pwsh.exe -ErrorAction Stop).Source
+    $powerShellArguments = @(
+        '-NoLogo'
+        '-NoProfile'
+        '-NoExit'
+        '-Command'
+        'wsl.exe --cd ~ --exec neomutt'
+    )
+    Start-Process -FilePath $powerShell -ArgumentList $powerShellArguments
+}

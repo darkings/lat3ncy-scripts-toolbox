@@ -29,8 +29,8 @@ fixed_dark_time  = "19:00"  # 夜间 / 深色切换时间
 # 模式 A: 深浅模式配置 (当 switch_type = "mode" 时生效)
 # ============================================================
 [mode_settings]
-switch_apps = true    # 是否切换应用程序 (Edge, Chrome, VS Code, 文件资源管理器等)
-switch_system = false # 是否切换系统任务栏、开始菜单、操作中心 (false: 自定义模式，保持 Windows 系统级常黑，仅应用级切换 - DSH 跟随 Apps)
+switch_apps = true     # 是否切换应用程序 (Edge, Chrome, VS Code, 文件资源管理器等)
+switch_system = false  # 是否切换系统任务栏、开始菜单、操作中心、托盘底色。false：系统壳保持当前深浅色，不重启 Explorer；只广播刷新应用窗口
 
 # ============================================================
 # 壁纸联动配置 (可选，支持独立开关)

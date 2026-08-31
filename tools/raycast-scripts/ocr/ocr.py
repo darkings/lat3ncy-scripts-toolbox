@@ -1,8 +1,10 @@
-"""剪贴板图片 OCR：配合系统截图工具（Win+Shift+S）使用。
+"""剪贴板图片 OCR：配合系统截图工具（Win+Shift+S / ms-screenclip:）使用。
 
 轮询系统剪贴板中的图片（由截图工具写入），用 RapidOCR 识别中英文，
 把识别文本写回剪贴板并通过统一 HUD（shared/notify）显示摘要。超时 45 秒。
-当由 Raycast（--result-file）调用时保持静默，由外层 ps1 统一通知。
+手动运行时先注入截图框再加载模型，避免 ONNX 冷启动挡住框选。
+Raycast 路径由 screenshot-ocr.ps1 先打开截图框，再带 --no-screenshot --result-file
+调用本脚本；此时保持静默，由外层 ps1 统一通知。
 """
 
 import os
@@ -265,12 +267,13 @@ def run_ocr_from_clipboard(
     inject_screenshot: bool = True,
     result_file: str | None = None,
 ) -> int:
+    # 先出截图框，再加载 RapidOCR。模型冷启动通常 1～5 秒，不能挡在框选前面。
+    if inject_screenshot:
+        send_win_shift_s()
+
     engine = load_engine()
     if not engine:
         return 1
-
-    if inject_screenshot:
-        send_win_shift_s()
 
     deadline = time.monotonic() + timeout_seconds
     image: Image.Image | None = None

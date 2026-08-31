@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from typing import Any
 
 ZH_CHAR_PATTERN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
 ZH_PUNCT_PATTERN = re.compile(r"[\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]")
@@ -55,6 +56,20 @@ def get_default_cache_dir() -> str:
     return cache_dir
 
 
+def _clamp_int(value: object, default: int, lo: int, hi: int, name: str) -> int:
+    """非法值只 warning + 夹紧，不让配置错误把朗读进程打崩。"""
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        get_logger().warning(f"配置 {name}={value!r} 无效，回退 {default}")
+        return default
+    if parsed < lo or parsed > hi:
+        clamped = max(lo, min(hi, parsed))
+        get_logger().warning(f"配置 {name}={parsed} 超出 {lo}..{hi}，夹紧为 {clamped}")
+        return clamped
+    return parsed
+
+
 def load_config(config_path: str | None = None) -> dict:
     default_config = {
         "engine": "auto",
@@ -78,10 +93,28 @@ def load_config(config_path: str | None = None) -> dict:
         try:
             with open(config_path, "rb") as f:
                 loaded = tomllib.load(f)
+            if isinstance(loaded, dict):
+                cache = dict(default_config["cache"])
                 default_config.update(loaded)
+                if isinstance(default_config.get("cache"), dict):
+                    cache.update(default_config["cache"])
+                default_config["cache"] = cache
         except Exception as e:
             get_logger().warning(f"加载配置文件失败，使用默认配置: {e}")
 
+    default_config["concurrency"] = _clamp_int(
+        default_config.get("concurrency", 2), 2, 1, 10, "concurrency"
+    )
+    cache_cfg = default_config.get("cache", {})
+    if not isinstance(cache_cfg, dict):
+        cache_cfg = {"max_size_mb": 100, "max_files": 2000}
+    cache_cfg["max_size_mb"] = _clamp_int(
+        cache_cfg.get("max_size_mb", 100), 100, 1, 10240, "cache.max_size_mb"
+    )
+    cache_cfg["max_files"] = _clamp_int(
+        cache_cfg.get("max_files", 2000), 2000, 1, 100000, "cache.max_files"
+    )
+    default_config["cache"] = cache_cfg
     return default_config
 
 
@@ -169,12 +202,14 @@ def prune_lru_cache(cache_dir: str, max_size_mb: int, max_files: int) -> None:
         target_files = int(max_files * 0.85)
 
         deleted = 0
+        remaining = len(entries)
         for _, size, path in entries:
-            if total_bytes <= target_bytes and len(entries) <= target_files:
+            if total_bytes <= target_bytes and remaining <= target_files:
                 break
             try:
                 os.remove(path)
                 total_bytes -= size
+                remaining -= 1
                 deleted += 1
             except OSError:
                 pass
@@ -193,6 +228,10 @@ async def synthesize_winrt_segment(voice_name: str, seg_text: str, cache_path: s
 
         synth = ss.SpeechSynthesizer()
         voices = ss.SpeechSynthesizer.all_voices
+        # all_voices 在类型桩里可为 None；保持旧行为：拿不到列表就失败，交给 SAPI 兜底。
+        if voices is None:
+            logger.error("WinRT 语音列表不可用")
+            return False
         target_voice = None
         for v in voices:
             if voice_name.lower() in v.display_name.lower() or voice_name.lower() in v.id.lower():
@@ -201,12 +240,15 @@ async def synthesize_winrt_segment(voice_name: str, seg_text: str, cache_path: s
         if target_voice:
             synth.voice = target_voice
         else:
-            logger.warning(f"未找到指定的 WinRT 语音 '{voice_name}'，使用默认语音: {synth.voice.display_name}")
+            current_voice = synth.voice
+            current_name = current_voice.display_name if current_voice is not None else "default"
+            logger.warning(f"未找到指定的 WinRT 语音 '{voice_name}'，使用默认语音: {current_name}")
 
         stream = await synth.synthesize_text_to_stream_async(seg_text)
         reader = streams.DataReader(stream.get_input_stream_at(0))
         await reader.load_async(stream.size)
-        buf = bytearray(stream.size)
+        # winsdk 类型桩要求 Array[UInt8]，运行时 bytearray 可用；用 Any 避免改播放路径。
+        buf: Any = bytearray(stream.size)
         reader.read_bytes(buf)
 
         temp_file = cache_path + f".tmp.{os.getpid()}.wav"
@@ -436,10 +478,12 @@ async def main_async() -> None:
         await ready_events[idx].wait()
         audio_path = result_files[idx]
         if audio_path and os.path.isfile(audio_path):
-            play_audio_file(audio_path)
+            # MCI play ... wait 会堵住事件循环；丢到线程里，合成任务才能继续排队。
+            # 仍按片段下标顺序 await，音频不会乱序。
+            await asyncio.to_thread(play_audio_file, audio_path)
         else:
             lang, seg_text = segments[idx]
-            play_sapi_fallback(seg_text)
+            await asyncio.to_thread(play_sapi_fallback, seg_text)
 
     # 等待所有后台任务完成并执行 LRU 容量清理
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -448,7 +492,56 @@ async def main_async() -> None:
     logger.info("=== TTS Player 播放完成退出 ===")
 
 
+def run_self_test() -> int:
+    """纯函数/文件系统单测：不合成、不播放。"""
+    import tempfile
+
+    failed = 0
+
+    def check(cond: bool, name: str) -> None:
+        nonlocal failed
+        if not cond:
+            print(f"FAIL {name}", file=sys.stderr)
+            failed += 1
+
+    cfg = load_config(os.path.join(tempfile.gettempdir(), "lat3ncy-missing-tts.toml"))
+    check(cfg["zh_voice"] == "Microsoft Yaoyao", "default zh_voice")
+    check(cfg["en_voice"] == "Microsoft Zira", "default en_voice")
+    check(1 <= int(cfg["concurrency"]) <= 10, "default concurrency range")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = os.path.join(tmp, "bad.toml")
+        with open(bad, "w", encoding="utf-8") as handle:
+            handle.write("concurrency = 99\n[cache]\nmax_size_mb = 0\nmax_files = -3\n")
+        loaded = load_config(bad)
+        check(loaded["concurrency"] == 10, "concurrency clamp high")
+        check(loaded["cache"]["max_size_mb"] == 1, "max_size_mb clamp low")
+        check(loaded["cache"]["max_files"] == 1, "max_files clamp low")
+
+        cache_dir = os.path.join(tmp, "cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        for i in range(5):
+            path = os.path.join(cache_dir, f"{i}.wav")
+            with open(path, "wb") as handle:
+                handle.write(b"x" * 100)
+            os.utime(path, (i + 1, i + 1))
+        prune_lru_cache(cache_dir, max_size_mb=1, max_files=2)
+        left = [name for name in os.listdir(cache_dir) if name.endswith(".wav")]
+        check(len(left) <= 2, "lru remaining count after prune")
+        check("4.wav" in left, "lru keeps newest file")
+
+    segs = split_by_language("今天使用 Windows")
+    check(len(segs) >= 2, "split mixed text")
+    if failed:
+        print(f"self-test failed: {failed}", file=sys.stderr)
+        return 1
+    print("PASS: tts self-test")
+    return 0
+
+
 def main() -> None:
+    if "--self-test" in sys.argv:
+        raise SystemExit(run_self_test())
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:

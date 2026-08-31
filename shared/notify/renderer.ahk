@@ -19,6 +19,17 @@ class NotifyRenderer {
     static ChipAnchorGap := 14
     static MinWidth := 80
     static MaxWidth := 320
+    ; 翻译气泡：阅读用，比芯片宽；高度按真实行数算，再和工作区 55% 取 min。
+    static PopupMaxWidth := 520
+    static PopupMaxLines := 20
+    ; 11pt + 20px 行高：比芯片阅读更轻松，又不把气泡撑得过大。
+    static PopupLineHeight := 20
+    static PopupTextSize := 11
+    ; 350 = SemiLight：11pt 上 300 会发虚，400 又偏厚。
+    static PopupTextWeight := 350
+    static PopupPaddingX := 10
+    static PopupPaddingY := 6
+    static PopupMaxWorkAreaRatio := 0.55
     static PaddingX := 16
     static PaddingY := 7
     static IconGap := 8
@@ -153,6 +164,13 @@ class NotifyRenderer {
     static _textWidthCache := Map()
     static _iconWidthCache := Map()
     static _inputHook := 0
+    ; 固定窗口标题，方便同一进程回收丢失的 HUD，也方便启动时清掉孤儿窗口。
+    static HudTitle := "Lat3ncyNotifyHUD"
+    static MaxDurationMs := 10000
+    static DefaultDurationMs := 650
+    static ShownAt := 0
+    ; popup 超高截断时由 Show 置位，Notify.Popup 把全文写入剪贴板。
+    static LastPopupTruncated := false
 
     static ResolveType(type, theme) {
         type := StrLower(Trim(type))
@@ -240,6 +258,153 @@ class NotifyRenderer {
         if (this._textWidthCache.Count < 200)
             this._textWidthCache[text] := w
         return w
+    }
+
+    static MeasureTextWidthAt(text, size, weight := 400) {
+        ; 必须和实际 SetFont 同一套 size/weight，否则窗口会比字形更宽，右边空一截。
+        if (text = "")
+            return 0
+        cacheKey := size ":" weight ":" text
+        if this._textWidthCache.Has(cacheKey)
+            return this._textWidthCache[cacheKey]
+        w := 0
+        try {
+            g := Gui("-Caption +ToolWindow")
+            g.MarginX := 0
+            g.MarginY := 0
+            g.SetFont("s" size " w" weight " q5", this.TextFontName)
+            ctrl := g.AddText("x0 y0", text)
+            g.Show("x0 y0 Hide")
+            ctrl.GetPos(,, &w)
+            g.Destroy()
+        } catch {
+            try {
+                if IsSet(g)
+                    g.Destroy()
+            } catch {
+            }
+        }
+        if (w <= 0)
+            w := this.MeasureGdiTextWidth(text, size, weight)
+        if (this._textWidthCache.Count < 400)
+            this._textWidthCache[cacheKey] := w
+        return w
+    }
+
+    static MeasureGdiTextWidth(text, size, weight := 400) {
+        hdc := DllCall("GetDC", "Ptr", 0, "Ptr")
+        if (!hdc)
+            return StrLen(text) * 8
+        dpi := DllCall("GetDeviceCaps", "Ptr", hdc, "Int", 90, "Int")
+        if (!dpi)
+            dpi := 96
+        height := -DllCall("MulDiv", "Int", size, "Int", dpi, "Int", 72, "Int")
+        ; CLEARTYPE_QUALITY = 5；实色底上才有正确子像素。
+        hFont := DllCall("CreateFontW", "Int", height, "Int", 0, "Int", 0, "Int", 0, "Int", weight, "UInt", 0, "UInt", 0, "UInt", 0, "UInt", 0, "UInt", 5, "UInt", 0, "UInt", 0, "UInt", 0, "WStr", this.TextFontName, "Ptr")
+        if (!hFont) {
+            DllCall("ReleaseDC", "Ptr", 0, "Ptr", hdc)
+            return StrLen(text) * 8
+        }
+        hOld := DllCall("SelectObject", "Ptr", hdc, "Ptr", hFont, "Ptr")
+        sizeBuf := Buffer(8, 0)
+        ok := DllCall("GetTextExtentPoint32W", "Ptr", hdc, "WStr", text, "Int", StrLen(text), "Ptr", sizeBuf)
+        w := ok ? NumGet(sizeBuf, 0, "Int") : StrLen(text) * 8
+        DllCall("SelectObject", "Ptr", hdc, "Ptr", hOld)
+        DllCall("DeleteObject", "Ptr", hFont)
+        DllCall("ReleaseDC", "Ptr", 0, "Ptr", hdc)
+        return w
+    }
+
+    static WrapPopupLine(line, maxTextW) {
+        ; 中文按字符硬折；英文超长单词同样硬折，避免一行撑破气泡。
+        parts := []
+        if (line = "") {
+            parts.Push("")
+            return parts
+        }
+        size := this.PopupTextSize
+        weight := this.PopupTextWeight
+        if (this.MeasureTextWidthAt(line, size, weight) <= maxTextW) {
+            parts.Push(line)
+            return parts
+        }
+        remaining := line
+        while (remaining != "") {
+            if (this.MeasureTextWidthAt(remaining, size, weight) <= maxTextW) {
+                parts.Push(remaining)
+                break
+            }
+            lo := 1
+            hi := StrLen(remaining)
+            fit := 1
+            while (lo <= hi) {
+                mid := (lo + hi) // 2
+                if (this.MeasureTextWidthAt(SubStr(remaining, 1, mid), size, weight) <= maxTextW) {
+                    fit := mid
+                    lo := mid + 1
+                } else {
+                    hi := mid - 1
+                }
+            }
+            if (fit < 1)
+                fit := 1
+            parts.Push(SubStr(remaining, 1, fit))
+            remaining := SubStr(remaining, fit + 1)
+        }
+        return parts
+    }
+
+    static MeasurePopupText(text, maxTextW, maxLines := 0) {
+        ; 按真实换行 + 宽度折行测高。短多行不能再被当成 34px 单行。
+        if (maxLines <= 0)
+            maxLines := this.PopupMaxLines
+        if (maxTextW < 50)
+            maxTextW := 50
+        normalized := StrReplace(StrReplace(text, "`r`n", "`n"), "`r", "`n")
+        rawLines := StrSplit(normalized, "`n")
+        if (rawLines.Length = 0)
+            rawLines.Push("")
+
+        visual := []
+        contentW := 0
+        for line in rawLines {
+            wrapped := this.WrapPopupLine(line, maxTextW)
+            for part in wrapped {
+                visual.Push(part)
+                partW := this.MeasureTextWidthAt(part, this.PopupTextSize, this.PopupTextWeight)
+                if (partW > contentW)
+                    contentW := partW
+            }
+        }
+        total := visual.Length
+        truncated := false
+        displayLines := visual
+        if (total > maxLines) {
+            truncated := true
+            keep := Max(0, maxLines - 1)
+            displayLines := []
+            loop keep
+                displayLines.Push(visual[A_Index])
+            remain := total - keep
+            hint := "已复制全文 · 还有 " remain " 行"
+            displayLines.Push(hint)
+            hintW := this.MeasureTextWidthAt(hint, this.PopupTextSize, this.PopupTextWeight)
+            if (hintW > contentW)
+                contentW := hintW
+        }
+        display := ""
+        for idx, line in displayLines
+            display .= (idx = 1 ? "" : "`n") line
+        lineCount := displayLines.Length
+        if (lineCount < 1)
+            lineCount := 1
+        return Map(
+            "width", contentW,
+            "lines", lineCount,
+            "totalLines", total,
+            "truncated", truncated,
+            "display", display
+        )
     }
 
     static MeasureIconWidth(glyph, font) {
@@ -355,20 +520,77 @@ class NotifyRenderer {
         return ok
     }
 
+    static ClampDuration(duration) {
+        try duration := Integer(duration)
+        catch
+            duration := this.DefaultDurationMs
+        if (duration <= 0)
+            duration := this.DefaultDurationMs
+        return Min(this.MaxDurationMs, duration)
+    }
+
+    static ClampRefreshDuration(duration) {
+        ; 同一块 HUD 被连续刷新时，总显示时间仍受硬上限约束，避免日志流把窗口钉死。
+        duration := this.ClampDuration(duration)
+        now := A_TickCount
+        if (this._gui && this.ShownAt) {
+            remaining := this.ShownAt + this.MaxDurationMs - now
+            if (remaining <= 0)
+                return 0
+            return Min(duration, remaining)
+        }
+        this.ShownAt := now
+        return duration
+    }
+
+    static CloseOrphans() {
+        ; 标题匹配的 AutoHotkey GUI：当前 _gui 以外的一律关掉，防止丢失引用后钉在桌面上。
+        prev := A_DetectHiddenWindows
+        DetectHiddenWindows true
+        try {
+            currentHwnd := 0
+            if this._gui {
+                try currentHwnd := this._gui.Hwnd
+            }
+            ; 只回收本进程的 HUD，避免误关 notify-cli 等临时进程的窗口。
+            for hwnd in WinGetList(this.HudTitle " ahk_class AutoHotkeyGUI ahk_pid " ProcessExist()) {
+                if (currentHwnd && hwnd = currentHwnd)
+                    continue
+                try WinClose "ahk_id " hwnd
+                Sleep 20
+                if WinExist("ahk_id " hwnd) {
+                    try WinKill "ahk_id " hwnd
+                }
+            }
+        } finally {
+            DetectHiddenWindows prev
+        }
+    }
+
     static Show(type, icon, text := "", duration := 650) {
         try {
+            duration := this.ClampRefreshDuration(duration)
+            if (duration <= 0) {
+                this.Hide()
+                this.ShownAt := 0
+                return false
+            }
             this.Hide()
+            this.CloseOrphans()
+            this.LastPopupTruncated := false
             theme := this.GetCurrentTheme()
             resolvedType := this.ResolveType(type, theme)
             iconColor := theme.TypeIconColor[resolvedType]
             textColor := theme.Text
 
+            isPopup := (type == "popup")
             chipToken := icon != "" ? icon : text
             chipSpec := this.ResolveStateChip(chipToken)
-            isTextOnly := !!chipSpec
+            ; popup 是阅读气泡：不走 28px 芯片，也不画 ↔。
+            isTextOnly := !!chipSpec && !isPopup
 
             anchor := 0
-            if (isTextOnly || type == "state") {
+            if (isTextOnly || type == "state" || isPopup) {
                 anchor := InputAnchor.Get()
             }
 
@@ -376,20 +598,37 @@ class NotifyRenderer {
             _preIconW := 0
             _preGlyph := ""
             _preIconFont := ""
-            if (!isTextOnly) {
-                if (icon != "") {
-                    _preResolved := this.ResolveIcon(icon)
-                    _preGlyph := _preResolved["glyph"]
-                    _preIconFont := _preResolved["font"]
-                    _preIconW := this.MeasureIconWidth(_preGlyph, _preIconFont)
-                }
+            popupMetrics := 0
+            popupDisplay := text
+            if (!isTextOnly && !isPopup && icon != "") {
+                _preResolved := this.ResolveIcon(icon)
+                _preGlyph := _preResolved["glyph"]
+                _preIconFont := _preResolved["font"]
+                _preIconW := this.MeasureIconWidth(_preGlyph, _preIconFont)
             }
 
             isMultiline := false
             if (isTextOnly) {
                 width := this.ChipSize
                 height := this.ChipSize
+            } else if (isPopup) {
+                boxMaxWidth := this.PopupMaxWidth
+                padX := this.PopupPaddingX
+                padY := this.PopupPaddingY
+                maxTextW := boxMaxWidth - padX * 2
+                if (maxTextW < 50)
+                    maxTextW := 50
+                popupMetrics := this.MeasurePopupText(text, maxTextW)
+                popupDisplay := popupMetrics["display"]
+                this.LastPopupTruncated := popupMetrics["truncated"]
+                isMultiline := popupMetrics["lines"] > 1
+                contentW := popupMetrics["width"]
+                width := Min(boxMaxWidth, Max(this.MinWidth, padX * 2 + contentW))
+                height := padY * 2 + popupMetrics["lines"] * this.PopupLineHeight
+                if (!isMultiline)
+                    height := Max(this.Height, height)
             } else {
+                boxMaxWidth := this.MaxWidth
                 textW := (text != "") ? this.MeasureTextWidth(text) : 0
                 if (text != "" && _preIconW > 0)
                     contentW := _preIconW + this.IconGap + textW
@@ -398,13 +637,15 @@ class NotifyRenderer {
                 else
                     contentW := textW
 
-                maxSingleLineW := this.MaxWidth - this.PaddingX * 2 - (_preIconW > 0 ? _preIconW + this.IconGap : 0)
-                if (text != "" && textW > maxSingleLineW && maxSingleLineW > 50) {
+                maxSingleLineW := boxMaxWidth - this.PaddingX * 2 - (_preIconW > 0 ? _preIconW + this.IconGap : 0)
+                if (maxSingleLineW < 50)
+                    maxSingleLineW := 50
+                if (text != "" && textW > maxSingleLineW) {
                     isMultiline := true
-                    width := this.MaxWidth
+                    width := boxMaxWidth
                     height := 48
                 } else {
-                    width := Min(this.MaxWidth, Max(this.MinWidth, this.PaddingX * 2 + contentW))
+                    width := Min(boxMaxWidth, Max(this.MinWidth, this.PaddingX * 2 + contentW))
                     height := this.Height
                 }
             }
@@ -444,11 +685,37 @@ class NotifyRenderer {
                 y := top + Floor((bottom - top) * this.PositionYRatio) - Floor(height / 2)
             }
 
-            hud := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x20")
-            hud.BackColor := isTextOnly ? theme.ChipBg : theme.Bg
-            hud.MarginX := isTextOnly ? 0 : this.PaddingX
-            hud.MarginY := isTextOnly ? 0 : this.PaddingY
-            dwmOk := this.ApplyDwmStyle(hud.Hwnd, theme, isTextOnly)
+            if (isPopup) {
+                workH := bottom - top
+                maxH := Max(this.Height, Floor(workH * this.PopupMaxWorkAreaRatio))
+                if (height > maxH) {
+                    height := maxH
+                    this.LastPopupTruncated := true
+                    if (popupMetrics) {
+                        fitLines := Max(1, (height - this.PopupPaddingY * 2) // this.PopupLineHeight)
+                        if (fitLines < popupMetrics["lines"]) {
+                            popupMetrics := this.MeasurePopupText(text, Max(50, width - this.PopupPaddingX * 2), fitLines)
+                            popupDisplay := popupMetrics["display"]
+                            this.LastPopupTruncated := true
+                            height := this.PopupPaddingY * 2 + popupMetrics["lines"] * this.PopupLineHeight
+                            if (height > maxH)
+                                height := maxH
+                        }
+                    }
+                }
+                if (y + height > bottom - 8)
+                    y := bottom - 8 - height
+                if (y < top + 8)
+                    y := top + 8
+            }
+
+            hud := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x20", this.HudTitle)
+            hud.BackColor := (isTextOnly || isPopup) ? (isTextOnly ? theme.ChipBg : theme.Bg) : theme.Bg
+            hud.MarginX := isTextOnly ? 0 : (isPopup ? this.PopupPaddingX : this.PaddingX)
+            hud.MarginY := isTextOnly ? 0 : (isPopup ? this.PopupPaddingY : this.PaddingY)
+            ; popup 必须实色客户区：Acrylic 上的 GDI ClearType 会发糊、带彩边。
+            opaqueClient := isTextOnly || isPopup
+            dwmOk := this.ApplyDwmStyle(hud.Hwnd, theme, opaqueClient)
 
             if (isTextOnly) {
                 ; 整盒水平+垂直居中；不再裁 h，避免字形被切矮后显细
@@ -460,6 +727,21 @@ class NotifyRenderer {
                     "x0 y0 w" this.ChipSize " h" this.ChipSize " Center 0x200",
                     chipSpec["glyph"]
                 )
+            } else if (isPopup) {
+                textX := this.PopupPaddingX
+                maxTextW := width - this.PopupPaddingX * 2
+                if (maxTextW < 10)
+                    maxTextW := 10
+                textTop := this.PopupPaddingY
+                textH := height - this.PopupPaddingY * 2
+                if (textH < this.PopupLineHeight)
+                    textH := this.PopupLineHeight
+                ; 实色底 + Light + q5：比 400 细一档，ClearType 仍锐。
+                hud.SetFont("s" this.PopupTextSize " w" this.PopupTextWeight " q5 c" textColor, this.TextFontName)
+                if (isMultiline)
+                    hud.AddText("x" textX " y" textTop " w" maxTextW " h" textH " +Wrap", popupDisplay)
+                else
+                    hud.AddText("x" textX " y0 w" maxTextW " h" height " 0x200", popupDisplay)
             } else {
                 if (_preResolved) {
                     resolved := _preResolved
@@ -489,7 +771,8 @@ class NotifyRenderer {
                 if (iw > 0) {
                     hud.SetFont("s" this.IconSize " Bold q5 c" iconColor, iconFont)
                     if (isMultiline) {
-                        hud.AddText("x" iconX " y8 w" iw " h20 Center 0x200", glyph)
+                        iconY := 8
+                        hud.AddText("x" iconX " y" iconY " w" iw " h20 Center 0x200", glyph)
                     } else {
                         hud.AddText("x" iconX " y0 w" iw " h" height " Center 0x200", glyph)
                     }
@@ -505,7 +788,11 @@ class NotifyRenderer {
                         maxTextW := 10
                     hud.SetFont("s" this.TextSize " q5 c" textColor, this.TextFontName)
                     if (isMultiline) {
-                        hud.AddText("x" textX " y6 w" maxTextW " h36 +Wrap 0x4000", text)
+                        textTop := 6
+                        textH := height - textTop - 6
+                        if (textH < 20)
+                            textH := 20
+                        hud.AddText("x" textX " y" textTop " w" maxTextW " h" textH " +Wrap 0x4000", text)
                     } else {
                         hud.AddText("x" textX " y0 w" textW2 " h" height " 0x200", text)
                     }
@@ -514,8 +801,11 @@ class NotifyRenderer {
 
             hud.Show("x" x " y" y " w" width " h" height " NoActivate")
             if (!dwmOk) {
-                try WinSetTransparent(theme.IsDark ? 235 : 250, hud.Hwnd)
-                fallbackR := isTextOnly ? this.ChipRadius : this.Radius
+                ; popup / 芯片必须保持不透明，半透明会再次把 ClearType 画糊。
+                if !opaqueClient {
+                    try WinSetTransparent(theme.IsDark ? 235 : 250, hud.Hwnd)
+                }
+                fallbackR := isTextOnly ? this.ChipRadius : (isPopup ? this.ChipRadius : this.Radius)
                 try WinSetRegion("0-0 W" width " H" height " R" fallbackR "-" fallbackR, "ahk_id " hud.Hwnd)
             }
             this._gui := hud
@@ -543,10 +833,11 @@ class NotifyRenderer {
         if (this._inputHook) {
             try this._inputHook.Stop()
         }
-        if !this._gui
-            return
-        try this._gui.Destroy()
+        if this._gui {
+            try this._gui.Destroy()
+        }
         this._gui := 0
+        this.CloseOrphans()
     }
 
     static GetMonitorFromPoint(ptX, ptY) {

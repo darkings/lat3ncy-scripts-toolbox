@@ -6,12 +6,26 @@
 class Notify {
     static Mode := "full"
     static ToolTipHideCallback := 0
-    static PriorityMap := Map("state", 1, "info", 2, "success", 3, "error", 4)
+    static PriorityMap := Map("state", 1, "popup", 2, "info", 2, "success", 3, "error", 4)
     static CurrentLevel := 0
     static ActiveUntil := 0
     static ToastDebounceMs := 250
     static ToastFlushCallback := 0
     static PendingToast := 0
+    ; HUD / ToolTip 硬上限：禁止 duration=0 或超大值把窗口钉在桌面上。
+    static MaxDurationMs := 10000
+    static DefaultDurationMs := 650
+
+    static ClampDuration(duration, fallback := 0) {
+        if (fallback <= 0)
+            fallback := this.DefaultDurationMs
+        try duration := Integer(duration)
+        catch
+            return fallback
+        if (duration <= 0)
+            return fallback
+        return Min(this.MaxDurationMs, duration)
+    }
 
     static State(icon, text := "", duration := 550) {
         return this.Show("state", icon, text, duration)
@@ -29,10 +43,23 @@ class Notify {
         return this.Show("error", icon, text, duration)
     }
 
+    static Popup(text := "", duration := 0) {
+        ; 长文按字数估算显示时间，但绝不超过硬上限，0/负数不能变成“一直挂着”。
+        fallback := Min(this.MaxDurationMs, 2500 + 80 * StrLen(text))
+        duration := this.ClampDuration(duration, fallback)
+        ; 翻译气泡不带 ↔。超高截断时 renderer 打标，这里把原文放进剪贴板。
+        ok := this.Show("popup", "", text, duration)
+        if NotifyRenderer.LastPopupTruncated {
+            try A_Clipboard := text
+        }
+        return ok
+    }
+
     static Show(type, icon, text := "", duration := 650) {
         if !this.ShouldShow(type)
             return false
 
+        duration := this.ClampDuration(duration)
         level := this.PriorityMap.Has(type) ? this.PriorityMap[type] : 1
         now := A_TickCount
         ; 高优先级保护：若当前正处于活跃的高优先级错误通知中，忽略低优先级瞬态 state 通知
@@ -42,8 +69,8 @@ class Notify {
         this.CurrentLevel := level
         this.ActiveUntil := now + duration
 
-        ; 仅 state（输入法中/A/⇪）走光标上方 28x28 HUD；其他结果走系统右下角 Toast
-        if (type == "state") {
+        ; state 走光标芯片；popup 走光标长气泡；其余结果走系统右下角 Toast
+        if (type == "state" || type == "popup") {
             try {
                 this.HideToolTip()
                 NotifyRenderer.Show(type, icon, text, duration)

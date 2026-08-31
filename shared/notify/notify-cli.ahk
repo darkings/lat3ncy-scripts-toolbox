@@ -36,6 +36,7 @@ switch notificationType {
         ExitApp 2
 }
 
-; CLI 是临时进程，必须覆盖完整 HUD 生命周期。
+; CLI 是临时进程，必须覆盖完整 HUD 生命周期；时长与 Notify 硬上限对齐，避免 Sleep 把窗口钉死。
+duration := Notify.ClampDuration(duration)
 Sleep duration + 120
 ExitApp 0

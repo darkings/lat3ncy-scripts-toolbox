@@ -2,10 +2,21 @@
   "typeCheckingMode": "standard",
   "include": [
     "tools/tts",
-    "tools/raycast-scripts/ocr"
+    "tools/translate",
+    "tools/raycast-scripts/ocr",
+    "tools/rgb"
   ],
   "exclude": [
     "**/__pycache__",
-    ".worktrees"
+    ".worktrees",
+    "tools/rgb/lib",
+    "tools/rgb/lib_hid",
+    "tools/rgb/build",
+    "tools/rgb/dist",
+    "tools/rgb/hi75_data"
+  ],
+  "extraPaths": [
+    "tools/rgb/lib",
+    "tools/rgb/lib_hid"
   ]
 }

@@ -2,7 +2,7 @@
 
 # @raycast.schemaVersion 1
 # @raycast.title Restart AutoHotkey
-# @raycast.mode compact
+# @raycast.mode silent
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
 # @raycast.description Restart the toolbox AutoHotkey main script
@@ -132,8 +132,8 @@ if ($toolboxProcesses)
 $autoHotkey = Resolve-AutoHotkeyV2Executable
 if (-not $autoHotkey)
 {
-  Write-Output '× 未找到 AutoHotkey'
-  exit 1
+  # 走 trap：系统 Toast 报错，并让 Raycast silent 以非 0 退出。
+  throw '未找到 AutoHotkey'
 }
 $workingDirectory = Split-Path $resolvedMainScript -Parent
 $commandLine = '"{0}" "{1}"' -f $autoHotkey, $resolvedMainScript
@@ -157,4 +157,10 @@ if (-not $reloadedProcesses)
 }
 
 $processIds = ($reloadedProcesses.ProcessId | Sort-Object -Unique) -join ', '
-Write-Output "✓ AutoHotkey 已重载 (PID: $processIds)"
+# silent 会关 Raycast 窗口；Windows 上 stdout 不能稳定变成底部 HUD。
+# 成功改走共享通知；只有 HUD 启动失败时才把最后一行交给 Raycast。
+$successText = "AutoHotkey 已重载 (PID: $processIds)"
+if (-not (Show-ToolboxNotify -Type success -Icon '✓' -Text $successText -Duration 900))
+{
+  Write-Output "✓ $successText"
+}

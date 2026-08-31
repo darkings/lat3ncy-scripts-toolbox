@@ -82,8 +82,9 @@ if ($Port -gt 0) {
   $resolvedPort = $Port
   $portSource = "cli:-Port $Port"
 } else {
-  $resolvedPort = Get-DshPort -ConfiguredPort $cfg.server.port
-  $portSource = Get-DshPortSource -ConfiguredPort $cfg.server.port
+  $portInfo = Get-DshPortInfo -ConfiguredPort $cfg.server.port
+  $resolvedPort = [int]$portInfo.Port
+  $portSource = [string]$portInfo.Source
 }
 $probeTimeout = if ($cfg.watcher.probe_timeout) { [int]$cfg.watcher.probe_timeout } else { 12 }
 Emit "Target port: $resolvedPort (source: $portSource, https :$httpsPort)"
@@ -127,7 +128,7 @@ if ($relayEnabled) {
 # --- 5. 幂等配置 Serve ---
 Emit 'Checking existing Tailscale Serve config'
 $serveStatus = Get-TailscaleServeStatus
-$isOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort
+$isOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort -ServeStatus $serveStatus
 if ($isOn) {
   Emit "Serve already configured for :$targetPort, no change needed." 'ok'
 } else {
@@ -143,7 +144,7 @@ if ($isOn) {
   # 二次确认
   Start-Sleep -Milliseconds 800
   $serveStatus = Get-TailscaleServeStatus
-  $isOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort
+  $isOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort -ServeStatus $serveStatus
   if (-not $isOn) {
     Emit "Serve apply seems failed. Check 'tailscale serve status'." 'warn'
   }

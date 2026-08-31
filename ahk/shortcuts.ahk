@@ -7,12 +7,14 @@ class Shortcuts {
     ; 【AHK 工具层 (Caps 组合键)】
     ; ~ 让 CapsLock 自身的 key-down 回调立即执行；原生 CapsLock 仍由上方热键抑制。
     static SpeakSelectedText := "~CapsLock & s"
+    static TranslateSelectedText := "~CapsLock & f"
     static SearchSelectedText := "~CapsLock & g"
     static OpenSelectedTarget := "~CapsLock & o"
     static LocateSelectedTarget := "~CapsLock & e"
     static AlwaysOnTop := "~CapsLock & t"
     static HideActiveWindow := "~CapsLock & h"
     static ToggleHiddenFiles := "~CapsLock & ."
+    static ToggleDotfiles := "~CapsLock & ,"
     static ToggleFileExtensions := "~CapsLock & x"
     static AudioSwitcher := "~CapsLock & d"
     static KillForegroundProcess := "~CapsLock & q"

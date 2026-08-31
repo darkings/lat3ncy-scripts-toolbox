@@ -17,9 +17,22 @@ trap {
   exit 1
 }
 
-# 截图工具没有公开的命令行参数，只能注入系统热键 Win+Shift+S
-# （keybd_event 为低层注入，可触发系统注册热键）。
-Add-Type -TypeDefinition @"
+# 打开系统截图框后立刻退出。
+# 不再 Add-Type 编译、不再 Sleep 700ms、也不再探测 SnippingTool 进程：
+# 那些步骤只会让 Raycast 命令看起来“截取屏幕太慢”，框本身由系统拉起。
+function Invoke-ScreenClip {
+  try {
+    # ms-screenclip: 是 Win10/11 截图工具的公开协议，比模拟 Win+Shift+S 更快更稳。
+    Start-Process -FilePath "ms-screenclip:" | Out-Null
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Invoke-WinShiftS {
+  # 协议不可用时才编译一次 keybd_event，作为兜底。
+  Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 public static class SystemHotkeySim {
@@ -28,32 +41,50 @@ public static class SystemHotkeySim {
 }
 "@
 
-$VK_LWIN = 0x5B   # 左 Win
-$VK_SHIFT = 0x10  # Shift
-$VK_S = 0x53      # S
-$KEYEVENTF_KEYUP = 0x0002
+  $VK_LWIN = 0x5B   # 左 Win
+  $VK_SHIFT = 0x10  # Shift
+  $VK_S = 0x53      # S
+  $KEYEVENTF_KEYUP = 0x0002
 
-[SystemHotkeySim]::keybd_event($VK_LWIN, 0, 0, [UIntPtr]::Zero)
-[SystemHotkeySim]::keybd_event($VK_SHIFT, 0, 0, [UIntPtr]::Zero)
-[SystemHotkeySim]::keybd_event($VK_S, 0, 0, [UIntPtr]::Zero)
-Start-Sleep -Milliseconds 60
-[SystemHotkeySim]::keybd_event($VK_S, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
-[SystemHotkeySim]::keybd_event($VK_SHIFT, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
-[SystemHotkeySim]::keybd_event($VK_LWIN, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
-
-Start-Sleep -Milliseconds 700
-# Win11 22H2+ 用 ScreenClippingHost / ShellExperienceHost，旧版用 SnippingTool，全部兼容
-$snipProc = Get-Process -Name 'SnippingTool','ScreenClippingHost','ShellExperienceHost' -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $snipProc)
-{
-  # 兜底：Win+Shift+S 注入后系统可能还没拉起进程，稍等再查一次
-  Start-Sleep -Milliseconds 400
-  $snipProc = Get-Process -Name 'SnippingTool','ScreenClippingHost','ShellExperienceHost' -ErrorAction SilentlyContinue | Select-Object -First 1
-}
-if (-not $snipProc)
-{
-  Show-SystemToast -Title '× 截图失败' -Message '无法打开截图工具' | Out-Null
-  exit 1
+  [SystemHotkeySim]::keybd_event($VK_LWIN, 0, 0, [UIntPtr]::Zero)
+  [SystemHotkeySim]::keybd_event($VK_SHIFT, 0, 0, [UIntPtr]::Zero)
+  [SystemHotkeySim]::keybd_event($VK_S, 0, 0, [UIntPtr]::Zero)
+  Start-Sleep -Milliseconds 60
+  [SystemHotkeySim]::keybd_event($VK_S, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+  [SystemHotkeySim]::keybd_event($VK_SHIFT, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+  [SystemHotkeySim]::keybd_event($VK_LWIN, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
 }
 
+# 后台监视系统是否把 png 写进截图目录；OCR 入口禁止调用。
+function Start-CaptureSaveWatcher {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string] $StartedAt
+  )
+
+  $watcher = Join-Path $PSScriptRoot 'capture\watch-save.ps1'
+  if (-not (Test-Path -LiteralPath $watcher -PathType Leaf)) {
+    return
+  }
+
+  # 隐藏启动、不等待：不能让 Raycast silent 卡住。
+  # -STA：落盘后写剪贴板必须在单线程单元，否则 SetDataObject 会失败。
+  Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(
+    '-NoProfile',
+    '-STA',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', $watcher,
+    '-Mode', 'Screenshot',
+    '-StartedAt', $StartedAt
+  ) | Out-Null
+}
+
+# 先记下本地时间，再出框，后台用它排除旧文件。
+$startedAt = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffffff')
+
+if (-not (Invoke-ScreenClip)) {
+  Invoke-WinShiftS
+}
+
+Start-CaptureSaveWatcher -StartedAt $startedAt
 exit 0

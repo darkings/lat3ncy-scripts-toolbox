@@ -15,8 +15,8 @@ enabled = true
 port = 3090
 
 [watcher]
-# 轮询间隔（秒），检测 DSH 进程启停
-poll_interval = 5
+# 对账周期（秒）。事件驱动为主；配置值 < 30 会被忽略并继续用默认 60。
+poll_interval = 60
 # DSH 关闭后是否自动关闭暴露（true=短暂暴露，false=常驻暴露）
 auto_off = true
 # 等待 DSH 端口就绪的超时（秒）

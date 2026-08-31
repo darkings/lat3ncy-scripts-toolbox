@@ -77,10 +77,18 @@ function Test-FeatureLoadsIndependently
   $stubPath = Join-Path ([System.IO.Path]::GetTempPath()) (
     'lat3ncy-toolbox-feature-{0}.ahk' -f [guid]::NewGuid().ToString('N')
   )
+  # 生产入口统一加载 python helper。独立加载也始终注入：
+  # 朗读/翻译依赖 ToolboxPython，漏注入会弹 AHK 错误框并把 runner 卡死。
+  # AHK 对同一 helper 只会加载一次，重复注入本身无害。
+  $pythonHelper = Join-Path (Split-Path $NotifyRoot -Parent) 'python.ahk'
   $stub = @"
 #Requires AutoHotkey v2.0
+#SingleInstance Off
+#NoTrayIcon
+OnError (*) => ExitApp(1)
 #Include "$(Join-Path $NotifyRoot 'renderer.ahk')"
 #Include "$(Join-Path $NotifyRoot 'notify.ahk')"
+#Include "$pythonHelper"
 #Include "$FeaturePath"
 ExitApp 0
 "@
@@ -96,12 +104,19 @@ ExitApp 0
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
     $startInfo.Arguments = '/ErrorStdOut=UTF-8 "{0}"' -f $stubPath
 
     $process = [System.Diagnostics.Process]::Start($startInfo)
-    $standardOutput = $process.StandardOutput.ReadToEnd()
-    $standardError = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit(20000))
+    {
+      try { $process.Kill() } catch {}
+      throw "Feature independent AHK v2 load timed out: $FeaturePath"
+    }
+    $standardOutput = $stdoutTask.Result
+    $standardError = $stderrTask.Result
 
     if ($standardOutput)
     {
@@ -138,6 +153,7 @@ try
     (Join-Path $featureRoot 'always-on-top.ahk'),
     (Join-Path $featureRoot 'hide-active-window.ahk'),
     (Join-Path $featureRoot 'toggle-hidden-files.ahk'),
+    (Join-Path $featureRoot 'toggle-dotfiles.ahk'),
     (Join-Path $featureRoot 'toggle-file-extensions.ahk'),
     (Join-Path $featureRoot 'foreground-process.ahk'),
     (Join-Path $featureRoot 'search-selected-text.ahk'),
@@ -145,9 +161,11 @@ try
     (Join-Path $featureRoot 'open-selected-target.ahk'),
     (Join-Path $featureRoot 'locate-selected-target.ahk'),
     (Join-Path $featureRoot 'speak-selected-text.ahk'),
+    (Join-Path $featureRoot 'translate-selected-text.ahk'),
     (Join-Path $featureRoot 'audio-switcher.ahk'),
     (Join-Path $featureRoot 'switch-app-window.ahk'),
-    (Join-Path $notifyRoot 'run-nowindow.ahk')
+    (Join-Path $notifyRoot 'run-nowindow.ahk'),
+    (Join-Path (Split-Path $notifyRoot -Parent) 'python.ahk')
   )
   foreach ($featurePath in $independentFeatures)
   {
@@ -155,14 +173,19 @@ try
   }
 
   $raycastRoot = Join-Path (Join-Path $repoRoot 'tools') 'raycast-scripts'
+  $rgbRoot = Join-Path (Join-Path $repoRoot 'tools') 'rgb'
+  $themeRoot = Join-Path (Join-Path $repoRoot 'tools') 'theme-scheduler'
+  # 只做 AST 解析，绝不执行 install.ps1 / Install-*：那些脚本会改服务、计划任务和硬件。
   $powerShellScripts = @(
     (Join-Path (Join-Path $featureRoot 'smart-paste') 'save-clipboard-image.ps1'),
     (Join-Path (Join-Path $raycastRoot '_lib') 'notify.ps1'),
     (Join-Path $raycastRoot 'screenshot.ps1'),
     (Join-Path $raycastRoot 'screenshot-ocr.ps1'),
     (Join-Path $raycastRoot 'record-screen.ps1'),
+    (Join-Path (Join-Path $raycastRoot 'capture') 'watch-save.ps1'),
     (Join-Path $raycastRoot 'restart-autohotkey.ps1'),
     (Join-Path $raycastRoot 'reset-navicat.ps1'),
+    (Join-Path $raycastRoot 'open-neomutt.ps1'),
     (Join-Path (Join-Path $notifyRoot 'dev') 'capture.ps1'),
     (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'DshRemoteUtils.ps1'),
     (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Watch-DshRemote.ps1'),
@@ -170,9 +193,21 @@ try
     (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Stop-DshRemote.ps1'),
     (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Get-DshRemoteStatus.ps1'),
     (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Install-Watcher.ps1'),
+    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Restart-Watcher.ps1'),
     (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Uninstall-Watcher.ps1'),
-    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'theme-scheduler') 'ThemeUtils.ps1'),
-    (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'theme-scheduler') 'Update-ThemeSchedule.ps1')
+    (Join-Path $themeRoot 'ThemeUtils.ps1'),
+    (Join-Path $themeRoot 'Update-ThemeSchedule.ps1'),
+    (Join-Path $themeRoot 'Install-ThemeScheduler.ps1'),
+    (Join-Path $themeRoot 'Uninstall-ThemeScheduler.ps1'),
+    (Join-Path $themeRoot 'Set-Theme-Light.ps1'),
+    (Join-Path $themeRoot 'Set-Theme-Dark.ps1'),
+    (Join-Path $rgbRoot 'install.ps1'),
+    (Join-Path $rgbRoot 'Start-OpenRGB.ps1'),
+    (Join-Path $rgbRoot 'Stop-OpenRGB.ps1'),
+    (Join-Path $rgbRoot 'Start-Ambient.ps1'),
+    (Join-Path $rgbRoot 'Stop-Ambient.ps1'),
+    (Join-Path $rgbRoot 'Install-Ambient.ps1'),
+    (Join-Path $rgbRoot 'build_hi75.ps1')
   )
   foreach ($scriptPath in $powerShellScripts)
   {
@@ -195,12 +230,19 @@ try
   $startInfo.UseShellExecute = $false
   $startInfo.RedirectStandardOutput = $true
   $startInfo.RedirectStandardError = $true
+  $startInfo.CreateNoWindow = $true
   $startInfo.Arguments = '/ErrorStdOut=UTF-8 "{0}" --test "{1}" "{2}"' -f $testScript, $resultFile, $vsCodeTestRoot
 
   $process = [System.Diagnostics.Process]::Start($startInfo)
-  $standardOutput = $process.StandardOutput.ReadToEnd()
-  $standardError = $process.StandardError.ReadToEnd()
-  $process.WaitForExit()
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+  $stderrTask = $process.StandardError.ReadToEndAsync()
+  if (-not $process.WaitForExit(60000))
+  {
+    try { $process.Kill() } catch {}
+    throw 'AutoHotkey core assertions timed out'
+  }
+  $standardOutput = $stdoutTask.Result
+  $standardError = $stderrTask.Result
 
   if ($standardOutput)
   {

@@ -12,7 +12,8 @@
 # OCR 引擎切换：ocr/config.toml 的顶层 "ocr" 字段
 #   "system"   （默认）Win+Shift+T 系统文本操作（Windows 11 23H2+），
 #               框选识别复制全部由系统完成，本脚本不弹通知
-#   "rapidocr" 旧方案：pythonw + RapidOCR（ctypes 注入 Win+Shift+S），识别后弹气泡
+#   "rapidocr" 旧方案：先打开截图框，再 pythonw + RapidOCR（--no-screenshot），
+#               识别后弹气泡。框选不再被 ONNX 冷启动挡住。
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
@@ -22,6 +23,37 @@ trap {
   Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
   # 已通过系统 Toast 统一提示，避免再触发 Raycast 自带的错误气泡
   exit 0
+}
+
+function Invoke-ScreenClip {
+  try {
+    # 先出系统截图框，避免 PowerShell/Python/模型加载挡住框选。
+    # OCR 只复制文字，禁止启动 capture/watch-save.ps1：
+    # 自动保存开着时系统仍可能写 png，但本命令不报保存路径。
+    Start-Process -FilePath "ms-screenclip:" | Out-Null
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Invoke-WinShiftS {
+  Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class RapidOcrHotkeySim {
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+}
+"@
+
+  [RapidOcrHotkeySim]::keybd_event(0x5B, 0, 0, [UIntPtr]::Zero)      # Win 按下
+  [RapidOcrHotkeySim]::keybd_event(0x10, 0, 0, [UIntPtr]::Zero)      # Shift 按下
+  [RapidOcrHotkeySim]::keybd_event(0x53, 0, 0, [UIntPtr]::Zero)      # S 按下
+  Start-Sleep -Milliseconds 60
+  [RapidOcrHotkeySim]::keybd_event(0x53, 0, 0x0002, [UIntPtr]::Zero) # S 抬起
+  [RapidOcrHotkeySim]::keybd_event(0x10, 0, 0x0002, [UIntPtr]::Zero) # Shift 抬起
+  [RapidOcrHotkeySim]::keybd_event(0x5B, 0, 0x0002, [UIntPtr]::Zero) # Win 抬起
 }
 
 # ---------- 读取 OCR 模式配置（TOML 顶层键，正则解析） ----------
@@ -44,7 +76,13 @@ if (Test-Path -LiteralPath $configPath)
 
 if ($mode -eq 'rapidocr')
 {
-  # ================= RapidOCR 分支（原方案，保留备用） =================
+  # ================= RapidOCR 分支 =================
+  # 必须先出框，再启动 pythonw。ocr.py 用 --no-screenshot，只轮询剪贴板并识别。
+  if (-not (Invoke-ScreenClip))
+  {
+    Invoke-WinShiftS
+  }
+
   $ocrScript = Join-Path $PSScriptRoot 'ocr\ocr.py'
   if (-not (Test-Path -LiteralPath $ocrScript -PathType Leaf))
   {
@@ -67,7 +105,7 @@ if ($mode -eq 'rapidocr')
     'lat3ncy-ocr-result-{0}.txt' -f [guid]::NewGuid().ToString('N')
   )
   $process = Start-Process -FilePath $pythonw.Source `
-    -ArgumentList ('"{0}"' -f $ocrScript), '--result-file', ('"{0}"' -f $resultFile) `
+    -ArgumentList ('"{0}"' -f $ocrScript), '--no-screenshot', '--result-file', ('"{0}"' -f $resultFile) `
     -PassThru
   $process.WaitForExit(90000) | Out-Null
 

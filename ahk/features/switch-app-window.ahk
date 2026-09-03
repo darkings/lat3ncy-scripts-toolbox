@@ -129,10 +129,18 @@ class SwitchAppWindow {
         return Mod(currentIndex - 1 + direction + count, count) + 1
     }
 
+    ; 单窗口时的应用内回退。key 必须是小写进程名；数组：[正向, 反向]
+    static SingleWindowFallbacks := Map(
+        "zed.exe", ["{F13}", "{F14}"],
+        "msedge.exe", ["^{PgDn}", "^{PgUp}"]
+    )
+
     static SingleWindowShortcut(processName, direction) {
-        if (StrLower(processName) != "zed.exe")
+        name := StrLower(processName)
+        if !this.SingleWindowFallbacks.Has(name)
             return ""
-        return direction > 0 ? "{F13}" : "{F14}"
+        keys := this.SingleWindowFallbacks[name]
+        return direction > 0 ? keys[1] : keys[2]
     }
 
     static Reset(*) {

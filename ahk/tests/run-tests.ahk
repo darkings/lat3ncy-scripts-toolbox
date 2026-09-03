@@ -371,6 +371,8 @@ AssertEqual(true, SwitchAppWindow.Contains([10, 20, 30], 20), "same-app snapshot
 AssertEqual(false, SwitchAppWindow.Contains([10, 20, 30], 40), "same-app snapshot excludes HWND")
 AssertEqual("{F13}", SwitchAppWindow.SingleWindowShortcut("Zed.exe", 1), "Zed single window steps forward")
 AssertEqual("{F14}", SwitchAppWindow.SingleWindowShortcut("zed.exe", -1), "Zed single window steps backward")
+AssertEqual("^{PgDn}", SwitchAppWindow.SingleWindowShortcut("msedge.exe", 1), "Edge single window steps forward")
+AssertEqual("^{PgUp}", SwitchAppWindow.SingleWindowShortcut("MSEdge.exe", -1), "Edge single window steps backward")
 AssertEqual("", SwitchAppWindow.SingleWindowShortcut("Code.exe", 1), "other single-window apps do not fall back")
 AssertEqual("normal-paste", SmartPaste.ChooseAction(true, true, true, false), "file list wins over image")
 AssertEqual("normal-paste", SmartPaste.ChooseAction(false, false, true, false), "non-image Explorer paste stays native")

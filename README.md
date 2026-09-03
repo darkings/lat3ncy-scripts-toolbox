@@ -22,6 +22,7 @@ AutoHotkey.exe .\ahk\main.ahk
 
 也可以为 `ahk/main.ahk` 创建快捷方式并放入 Windows 启动文件夹（`Win+R` 后输入 `shell:startup`），让工具箱登录后自动运行。
 
+- CapsLock 短按切中/英、长按进大写；状态 HUD 默认走 `tools/ime-hud/ImeHud.exe`（`中` / `A` / 大写底线）。效果不理想时把 `CapsLockIme.UseImeHud` 设为 `false`，立刻回退 AHK 芯片；完整回退用 `git checkout ime-hud-ahk-baseline`。
 - `ahk/shortcuts.ahk` 只保存快捷键配置，`ahk/hotkey-router.ahk` 统一完成校验与注册，`ahk/features/` 只实现功能。
 - 修改按键只编辑 `ahk/shortcuts.ahk`；停用某项功能时，在 Router 中注释对应的注册项即可，feature 文件无需修改。
 - 如果两个已启用功能使用了相同快捷键，脚本会在启动时报错，避免其中一个功能被静默覆盖。
@@ -116,7 +117,7 @@ powershell.exe -NoProfile -File .\ahk\tests\run-tests.ps1
 
 ## 统一通知
 
-AHK feature 与 Raycast PowerShell 脚本共用 `shared/notify/renderer.ahk` 绘制的 Win11 Fluent 级自适应 HUD。视觉参数统一在 Renderer 中维护；feature 统一调用 `Notify.State()`、`Notify.Info()`、`Notify.Success()` 或 `Notify.Error()`，不得自行创建通知 GUI 或直接调用 `ToolTip`。
+AHK feature 与 Raycast PowerShell 脚本共用 `shared/notify/renderer.ahk` 绘制的 Win11 Fluent 级自适应 HUD。视觉参数统一在 Renderer 中维护；feature 统一调用 `Notify.State()`、`Notify.Info()`、`Notify.Success()` 或 `Notify.Error()`，不得自行创建通知 GUI 或直接调用 `ToolTip`。**例外：** CapsLock 的中 / 英 / 大写状态默认走独立进程 `tools/ime-hud/ImeHud.exe`（NoActivate popup + Desktop Acrylic + DWM 小圆角），失败或 `UseImeHud=false` 时回退 `Notify.State()` 芯片。
 
 - **4 级全场景输入锚点定位引擎（C# + UIA）**：
   - **L1（Win32 Caret）**：通过 `GetGUIThreadInfo` 捕获传统 Win32 控件光标。
@@ -129,7 +130,7 @@ AHK feature 与 Raycast PowerShell 脚本共用 `shared/notify/renderer.ahk` 绘
   - **浅色模式（Light Mode）**：极简纯白 `#FFFFFF` 背景、`#18181B` 高对比度墨黑文字、`#E4E4E7` 1px 浅灰色立体边框。
   - 硬件级亚像素抗锯齿大圆角（`DWMWA_WINDOW_CORNER_PREFERENCE`）与 1px 细描边（`DWMWA_BORDER_COLOR`）。
 - **调用链路**：
-  - AHK 调用链：`state`（输入法中 / A / ⇪）走 `Notify` → `NotifyRenderer` 的 28×28 芯片 HUD，失败回退 `ToolTip`；`success` / `info` / `error` 走 `Notify` → `toast.ps1` 系统 Toast，找不到脚本或启动失败时回退 `ToolTip`。
+  - AHK 调用链：CapsLock 的 `CN` / `EN` / `CAPS` 走 `ImeHud.exe`（`中` / `A` / 大写底线），失败回退 `NotifyRenderer` 芯片；其它 `state` / `popup` 仍走 `Notify` → `NotifyRenderer`；`success` / `info` / `error` 走 `Notify` → `toast.ps1` 系统 Toast，找不到脚本或启动失败时回退 `ToolTip`。
   - 共享资源（`toast.ps1`、`anchor-locator.exe`）通过 `shared/notify/paths.ahk` 按入口脚本目录解析，不写死本机绝对路径。
   - 默认不写调试日志；仅启动参数 `--debug` 或环境变量 `LAT3NCY_DEBUG=1` 时写入 `%TEMP%\lat3ncy-toolbox-notify.log`。
   - Raycast 调用链：script → `tools/raycast-scripts/_lib/notify.ps1` → `notify.exe` 或 `notify-cli.ahk`；调用失败时由脚本 `Write-Output`，交给 Raycast HUD 显示。
@@ -405,6 +406,7 @@ lat3ncy-scripts-toolbox/
 │   ├── python.ahk            # 本机 pythonw 解析；由 ahk/main.ahk 统一加载，朗读/翻译共用
 │   └── notify/               # AHK/Raycast 共用通知 API、Renderer、CLI 与 dev 视觉测试
 ├── tools/
+│   ├── ime-hud/              # CapsLock 中/英/大写候选框式 HUD（AHK 检测，ImeHud.exe 显示）
 │   ├── audio-switcher/       # Caps+D 音频切换（G27Q2 ↔ AirPods 自动拉起，config.toml 可配置）
 │   ├── rgb/                  # RGB Ambient 桌面取色（mss + 官方 OpenRGB 系统服务 + Hi75 Col06）
 │   ├── navicat-refresh/      # Navicat 试用期重置（仅限合法授权测试环境）

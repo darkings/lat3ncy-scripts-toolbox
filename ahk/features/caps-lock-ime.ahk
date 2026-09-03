@@ -1,4 +1,5 @@
 #Requires AutoHotkey v2.0
+#Include ..\..\shared\notify\ime-hud.ahk
 
 ; ============================================================
 ; CapsLock 输入法 / 大写状态机
@@ -36,6 +37,8 @@ class CapsLockIme {
     static ChordImeLockoutMs := 180
     static MessageTimeout := 80
     static RestoreImeAfterCaps := true
+    ; true = ImeHud.exe 候选框式 HUD；false = 立刻回退 AHK NotifyRenderer 芯片。
+    static UseImeHud := true
     ; --- 跨窗口恢复：改这里 ---
     static PersistImeAcrossWindows := true
     static ImeWatchIntervalMs := 120
@@ -127,9 +130,9 @@ class CapsLockIme {
         if shouldToggleIme {
             newState := this.ToggleIme()
             if (newState = "chinese")
-                Notify.State("中", "中")
+                this.ShowImeHud("CN")
             else if (newState = "english")
-                Notify.State("A", "A")
+                this.ShowImeHud("EN")
             else
                 Notify.State("↔", "已切换")
         }
@@ -196,7 +199,7 @@ class CapsLockIme {
         ; 大写输入必须使用英文；直接 API 失败时 SetImeState 会做受控回退。
         this.SetImeState("english")
         SetCapsLockState "On"
-        Notify.State("⇪", "⇪")
+        this.ShowImeHud("CAPS")
     }
 
     static ExitCapsMode() {
@@ -216,9 +219,9 @@ class CapsLockIme {
         }
 
         if (desiredState = "chinese" && restored)
-            Notify.State("中", "中")
+            this.ShowImeHud("CN")
         else if (desiredState = "english" && restored)
-            Notify.State("A", "A")
+            this.ShowImeHud("EN")
         else
             Notify.Error("!", "输入法恢复失败")
 
@@ -249,6 +252,41 @@ class CapsLockIme {
         newState := this.GetCurrentImeState()
         this.RememberImeState(newState)
         return newState
+    }
+
+    ; 中 / 英 / 大写走 ImeHud.exe。
+    ; kind: "CN" | "EN" | "CAPS"。失败、测试入口或 UseImeHud=false 时回退 AHK 芯片。
+    static ShowImeHud(kind) {
+        if this.UseImeHud && this.IsImeHudEnabled() {
+            try {
+                if ImeHud.Show(kind)
+                    return true
+            } catch {
+                ; 显示层失败不能影响输入法切换。
+            }
+        }
+        switch kind {
+            case "CN":
+                Notify.State("中", "中")
+            case "EN":
+                Notify.State("A", "A")
+            case "CAPS":
+                Notify.State("⇪", "⇪")
+            default:
+                Notify.State("↔", "已切换")
+        }
+        return false
+    }
+
+    ; 只在生产入口 main.ahk 启用 ImeHud，避免契约测试和独立加载 stub 拉起 exe。
+    static IsImeHudEnabled() {
+        if (A_ScriptName != "main.ahk")
+            return false
+        for arg in A_Args {
+            if (arg = "--test")
+                return false
+        }
+        return true
     }
 
     ; 只记住明确的中/英。unknown 不能覆盖，避免误把下次恢复打反。

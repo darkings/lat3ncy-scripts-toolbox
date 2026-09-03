@@ -165,6 +165,7 @@ try
     (Join-Path $featureRoot 'audio-switcher.ahk'),
     (Join-Path $featureRoot 'switch-app-window.ahk'),
     (Join-Path $notifyRoot 'run-nowindow.ahk'),
+    (Join-Path $notifyRoot 'ime-hud.ahk'),
     (Join-Path (Split-Path $notifyRoot -Parent) 'python.ahk')
   )
   foreach ($featurePath in $independentFeatures)
@@ -209,6 +210,18 @@ try
     (Join-Path $rgbRoot 'Install-Ambient.ps1'),
     (Join-Path $rgbRoot 'build_hi75.ps1')
   )
+  $imeHudDll = Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'ime-hud') 'ImeHud.dll'
+  if (-not (Test-Path -LiteralPath $imeHudDll -PathType Leaf))
+  {
+    throw "ImeHud.dll is missing; publish tools/ime-hud before running tests"
+  }
+  & dotnet exec $imeHudDll --self-test
+  if ($LASTEXITCODE -ne 0)
+  {
+    throw ("ImeHud --self-test failed with exit code {0}" -f $LASTEXITCODE)
+  }
+  [Console]::Out.WriteLine('PASS: ImeHud --self-test')
+
   foreach ($scriptPath in $powerShellScripts)
   {
     $parseErrors = $null

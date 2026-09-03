@@ -42,6 +42,28 @@ class NotifyPaths {
         return this.Resolve("toast.ps1")
     }
 
+    ; IME 状态 HUD。不放在 shared/notify，避免和普通芯片 HUD 混在一起。
+    static ImeHudExe() {
+        candidates := [
+            A_ScriptDir "\..\tools\ime-hud\ImeHud.exe",
+            A_ScriptDir "\..\..\tools\ime-hud\ImeHud.exe",
+            A_ScriptDir "\..\..\..\tools\ime-hud\ImeHud.exe",
+            A_WorkingDir "\tools\ime-hud\ImeHud.exe",
+            A_WorkingDir "\..\tools\ime-hud\ImeHud.exe",
+            A_WorkingDir "\..\..\tools\ime-hud\ImeHud.exe"
+        ]
+        seen := Map()
+        for candidate in candidates {
+            full := this.Expand(candidate)
+            if (full = "" || seen.Has(StrLower(full)))
+                continue
+            seen[StrLower(full)] := true
+            if FileExist(full)
+                return full
+        }
+        return ""
+    }
+
     ; 相对路径转绝对路径，避免 Run/RunWait 依赖工作目录。
     static Expand(path) {
         chars := DllCall(

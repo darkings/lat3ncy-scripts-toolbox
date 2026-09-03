@@ -40,3 +40,8 @@ __pycache__/
 /tools/rgb/PawnIO_setup.exe
 /tools/rgb/build/
 /tools/rgb/dist/
+
+# ImeHud：源码入库；bin/obj 与调试符号忽略。发布产物 ImeHud.exe/.dll/.json 入库。
+/tools/ime-hud/bin/
+/tools/ime-hud/obj/
+/tools/ime-hud/*.pdb

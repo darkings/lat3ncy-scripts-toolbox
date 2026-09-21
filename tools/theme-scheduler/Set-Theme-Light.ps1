@@ -18,6 +18,9 @@ if ($config.wallpaper.enabled -and $config.wallpaper.light_wallpaper)
   Set-DesktopWallpaper -ImagePath $config.wallpaper.light_wallpaper | Out-Null
 }
 
+# 颜色切完再换指针；缺文件或关闭 cursor.enabled 时静默跳过。
+Set-WindowsCursorScheme -Mode 'light' -Config $config | Out-Null
+
 if ($config.general.show_notification)
 {
   Invoke-ThemeNotify -Type 'info' -Icon '☀️' -Text '已切换为浅色模式'

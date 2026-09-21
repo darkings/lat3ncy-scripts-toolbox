@@ -10,6 +10,7 @@ __pycache__/
 **/*.md
 !/README.md
 !/tools/*/README.md
+!/resources/cursors/README.md
 !/findings.md
 !/progress.md
 !/task_plan.md
@@ -41,7 +42,8 @@ __pycache__/
 /tools/rgb/build/
 /tools/rgb/dist/
 
-# ImeHud：源码入库；bin/obj 与调试符号忽略。发布产物 ImeHud.exe/.dll/.json 入库。
-/tools/ime-hud/bin/
-/tools/ime-hud/obj/
-/tools/ime-hud/*.pdb
+# WinUI IME HUD：源码入库；bin/obj/out 与调试符号忽略。
+/tools/ime-hud-winui/bin/
+/tools/ime-hud-winui/obj/
+/tools/ime-hud-winui/out/
+/tools/ime-hud-winui/*.pdb

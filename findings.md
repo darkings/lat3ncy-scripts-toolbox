@@ -30,7 +30,7 @@
 |------|---------|
 | Raycast 乱码 `鈭?` | 补 BOM，统一 ✓ |
 | `screenshot-ocr` 走 Raycast 气泡 | trap exit 0 + Show-SystemToast 统一 |
-| 没有「Raycast 窗口底部提示后再关窗」的 mode | `compact` 留窗；`silent` 关窗。Windows 上 `silent` 的 stdout HUD 不稳，成功改走 `Show-ToolboxNotify`，失败走系统 Toast |
+| 没有「Raycast 窗口底部提示后再关窗」的 mode | `compact` 留窗；`silent` 关窗。Windows 上 `silent` 的 stdout HUD 不稳，成功/失败都走 `Show-SystemToast` |
 | WASAPI 找不到未建链 AirPods | DeviceDesc+注册表+MaskAll |
 | 旧 Watcher 进程仍写 `Reconcile (periodic 60s)` | 源码已改静默对账；需 `/End` + `/Run` 重载，不能只改文件 |
 | `schtasks /FO LIST /V` 经隐藏进程读中文系统乱码 | 状态查询改走 `Get-ScheduledTask`，schtasks 只作回退 |

@@ -1,5 +1,6 @@
 #Requires AutoHotkey v2.0
 #Include ..\..\shared\notify\run-nowindow.ahk
+#Include ..\..\shared\notify\translation-panel.ahk
 
 class TranslateSelectedText {
     static CachedRepoDir := ""
@@ -52,6 +53,14 @@ class TranslateSelectedText {
         if IsSet(receiverProbe)
             return receiverProbe.Call(this)
 
+        ; 热键瞬间的屏幕物理像素。必须先记，不能等 Ctrl+C / 翻译完成后再读光标。
+        ; AHK v2 默认 CoordMode Mouse=Client：右边窗口里的客户区 (336,378)
+        ; 会被 WinUI 当成屏幕坐标，面板就会落到左半边。本热键线程只改 Mouse。
+        CoordMode "Mouse", "Screen"
+        hotkeyX := 0
+        hotkeyY := 0
+        MouseGetPos &hotkeyX, &hotkeyY
+
         savedClipboard := ClipboardAll()
         selected := ""
         try {
@@ -93,10 +102,13 @@ class TranslateSelectedText {
             cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '" --output-file "' outputFile '"'
             if FileExist(configPath)
                 cmd .= ' --config "' configPath '"'
+            ; 翻译一开始就打开 WinUI 面板显示原文。
+            TranslationPanel.OpenText(selected, hotkeyX, hotkeyY)
             ; 腾讯云 4s + Google/MyMemory 回退；略大于 3*timeout_s，避免父进程先杀。
             ProcessNoWindow.RunWait(cmd, "", 14000)
 
             if !FileExist(outputFile) {
+                TranslationPanel.Close()
                 Notify.Error("×", "翻译失败")
                 return
             }
@@ -106,15 +118,16 @@ class TranslateSelectedText {
                 text := this.ParseField(content, "text")
                 text := Trim(text, "`r`n")
                 if (text = "") {
+                    TranslationPanel.Close()
                     Notify.Error("!", "未包含可翻译文字")
                     return
                 }
-                ; HUD 只显示译文；密钥/网络错误走系统 Toast。
-                Notify.Popup(text)
+                ; 面板填显式译文；密钥/网络错误关闭面板后走系统 Toast。
+                TranslationPanel.SetResult(text)
                 return
             }
-            ; 失败时收掉上一份译文气泡，避免 HUD 还挂着旧结果。
-            try NotifyRenderer.Hide()
+            ; 失败时关掉翻译面板，避免还挂着旧原文 / 占位译文。
+            TranslationPanel.Close()
             code := this.ParseField(content, "code")
             message := this.ParseField(content, "message")
             ; Python 已写好「腾讯云密钥无效 / 阿里云密钥无效」；缺省时用通用文案。
@@ -124,6 +137,7 @@ class TranslateSelectedText {
                 message := "翻译失败"
             Notify.Error("×", message)
         } catch as err {
+            TranslationPanel.Close()
             if InStr(err.Message, "超时")
                 Notify.Error("×", "翻译超时")
             else

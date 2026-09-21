@@ -1,4 +1,4 @@
-# 系统捕获落盘监视器：等 Windows 写出文件后，复制到剪贴板并报告路径。
+﻿# 系统捕获落盘监视器：等 Windows 写出文件后，复制到剪贴板并报告路径。
 # 由 screenshot.ps1 / record-screen.ps1 隐藏启动；screenshot-ocr.ps1 禁止调用。
 param(
   # Screenshot：等 ScreenClippingHost 结束再扫截图目录。

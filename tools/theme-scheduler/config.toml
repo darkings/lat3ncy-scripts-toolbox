@@ -56,3 +56,19 @@ dark_wallpaper = ""
 #   2. 填完整绝对路径：例如 "C:\Windows\Resources\Themes\aero.theme" 或 "D:\Themes\MyTheme.theme"
 light_theme_file = "light.theme"
 dark_theme_file  = "dark.theme"
+
+# ============================================================
+# 鼠标方案联动（可选，独立于壁纸）
+# ============================================================
+[cursor]
+# 切深浅色时同步换鼠标。false 则只切颜色/壁纸，不改光标。
+enabled = true
+
+# 光标目录。留空则用仓库 resources/cursors/light 与 resources/cursors/dark。
+# 也可填相对仓库根的路径，或绝对路径。
+light_dir = ""
+dark_dir  = ""
+
+# 写入「鼠标属性」方案名。只在本机注册表出现，不覆盖系统自带方案。
+light_scheme = "Cursor Concept 3 Light"
+dark_scheme  = "Cursor Concept 3 Dark"

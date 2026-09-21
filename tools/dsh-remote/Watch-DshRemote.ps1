@@ -1,4 +1,4 @@
-﻿# Watch-DshRemote.ps1
+# Watch-DshRemote.ps1
 # Event-driven + periodic reconcile hybrid watcher
 # - Primary: WMI __InstanceCreationEvent / __InstanceDeletionEvent WITHIN 2s (no admin, script sleeps 0 CPU)
 # - Fallback: reconcile every 60s + immediate reconcile on start, survives crash/missed events
@@ -32,6 +32,8 @@ $probeTimeout = if ($cfg.watcher.probe_timeout) { [int]$cfg.watcher.probe_timeou
 
 # 上次已记录的 relay PID；复用已有进程时不再刷 "Relay ready"。
 $script:LastRelayPid = 0
+# 上次核心 bundle 体检结果（$null=未知）。只记状态变化，避免每轮刷屏。
+$script:LastBundleState = $null
 # 本会话是否见过 DSH 在跑。开机残留 Serve 清理不能弹「已关闭」。
 $script:SeenDshThisSession = $false
 $logFile = Join-Path $PSScriptRoot "watcher.log"
@@ -81,11 +83,48 @@ function Sync-RemoteState {
   $portSource = [string]$portInfo.Source
   $targetPort = if ($relayEnabled) { $relayPort } else { $resolvedPort }
   $dshRunning = Test-DshProcessRunning -Snapshot $snapshot
-  # 端口监听也视为运行（强化：即使进程查询受限，只要 3081 在 Listen 就认为 DSH 在线）
-  if (-not $dshRunning) {
+  # 端口监听也视为运行（强化：即使进程查询受限，只要端口在 Listen 就认为 DSH 在线）。
+  # 端口解析失败（$resolvedPort -le 0）时不能当成在线——否则会把 relay 指向端口 0。
+  if (-not $dshRunning -and $resolvedPort -gt 0) {
     try { if (Test-DshListening -Port $resolvedPort) { $dshRunning = $true } } catch {}
   }
+  if ($resolvedPort -le 0) {
+    if ($dshRunning) { Write-Log "WARN: DSH process present but port unresolved ($portSource) - skip this round" }
+    $dshRunning = $false
+  }
   if ($dshRunning) { $script:SeenDshThisSession = $true }
+
+  # 核心 bundle 体检（每轮对账都做，与暴露状态无关）。
+  # 缺失时 /api 不会挂载，远端会「页面能开但功能全废」。这里只记一次状态变化，
+  # 避免每 60s 刷屏；真正阻止暴露的判定在下面的 expose 分支里。
+  $bundleState = Test-DshCoreBundles
+  if (-not $bundleState.Unknown) {
+    if ($bundleState.Ok) {
+      if ($script:LastBundleState -eq $false) { Write-Log "Core bundles restored; /api should mount on next DSH start" }
+      $script:LastBundleState = $true
+    } else {
+      $names = ($bundleState.Missing | ForEach-Object { $_.Name }) -join ', '
+      if ($script:LastBundleState -ne $false) {
+        Write-Log "WARN: core bundle(s) missing: $names -> /api is not mounted (remote UI will not work)"
+      }
+      # 缺失且可复原：立刻补建，让用户下次重启 DSH 即可恢复。
+      if ($bundleState.Restorable.Count -gt 0) {
+        $repair = Repair-DshCoreBundles
+        if ($repair.Created.Count -gt 0) {
+          Write-Log "Linked missing core bundle(s): $($repair.Created -join ', ') - restart DSH Desktop to apply"
+          if (-not $NoNotify) { Invoke-DshRemoteNotify -Type "error" -Text "DSH profile repaired; restart DSH Desktop" }
+        } elseif ($repair.Failed.Count -gt 0) {
+          $firstErr = $repair.Failed[0].Error
+          Write-Log "WARN: could not link core bundle(s): $firstErr"
+          Write-Log "      open DSH Settings -> Plugins and toggle any plugin to trigger a profile reinstall"
+        }
+      } elseif ($script:LastBundleState -ne $false) {
+        Write-Log "WARN: missing bundle(s) not in dependency tree; run a plugin add/remove to reinstall"
+      }
+      $script:LastBundleState = $false
+    }
+  }
+
   if ($dshRunning -and $relayEnabled) {
     try {
       $relayProc = Start-DshRelay -TargetPort $resolvedPort -ListenPort $relayPort
@@ -109,6 +148,26 @@ function Sync-RemoteState {
   $serveOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort -ServeStatus $raw
 
   if ($dshRunning -and -not $serveOn) {
+    # 暴露前先确认核心 bundle 齐全：缺失时 /api 没挂载，暴露出去只会得到一个
+    # 「页面能开、功能全废」的远端。此时先尝试自动补建 junction，本轮不暴露。
+    $bundleState = Test-DshCoreBundles
+    if (-not $bundleState.Unknown -and -not $bundleState.Ok) {
+      $names = ($bundleState.Missing | ForEach-Object { $_.Name }) -join ', '
+      if ($bundleState.Restorable.Count -gt 0) {
+        $repair = Repair-DshCoreBundles
+        if ($repair.Created.Count -gt 0) {
+          Write-Log "Core bundle(s) missing ($names) -> linked from dependency tree: $($repair.Created -join ', ')"
+          Write-Log "Restart DSH Desktop for the plugin tree to reload; not exposing :$targetPort yet"
+          if (-not $NoNotify) { Invoke-DshRemoteNotify -Type "error" -Text "DSH profile repaired; restart DSH Desktop" }
+        } else {
+          Write-Log "WARN: core bundle(s) missing ($names) and could not be linked -> not exposing :$targetPort"
+        }
+      } else {
+        Write-Log "WARN: core bundle(s) missing ($names), not present in dependency tree -> run a plugin add/remove to reinstall"
+      }
+      return
+    }
+
     Write-Log "DSH running but Serve OFF -> exposing :$targetPort (source: $portSource, backend :$resolvedPort)"
     $deadline = (Get-Date).AddSeconds($probeTimeout)
     $ok = $false

@@ -8,6 +8,7 @@ Hi75 走 hidapi Feature Report，不经过 OpenRGB。
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import subprocess
 import sys
@@ -44,6 +45,163 @@ CONFIG_PATH = ROOT / "config.toml"
 LOG_DIR = ROOT / "logs"
 # OpenRGB 设备名子串；B550M DS3H 不含 "gigabyte"，必须单独匹配
 DEFAULT_OPENRGB_MATCH = ("gigabyte", "b550", "ds3h")
+# Raycast 开关灯 / Stop-Ambient 优雅退出。不放仓库目录，避免进 git。
+LIGHTS_DISABLED_NAME = "rgb-disabled.flag"
+QUIT_REQUEST_NAME = "rgb-quit.flag"
+
+
+def _state_dir() -> Path:
+    """%LOCALAPPDATA%\\lat3ncy-toolbox；LOCALAPPDATA 缺失时回落到用户目录。"""
+    base = os.environ.get("LOCALAPPDATA")
+    if not base:
+        base = str(Path.home() / "AppData" / "Local")
+    return Path(base) / "lat3ncy-toolbox"
+
+
+def lights_disabled_flag() -> Path:
+    return _state_dir() / LIGHTS_DISABLED_NAME
+
+
+def quit_request_flag() -> Path:
+    return _state_dir() / QUIT_REQUEST_NAME
+
+
+def lights_are_disabled() -> bool:
+    return lights_disabled_flag().is_file()
+
+
+def consume_quit_request() -> bool:
+    """Stop-Ambient 会写这个文件；读到就删，避免下次启动立刻退出。"""
+    path = quit_request_flag()
+    if not path.is_file():
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    return True
+
+
+def install_windows_shutdown_watch(on_shutdown: Any) -> None:
+    """pythonw 没有控制台。隐藏消息窗口收 WM_QUERYENDSESSION，关机前推黑。"""
+    if sys.platform != "win32":
+        return
+
+    def _thread() -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # wintypes.LPARAM 在 Win64 是 c_long(32 位)，指针消息会 OverflowError。
+        lresult = ctypes.c_ssize_t
+        wparam_t = ctypes.c_size_t
+        lparam_t = ctypes.c_ssize_t
+        hcursor = wintypes.HANDLE
+        wndproc_t = ctypes.WINFUNCTYPE(
+            lresult, wintypes.HWND, wintypes.UINT, wparam_t, lparam_t
+        )
+        user32.DefWindowProcW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wparam_t,
+            lparam_t,
+        ]
+        user32.DefWindowProcW.restype = lresult
+        user32.RegisterClassW.argtypes = [ctypes.c_void_p]
+        user32.RegisterClassW.restype = wintypes.ATOM
+        user32.CreateWindowExW.restype = wintypes.HWND
+        user32.GetMessageW.argtypes = [
+            ctypes.POINTER(wintypes.MSG),
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.UINT,
+        ]
+        user32.GetMessageW.restype = ctypes.c_int
+        wm_queryendsession = 0x0011
+        wm_endsession = 0x0016
+        error_class_already_exists = 1410
+        ws_ex_toolwindow = 0x00000080
+        ws_ex_noactivate = 0x08000000
+        # HWND_MESSAGE 收不到 WM_QUERYENDSESSION 广播，必须建隐藏顶层窗口。
+        fired = False
+
+        class WndClass(ctypes.Structure):
+            _fields_ = [
+                ("style", wintypes.UINT),
+                ("lpfnWndProc", wndproc_t),
+                ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wintypes.HINSTANCE),
+                ("hIcon", wintypes.HICON),
+                ("hCursor", hcursor),
+                ("hbrBackground", wintypes.HBRUSH),
+                ("lpszMenuName", wintypes.LPCWSTR),
+                ("lpszClassName", wintypes.LPCWSTR),
+            ]
+
+        def _fire() -> None:
+            nonlocal fired
+            if fired:
+                return
+            fired = True
+            try:
+                on_shutdown()
+            except Exception as exc:
+                print(f"[ambient] shutdown handler fail {exc}")
+
+        @wndproc_t
+        def wndproc(hwnd: int, msg: int, wparam: int, lparam: int) -> int:
+            if msg == wm_queryendsession:
+                _fire()
+                return 1
+            if msg == wm_endsession:
+                _fire()
+                return 0
+            return int(user32.DefWindowProcW(hwnd, msg, wparam, lparam))
+
+        wc = WndClass()
+        wc.lpfnWndProc = wndproc
+        wc.hInstance = kernel32.GetModuleHandleW(None)
+        wc.lpszClassName = f"lat3ncy-ambient-shutdown-{os.getpid()}"
+        atom = user32.RegisterClassW(ctypes.byref(wc))
+        if not atom:
+            err = ctypes.get_last_error()
+            if err != error_class_already_exists:
+                print(f"[ambient] RegisterClassW failed {err}, shutdown off may miss")
+                return
+        hwnd = user32.CreateWindowExW(
+            ws_ex_toolwindow | ws_ex_noactivate,
+            wc.lpszClassName,
+            "lat3ncy-ambient",
+            0,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            wc.hInstance,
+            None,
+        )
+        if not hwnd:
+            print(
+                f"[ambient] CreateWindowExW failed {ctypes.get_last_error()}, "
+                "shutdown off may miss"
+            )
+            return
+        user32.ShowWindow(hwnd, 0)
+        try:
+            # 0x3FF = 较高关机回调优先级，尽量在被杀前跑完推黑
+            kernel32.SetProcessShutdownParameters(0x3FF, 0)
+        except OSError:
+            pass
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+    threading.Thread(target=_thread, name="ambient-shutdown", daemon=True).start()
 
 
 def _attach_file_logs() -> None:
@@ -359,7 +517,8 @@ def process_frame(
     """返回 (ema, rgb_or_None, brightness)。
 
     切场黑帧 / 亮像素太少时 rgb 为 None，并且不改 EMA。
-    只对亮像素取饱和度最高的 30% 做均值，避免黑边把颜色拉灰、拉黑。
+    亮像素全部参与：底色权重大，高饱和像素略加权。
+    旧逻辑取饱和度 top 30% 均值，白底 IDE 里少量语法高亮/图标会把灯色带偏。
     颜色跳变超过 snap_delta 时直接落地，避免黑→白爬过中间灰。
     """
     pixels = arr.reshape(-1, 3).astype(np.float64)
@@ -374,15 +533,13 @@ def process_frame(
     if valid.shape[0] < min_valid:
         return ema, None, brightness
 
-    if valid.shape[0] > 64:
-        mx = valid.max(axis=1)
-        mn = valid.min(axis=1)
-        sat = (mx - mn) / (mx + 1.0)
-        k = max(1, int(valid.shape[0] * 0.3))
-        idx = np.argpartition(sat, -k)[-k:]
-        mean = valid[idx].mean(axis=0)
-    else:
-        mean = valid.mean(axis=0)
+    # 每个亮像素都算进主色。底权 0.45 保证大面积灰/白仍是主色；
+    # sat^1.35 只给真正有色彩的像素加一点权重，避免黑边，也不让少量霓虹图标劫持整灯。
+    mx = valid.max(axis=1)
+    mn = valid.min(axis=1)
+    sat = (mx - mn) / (mx + 1.0)
+    weights = 0.45 + np.power(sat, 1.35)
+    mean = np.average(valid, axis=0, weights=weights)
 
     mean = apply_gamma(mean, gamma)
     # 有效像素本身仍然很暗：当黑场，避免少量噪点放行
@@ -390,8 +547,9 @@ def process_frame(
         return ema, None, brightness
 
     if abs(saturation_boost - 1.0) > 1e-6:
-        gray = float(mean.mean())
-        mean = gray + (mean - gray) * saturation_boost
+        # 绕 Rec.709 亮度扩饱和，避免 (R+G+B)/3 把绿/蓝的色相拧偏
+        rec709 = float(mean[0] * 0.2126 + mean[1] * 0.7152 + mean[2] * 0.0722)
+        mean = rec709 + (mean - rec709) * saturation_boost
         mean = np.clip(mean, 0.0, 255.0)
 
     # 第一帧、或切窗口这种大跳变：直接落地，不要从旧色爬到新色
@@ -603,12 +761,12 @@ class OpenRGBWrap:
             return True
         return color_delta(rgb, self.last_rgb) >= 3
 
-    def off(self) -> bool:
+    def off(self, *, force: bool = False) -> bool:
         if not self.enabled:
             return False
-        if self.cli is None and not self._try_connect():
+        if self.cli is None and not self._try_connect(initial=force):
             return False
-        if self.last_off:
+        if self.last_off and not force:
             return False
         color = self.RGBColor(0, 0, 0)
         ok = False
@@ -677,35 +835,72 @@ class Hi75Wrap:
         self.pending_rgb: np.ndarray | None = None
         self.pending_since = 0.0
         self.pending_frames = 0
+        # 键盘拔掉不要把 enabled 打成 False：配置关才是真关。
+        self._next_reconnect_t = 0.0
+        self._reconnect_fail_count = 0
+        self._need_resync = False
         if not enabled:
             print("[hi75] disabled")
             return
         if self.exe_path is not None:
             self._start_exe()
             return
+        self._open_hid()
+
+    def _schedule_reconnect(self) -> None:
+        """exe / HID 失败后 1/2/4/8/16/30s 退避，避免每帧 spawn。"""
+        self._reconnect_fail_count += 1
+        delay = min(30.0, 1.0 * (2 ** min(self._reconnect_fail_count - 1, 5)))
+        self._next_reconnect_t = time.monotonic() + delay
+        self._need_resync = True
+        print(f"[hi75] retry in {delay:.0f}s")
+
+    def _mark_disconnected(self) -> None:
+        """丢掉失效 HID。exe 还活着就留给它自己重连，不要杀进程。"""
+        if self.proc is not None:
+            if self.proc.poll() is None:
+                # HID 掉线不是 exe 死了。杀掉会丢掉它记住的全黑帧。
+                self._need_resync = True
+                return
+            self._kill_exe()
+        if self.dev is not None:
+            try:
+                self.dev.close()
+            except OSError:
+                pass
+            self.dev = None
+            self.info = None
+
+    def _open_hid(self) -> bool:
         try:
             self.dev, self.info = open_hi75(self.path)
-            path_text = ""
-            if self.info is not None:
-                raw = self.info.get("path", b"")
-                path_text = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
-            print(
-                f"[hi75] opened {path_text} Col06={'COL06' in path_text.upper()} "
-                f"direct=0x08 leds={self.led_count} keepalive={self.keepalive_s:.2f}s "
-                f"min_interval={self.min_interval_s:.2f}s min_delta={self.min_delta:.0f} "
-                f"settle={self.settle_s:.2f}s/{self.stable_needed}f"
-            )
         except (OSError, RuntimeError, ValueError) as exc:
             print(f"[hi75] open failed: {exc}")
-            self.enabled = False
             self.dev = None
+            self.info = None
+            self._schedule_reconnect()
+            return False
+        path_text = ""
+        if self.info is not None:
+            raw = self.info.get("path", b"")
+            path_text = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
+        print(
+            f"[hi75] opened {path_text} Col06={'COL06' in path_text.upper()} "
+            f"direct=0x08 leds={self.led_count} keepalive={self.keepalive_s:.2f}s "
+            f"min_interval={self.min_interval_s:.2f}s min_delta={self.min_delta:.0f} "
+            f"settle={self.settle_s:.2f}s/{self.stable_needed}f"
+        )
+        self._reconnect_fail_count = 0
+        self._next_reconnect_t = 0.0
+        self._need_resync = True
+        return True
 
-    def _start_exe(self) -> None:
+    def _start_exe(self) -> bool:
         exe = self.exe_path
         if exe is None or not exe.is_file():
             print(f"[hi75] exe missing: {exe}")
-            self.enabled = False
-            return
+            self._schedule_reconnect()
+            return False
         cmd = [
             str(exe),
             "--serve",
@@ -740,9 +935,9 @@ class Hi75Wrap:
             )
         except OSError as exc:
             print(f"[hi75] spawn {exe} failed: {exc}")
-            self.enabled = False
             self.proc = None
-            return
+            self._schedule_reconnect()
+            return False
         err_proc = self.proc
 
         def _drain_stderr() -> None:
@@ -759,16 +954,34 @@ class Hi75Wrap:
         threading.Thread(target=_drain_stderr, name="hi75-exe-err", daemon=True).start()
         ready = self._read_until(prefix="READY", timeout_s=8.0)
         if ready is None or ready.startswith("ERR"):
-            code = self.proc.poll()
+            code = self.proc.poll() if self.proc is not None else None
             print(f"[hi75] exe no READY, exit={code} msg={ready}")
             self._kill_exe()
-            self.enabled = False
-            return
+            self._schedule_reconnect()
+            return False
         print(
             f"[hi75] exe={exe.name} {ready} "
             f"min_interval={self.min_interval_s:.2f}s min_delta={self.min_delta:.0f} "
             f"settle={self.settle_s:.2f}s/{self.stable_needed}f"
         )
+        self._reconnect_fail_count = 0
+        self._next_reconnect_t = 0.0
+        self._need_resync = True
+        return True
+
+    def _reconnect(self, *, force: bool = False) -> bool:
+        """exe 死了或 HID 掉了就按退避重开。force 用于关灯/退出必须马上试。"""
+        if not self.enabled:
+            return False
+        if self._backend_ready():
+            return True
+        now = time.monotonic()
+        if not force and now < self._next_reconnect_t:
+            return False
+        self._mark_disconnected()
+        if self.exe_path is not None:
+            return self._start_exe()
+        return self._open_hid()
 
     def _kill_exe(self) -> None:
         proc = self.proc
@@ -837,7 +1050,7 @@ class Hi75Wrap:
         return self.dev is not None
 
     def _send(self, rgb: np.ndarray, now: float, *, keepalive: bool = False) -> bool:
-        if not self._backend_ready():
+        if not self._backend_ready() and not self._reconnect():
             return False
         r, g, b = self._scaled_rgb(rgb)
         try:
@@ -847,23 +1060,35 @@ class Hi75Wrap:
                 report = build_direct_report(r, g, b, self.led_count)
                 send_feature_reports(self.dev, [report], delay_s=0.0, verbose=False)
             self.last_rgb = rgb.copy()
-            self.last_off = False
+            self.last_off = r == 0 and g == 0 and b == 0
             self.last_push_t = now
             self.pending_rgb = None
             self.pending_frames = 0
+            self._need_resync = False
             if not keepalive:
                 print(f"[hi75] #{r:02x}{g:02x}{b:02x} direct")
             return True
         except (OSError, RuntimeError, ValueError, TimeoutError) as exc:
             print(f"[hi75] push fail {exc}")
+            # exe 还活着：HID 由它自己重连，杀进程会丢掉记住的全黑帧。
+            if self.proc is not None and self.proc.poll() is None:
+                self._need_resync = True
+                return False
+            self._mark_disconnected()
+            self._schedule_reconnect()
             return False
 
     def keepalive(self) -> bool:
-        """Direct 模式必须定期重发当前色，否则约 1s 掉回板载灯效。"""
-        # exe --serve 自己保活，父进程不必重发
-        if self.proc is not None:
+        """Direct 模式必须定期重发当前色，否则约 1s 掉回板载灯效。
+
+        全黑也要保活。exe --serve 自己保活，父进程只在直连 HID 时重发。
+        """
+        if not self.enabled:
             return False
-        if not self.enabled or self.dev is None or self.last_off:
+        if not self._backend_ready():
+            self._reconnect()
+            return False
+        if self.proc is not None:
             return False
         if self.last_rgb is None:
             return False
@@ -873,11 +1098,13 @@ class Hi75Wrap:
         return self._send(self.last_rgb, now, keepalive=True)
 
     def push(self, rgb: np.ndarray) -> bool:
-        if not self.enabled or not self._backend_ready():
+        if not self.enabled:
+            return False
+        if not self._backend_ready() and not self._reconnect():
             return False
         now = time.monotonic()
-        # 开灯 / 从 off 恢复：立刻发 Direct
-        if self.last_off or self.last_rgb is None:
+        # 开灯 / 从 off 恢复 / 重连后：立刻发 Direct
+        if self.last_off or self.last_rgb is None or self._need_resync:
             return self._send(rgb, now)
         if color_delta(rgb, self.last_rgb) < self.min_delta:
             self.pending_rgb = None
@@ -907,20 +1134,24 @@ class Hi75Wrap:
         return self._send(rgb, now)
 
     def needs_retry(self, rgb: np.ndarray) -> bool:
-        """颜色已变但还在等 settle / 间隔时，主循环不能睡过去。"""
-        if not self.enabled or not self._backend_ready():
+        """颜色已变、掉线、或还在等 settle 时，主循环不能睡过去。"""
+        if not self.enabled:
             return False
+        if not self._backend_ready() or self._need_resync:
+            return True
         if self.last_off or self.last_rgb is None:
             return True
         if self.pending_rgb is not None:
             return True
         return color_delta(rgb, self.last_rgb) >= self.min_delta
 
-    def off(self) -> bool:
+    def off(self, *, force: bool = False) -> bool:
         # Direct 关灯发全黑 0x08，不要走 complete_off（会退出 Direct）
-        if not self.enabled or not self._backend_ready():
+        if not self.enabled:
             return False
-        if self.last_off:
+        if not self._backend_ready() and not self._reconnect(force=True):
+            return False
+        if self.last_off and not self._need_resync and not force:
             return False
         if self.proc is not None:
             try:
@@ -928,9 +1159,18 @@ class Hi75Wrap:
                 self.last_off = True
                 self.last_rgb = np.array([0, 0, 0], dtype=np.int32)
                 self.last_push_t = time.monotonic()
+                self._need_resync = False
                 return True
             except (OSError, RuntimeError, TimeoutError) as exc:
                 print(f"[hi75] off fail {exc}")
+                # exe 还活着：OFF 已由协议记住，插上由它自己推全黑。
+                if self.proc is not None and self.proc.poll() is None:
+                    self.last_off = True
+                    self.last_rgb = np.array([0, 0, 0], dtype=np.int32)
+                    self._need_resync = True
+                    return False
+                self._mark_disconnected()
+                self._schedule_reconnect()
                 return False
         black = np.array([0, 0, 0], dtype=np.int32)
         ok = self._send(black, time.monotonic())
@@ -986,6 +1226,70 @@ def _sleep_remaining(t0: float, interval: float) -> None:
         time.sleep(remain)
 
 
+def _build_controllers(
+    cfg: dict[str, Any], *, dry_run: bool
+) -> tuple[OpenRGBWrap, Hi75Wrap]:
+    """按 config 建两路控制器。dry_run 时两路都 disabled。"""
+    openrgb_cfg = _section(cfg, "openrgb")
+    hi75_cfg = _section(cfg, "hi75")
+    openrgb = OpenRGBWrap(
+        enabled=not dry_run and _as_bool(openrgb_cfg.get("enabled", True), True),
+        brightness=_as_int(openrgb_cfg.get("brightness", 80), 80),
+        mode=str(openrgb_cfg.get("mode", "Direct") or "Direct"),
+        match=openrgb_cfg.get("device_match", DEFAULT_OPENRGB_MATCH),
+        zone_sizes=openrgb_cfg.get("zone_sizes", {}),
+    )
+    hi75 = Hi75Wrap(
+        enabled=not dry_run and _as_bool(hi75_cfg.get("enabled", True), True),
+        brightness=_as_int(hi75_cfg.get("brightness", 100), 100),
+        path=str(hi75_cfg.get("path", "auto") or "auto"),
+        min_interval_s=max(0.0, _as_float(hi75_cfg.get("min_interval_s", 0.12), 0.12)),
+        min_delta=max(0.0, _as_float(hi75_cfg.get("min_delta", 18.0), 18.0)),
+        settle_s=max(0.0, _as_float(hi75_cfg.get("settle_s", 0.18), 0.18)),
+        settle_delta=max(0.0, _as_float(hi75_cfg.get("settle_delta", 14.0), 14.0)),
+        stable_frames=max(1, _as_int(hi75_cfg.get("stable_frames", 2), 2)),
+        keepalive_s=max(0.2, _as_float(hi75_cfg.get("keepalive_s", 0.70), 0.70)),
+        led_count=max(1, _as_int(hi75_cfg.get("led_count", 120), 120)),
+        exe=str(hi75_cfg.get("exe", "") or ""),
+    )
+    return openrgb, hi75
+
+
+def push_lights_off(openrgb: OpenRGBWrap, hi75: Hi75Wrap) -> bool:
+    """两路都推 Direct 全黑。关机 / Raycast 关灯 / 退出共用。"""
+    ok = False
+    try:
+        if hi75.off(force=True):
+            ok = True
+    except (OSError, RuntimeError, TimeoutError) as exc:
+        print(f"[ambient] hi75 off fail {exc}")
+    try:
+        if openrgb.off(force=True):
+            ok = True
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"[ambient] openrgb off fail {exc}")
+    return ok
+
+
+def run_lights_off(cfg: dict[str, Any]) -> int:
+    """一次性关灯后退出。Ambient 已在跑时不要调，会抢 HID。"""
+    openrgb, hi75 = _build_controllers(cfg, dry_run=False)
+    try:
+        ok = push_lights_off(openrgb, hi75)
+        # Direct 约 1s 无刷新会掉回板载灯效；短保活让关机/一次性关灯看得见全黑。
+        if ok and hi75.enabled:
+            time.sleep(min(1.2, max(0.4, hi75.keepalive_s * 1.5)))
+            try:
+                hi75.off(force=True)
+            except (OSError, RuntimeError, TimeoutError):
+                pass
+        print(f"[ambient] lights-off {'ok' if ok else 'fail'}")
+        return 0 if ok else 1
+    finally:
+        openrgb.close()
+        hi75.close()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Ambient - desktop color -> fans+keyboard")
     ap.add_argument("--config", default=str(CONFIG_PATH))
@@ -1004,6 +1308,11 @@ def main() -> int:
         "--bench-capture",
         action="store_true",
         help="配合 --bench：改测真实抓屏。无交互桌面时 mss BitBlt 会失败",
+    )
+    ap.add_argument(
+        "--lights-off",
+        action="store_true",
+        help="一次性推 Direct 全黑后退出；Ambient 已在跑时不要调用",
     )
     args = ap.parse_args()
 
@@ -1027,6 +1336,8 @@ def main() -> int:
 
     if args.list_devices:
         return list_devices()
+    if args.lights_off:
+        return run_lights_off(cfg)
 
     if args.bench:
         n = max(1, args.bench)
@@ -1094,18 +1405,6 @@ def main() -> int:
     snap_delta = max(0.0, _as_float(proc_cfg.get("snap_delta", 40.0), 40.0))
     idle_timeout = _as_float(behavior_cfg.get("idle_timeout", 3.0), 3.0)
     log_interval = _as_float(behavior_cfg.get("log_interval", 5.0), 5.0)
-    hi75_min_interval = max(
-        0.0, _as_float(hi75_cfg.get("min_interval_s", 0.12), 0.12)
-    )
-    hi75_min_delta = max(0.0, _as_float(hi75_cfg.get("min_delta", 18.0), 18.0))
-    hi75_settle_s = max(0.0, _as_float(hi75_cfg.get("settle_s", 0.18), 0.18))
-    hi75_settle_delta = max(
-        0.0, _as_float(hi75_cfg.get("settle_delta", 14.0), 14.0)
-    )
-    hi75_stable_frames = max(1, _as_int(hi75_cfg.get("stable_frames", 2), 2))
-    hi75_keepalive_s = max(0.2, _as_float(hi75_cfg.get("keepalive_s", 0.70), 0.70))
-    hi75_led_count = max(1, _as_int(hi75_cfg.get("led_count", 120), 120))
-    hi75_exe = str(hi75_cfg.get("exe", "") or "")
 
     cap, backend = create_capture(cfg)
     print(
@@ -1114,26 +1413,7 @@ def main() -> int:
         f"ema={ema_alpha} lerp={lerp_alpha} min_bri={min_bri}"
     )
 
-    openrgb = OpenRGBWrap(
-        enabled=not args.dry_run and _as_bool(openrgb_cfg.get("enabled", True), True),
-        brightness=_as_int(openrgb_cfg.get("brightness", 80), 80),
-        mode=str(openrgb_cfg.get("mode", "Direct") or "Direct"),
-        match=openrgb_cfg.get("device_match", DEFAULT_OPENRGB_MATCH),
-        zone_sizes=openrgb_cfg.get("zone_sizes", {}),
-    )
-    hi75 = Hi75Wrap(
-        enabled=not args.dry_run and _as_bool(hi75_cfg.get("enabled", True), True),
-        brightness=_as_int(hi75_cfg.get("brightness", 100), 100),
-        path=str(hi75_cfg.get("path", "auto") or "auto"),
-        min_interval_s=hi75_min_interval,
-        min_delta=hi75_min_delta,
-        settle_s=hi75_settle_s,
-        settle_delta=hi75_settle_delta,
-        stable_frames=hi75_stable_frames,
-        keepalive_s=hi75_keepalive_s,
-        led_count=hi75_led_count,
-        exe=hi75_exe,
-    )
+    openrgb, hi75 = _build_controllers(cfg, dry_run=args.dry_run)
 
     ema: np.ndarray | None = None
     out_rgb: np.ndarray | None = None
@@ -1147,6 +1427,9 @@ def main() -> int:
     frames = 0
     start = time.monotonic()
     should_run = True
+    lights_disabled = lights_are_disabled()
+    if lights_disabled:
+        print(f"[ambient] lights disabled via {lights_disabled_flag()}")
 
     def handle_sig(_sig: int, _frame: Any) -> None:
         nonlocal should_run
@@ -1155,12 +1438,68 @@ def main() -> int:
     signal.signal(signal.SIGINT, handle_sig)
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, handle_sig)
+    def request_shutdown() -> None:
+        nonlocal should_run
+        try:
+            push_lights_off(openrgb, hi75)
+        except Exception as exc:
+            print(f"[ambient] shutdown off fail {exc}")
+        should_run = False
+
+    if not args.dry_run:
+        install_windows_shutdown_watch(request_shutdown)
 
     try:
         while should_run:
+            if consume_quit_request():
+                print("[ambient] quit requested")
+                break
             if args.time and (time.monotonic() - start) > args.time:
                 break
             t0 = time.monotonic()
+            disabled_now = lights_are_disabled()
+            if disabled_now != lights_disabled:
+                lights_disabled = disabled_now
+                if lights_disabled:
+                    print("[ambient] lights off (flag)")
+                    if not args.dry_run:
+                        if push_lights_off(openrgb, hi75):
+                            pushes += 1
+                    last_rgb = None
+                else:
+                    print("[ambient] lights on (flag)")
+                    hi75.last_off = False
+                    hi75._need_resync = True
+                    hi75.pending_rgb = None
+                    hi75.pending_frames = 0
+                    openrgb.last_off = False
+                    openrgb.last_rgb = None
+                    last_rgb = None
+            if lights_disabled:
+                now = time.monotonic()
+                # 关灯不抓屏：灯已经全黑，EMA 留着也用不上。
+                # 只维持连接 / Direct 全黑 keepalive，开灯后下一帧再取色。
+                # 拔插后 _need_resync：必须再推一次全黑，不能因为 last_off 就跳过。
+                if not args.dry_run:
+                    if (not hi75.last_off) or hi75._need_resync:
+                        if hi75.off(force=True):
+                            pushes += 1
+                    if not openrgb.last_off:
+                        if openrgb.off():
+                            pushes += 1
+                    hi75.keepalive()
+                frames += 1
+                if now - last_log >= log_interval:
+                    print(
+                        f"[{frames} frames {pushes} pushes] lights-disabled "
+                        f"fps={fps_idle} backend={backend}"
+                    )
+                    last_log = now
+                if fps != fps_idle:
+                    fps = fps_idle
+                    interval = 1.0 / fps
+                _sleep_remaining(t0, interval)
+                continue
             try:
                 arr = cap.grab()
             except Exception as exc:
@@ -1294,6 +1633,12 @@ def main() -> int:
 
             _sleep_remaining(t0, interval)
     finally:
+        # 关机 / 注销 / Stop-Ambient：先推黑再关连接。硬断电仍靠 BIOS ErP。
+        if not args.dry_run:
+            try:
+                push_lights_off(openrgb, hi75)
+            except Exception as exc:
+                print(f"[ambient] shutdown off fail {exc}")
         cap.stop()
         openrgb.close()
         hi75.close()

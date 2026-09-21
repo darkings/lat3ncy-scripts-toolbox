@@ -61,6 +61,13 @@ IsToolboxTestMode() {
 #Include ..\shared\notify\renderer.ahk
 #Include ..\shared\notify\notify.ahk
 
+; WinUI 翻译面板客户端。CapsLock 状态芯片也打 Lat3ncyImeHudWinUi。
+#Include ..\shared\notify\translation-panel.ahk
+
+; ImeHud 客户端。anchor.ahk 由 renderer.ahk / ime-hud.ahk include-once 加载，这里不要再引一次。
+; CapsLock STATE 坐标由 ImeHud.Show → InputAnchor.Get() 在热键瞬间采集。
+#Include ..\shared\notify\ime-hud.ahk
+
 ; 本机 pythonw 解析：朗读 / 翻译共用，由入口统一加载，避免两个 feature 各自 include
 #Include ..\shared\python.ahk
 
@@ -101,7 +108,7 @@ IsToolboxTestMode() {
 ; 朗读选中文字：智能中英文双语音色极速发音，再次按下即时打断 [快捷键: Caps + S (CapsLock & s)]
 #Include features\speak-selected-text.ahk
 
-; 划词翻译：中英互译，光标处显示译文 [快捷键: Caps + F (CapsLock & f)]
+; 划词翻译：中英互译，WinUI 面板显示原文/译文 [快捷键: Caps + F (CapsLock & f)]
 #Include features\translate-selected-text.ahk
 
 ; 音频输出切换：一键在可用音频播放设备之间循环切换 [快捷键: Caps + D (CapsLock & d)]

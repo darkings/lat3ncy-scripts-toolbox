@@ -66,8 +66,13 @@ COLOR_TRIPLES: tuple[tuple[int, int, int], ...] = (
 # 静态 0x0a 每次 SetFeature 都会重放灯效（肉眼就是闪）；Direct 只刷新帧缓冲
 DIRECT_CMD = 0x08
 DIRECT_LED_OFFSET = 8
+# pcap 0684：进 Direct 前的握手。不上这包，0x08 可能被板载灯效忽略一小段。
+INIT_CMD = 0x84
 # 75% 稀疏索引大约到 89；多填同色无害，少填会有键不亮
 DEFAULT_LED_COUNT = 120
+# USB 上电后固件会先跑板载灯效。HID 一开就 0x84 + 连发 Direct，尽量立刻盖住。
+TAKEOVER_BURST_OFF = 5
+TAKEOVER_BURST_COLOR = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,16 +141,6 @@ def enumerate_hi75() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     return devs, ff
 
 
-def _col_sort_key(device: dict[str, Any]) -> int:
-    """Col06 才能 SetFeature 520B；Col05/03 会返回 -1 / 0x01。"""
-    text = _path_text(device.get("path", b"")).upper()
-    if "COL06" in text:
-        return 0
-    if "COL05" in text:
-        return 1
-    return 2
-
-
 def _close_quiet(dev: Any) -> None:
     close = getattr(dev, "close", None)
     if close is None:
@@ -159,7 +154,8 @@ def _close_quiet(dev: Any) -> None:
 def open_hi75(preferred_path: str = "auto") -> tuple[Any, dict[str, Any]]:
     """
     打开 Hi75 的 FF00 接口。
-    preferred_path=auto 时按 Col06 > Col05 > 其它；否则打开指定 HID path。
+    preferred_path=auto 时只开 Col06；Col05/03 不能 SetFeature 520B。
+    否则打开指定 HID path。
     """
     devs, ff = enumerate_hi75()
     if preferred_path and preferred_path.strip().lower() not in {"", "auto"}:
@@ -176,7 +172,16 @@ def open_hi75(preferred_path: str = "auto") -> tuple[Any, dict[str, Any]]:
             raise RuntimeError(
                 "未找到 Hi75 的 FF00 HID 接口，请确认键盘有线连接且未被 OpenRGB/官方驱动独占"
             )
-        candidates = sorted(ff, key=_col_sort_key)
+        # 刚插上时 Col05/03 会先出现。打开它们 SetFeature 必失败，
+        # 还会把 serve 重连打进 1s 退避，板载彩虹会多亮一会儿。
+        col06 = [
+            d
+            for d in ff
+            if "COL06" in _path_text(d.get("path", b"")).upper()
+        ]
+        if not col06:
+            raise RuntimeError("Hi75 Col06 尚未就绪")
+        candidates = col06
 
     last_err: BaseException | None = None
     for info in candidates:
@@ -248,6 +253,16 @@ def apply_brightness(feat2: bytes, brightness: int) -> bytes:
     return bytes(ba)
 
 
+def build_init_report() -> bytes:
+    """构造 06 84 握手包。与 hi75_data/*_feat0.bin 相同，不读文件以免 serve 启动失败。"""
+    buf = bytearray(REPORT_LEN)
+    buf[0] = REPORT_ID
+    buf[1] = INIT_CMD
+    buf[4] = 0x01
+    buf[6] = 0x80
+    return bytes(buf)
+
+
 def build_direct_report(r: int, g: int, b: int, led_count: int = DEFAULT_LED_COUNT) -> bytes:
     """构造 OpenRGB Direct 报文：06 08 .... 从偏移 8 起填 RGB。
 
@@ -308,7 +323,7 @@ def set_direct_color(
     )
     report = build_direct_report(r, g, b, led_count)
     try:
-        send_feature_reports(dev, [report], delay_s=0.0)
+        send_feature_reports(dev, [build_init_report(), report], delay_s=0.0)
         if hold_s <= 0:
             print("Direct sent. 固件约 1s 无刷新会掉回板载灯效")
             return
@@ -407,6 +422,11 @@ def _stdout(line: str) -> None:
     sys.stdout.flush()
 
 
+def _stderr(line: str) -> None:
+    """掉线 / 重连日志走 stderr，避免污染 stdin 协议的下一行 OK/ERR。"""
+    print(line, file=sys.stderr, flush=True)
+
+
 def serve(
     preferred_path: str = "auto",
     led_count: int = DEFAULT_LED_COUNT,
@@ -416,10 +436,15 @@ def serve(
 
     命令：
       SET rrggbb   Direct 上色（内部按 keepalive_s 重发，父进程不用保活）
-      OFF          Direct 全黑
+      OFF          Direct 全黑（同样保活，避免 1s 后掉回板载彩虹）
       LIST         列出 HID
       PING         PONG
       QUIT         退出
+    键盘断电 / 拔插：HID 失败不退出进程。没插键盘时约 50ms 轮询；
+    刚插上 Col06 未就绪先短重试，设备在但打不开才 1/2/4/8/16/30s 退避。
+    成功后立刻 0x84 握手并连发 Direct（关灯时强制全黑，避免重放旧色）。
+    启动时没插键盘也回 READY disconnected=1。SET/OFF 在掉线时仍记住
+    目标色，插上立刻推。
     换键盘：换一份编好的 hi75.exe，或把另一套 hi75_data 放在 exe 旁边。
     """
     keepalive_s = max(0.2, float(keepalive_s))
@@ -429,18 +454,6 @@ def serve(
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     except (AttributeError, OSError):
         pass
-
-    try:
-        dev, info = open_hi75(preferred_path)
-    except (OSError, RuntimeError, ValueError) as exc:
-        _stdout(f"ERR {exc}")
-        return 1
-
-    path_text = _path_text(info.get("path", b""))
-    _stdout(
-        f"READY path={path_text} leds={led_count} keepalive={keepalive_s:.2f} "
-        f"direct=0x08 frozen={int(_frozen())}"
-    )
 
     pending: list[str] = []
     lock = threading.Lock()
@@ -464,19 +477,170 @@ def serve(
     reader = threading.Thread(target=_reader, name="hi75-stdin", daemon=True)
     reader.start()
 
+    dev: Any = None
+    info: dict[str, Any] | None = None
     last_rgb: tuple[int, int, int] | None = None
     last_off = False
     last_push = 0.0
     last_report: bytes | None = None
+    reconnect_fail = 0
+    next_reconnect_t = 0.0
+    # 没插键盘时短轮询：指数退避会让插上后先亮几秒板载彩虹。
+    absent_poll_s = 0.05
+    # 刚插上时 Col06 可能还没就绪，先短重试再进入长退避。
+    device_absent = True
+    quick_tries = 0
+    need_takeover = False
 
-    def _send_rgb(r: int, g: int, b: int, *, as_off: bool = False) -> None:
-        nonlocal last_rgb, last_off, last_push, last_report
+    def _close_dev() -> None:
+        nonlocal dev
+        if dev is None:
+            return
+        _close_quiet(dev)
+        dev = None
+
+    def _hid_present() -> bool:
+        """只有 Col06 才算就绪。Col05 先出现时仍按没插键盘 50ms 轮询。"""
+        try:
+            _devs, ff = enumerate_hi75()
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return any(
+            "COL06" in _path_text(d.get("path", b"")).upper() for d in ff
+        )
+
+    def _schedule_absent() -> None:
+        """键盘不在：50ms 后再枚举，插上就能马上推 Direct。"""
+        nonlocal reconnect_fail, next_reconnect_t, device_absent, quick_tries
+        reconnect_fail = 0
+        quick_tries = 0
+        device_absent = True
+        next_reconnect_t = time.monotonic() + absent_poll_s
+
+    def _schedule_reconnect() -> None:
+        """设备还在但 open/send 失败。刚插上时 Col06 可能还在枚举，先短重试。"""
+        nonlocal reconnect_fail, next_reconnect_t, device_absent, quick_tries
+        if device_absent:
+            quick_tries += 1
+            if quick_tries <= 20:
+                next_reconnect_t = time.monotonic() + 0.05
+                if quick_tries == 1:
+                    _stderr("[hi75] device seen, waiting for Col06")
+                return
+            device_absent = False
+        reconnect_fail += 1
+        delay = min(30.0, 1.0 * (2 ** min(reconnect_fail - 1, 5)))
+        next_reconnect_t = time.monotonic() + delay
+        _stderr(f"[hi75] disconnected, retry in {delay:.0f}s")
+
+    def _note_lost() -> None:
+        """HID 句柄作废后：没设备短轮询，有设备却打不开才指数退避。"""
+        _close_dev()
+        if _hid_present():
+            _schedule_reconnect()
+        else:
+            _stderr("[hi75] disconnected, waiting for device")
+            _schedule_absent()
+
+    def _try_open(*, force: bool = False) -> bool:
+        """打开 Col06。force=True 时忽略退避（SET/OFF 必须马上试）。"""
+        nonlocal dev, info, reconnect_fail, next_reconnect_t, device_absent, quick_tries
+        nonlocal need_takeover
+        if dev is not None:
+            return True
+        now = time.monotonic()
+        if not force and now < next_reconnect_t:
+            return False
+        try:
+            dev, info = open_hi75(preferred_path)
+        except (OSError, RuntimeError, ValueError) as exc:
+            _close_dev()
+            # Col06 还没枚举出来：当没插键盘，继续 50ms 轮询，不要 1s 退避。
+            if "Col06" in str(exc) and "尚未就绪" in str(exc):
+                _schedule_absent()
+                return False
+            # 没插键盘时不要每 0.2s 打一遍 open failed。
+            if _hid_present():
+                _stderr(f"[hi75] open failed: {exc}")
+                _schedule_reconnect()
+            else:
+                _schedule_absent()
+            return False
+        reconnect_fail = 0
+        next_reconnect_t = 0.0
+        device_absent = False
+        quick_tries = 0
+        need_takeover = True
+        path_text = _path_text(info.get("path", b"")) if info else ""
+        _stderr(f"[hi75] opened {path_text}")
+        return True
+
+    def _remember(r: int, g: int, b: int, *, as_off: bool) -> bytes:
+        """先记下目标帧。掉线时也要记住，否则插上会重放旧色或空等。"""
+        nonlocal last_rgb, last_off, last_report
         report = build_direct_report(r, g, b, led_count)
-        send_feature_reports(dev, [report], delay_s=0.0, verbose=False)
         last_report = report
         last_rgb = (r, g, b)
         last_off = as_off
+        return report
+
+    def _push_reports(reports: list[bytes]) -> None:
+        """连续 SetFeature，中间不 sleep。HID 刚开时要尽快盖住板载灯效。"""
+        send_feature_reports(dev, reports, delay_s=0.0, verbose=False)
+
+    def _takeover(report: bytes, *, burst: int) -> None:
+        """0x84 握手 + 连发 Direct。固件上电先跑板载灯，必须马上盖住。"""
+        nonlocal last_push, need_takeover
+        packets = [build_init_report()]
+        packets.extend([report] * max(1, burst))
+        _push_reports(packets)
         last_push = time.monotonic()
+        need_takeover = False
+
+    def _send_rgb(r: int, g: int, b: int, *, as_off: bool = False) -> bool:
+        """推 Direct。成功 True；已记住但设备不在 False，调用方仍可回 OK。"""
+        nonlocal last_push
+        report = _remember(r, g, b, as_off=as_off)
+        if not _try_open(force=True):
+            return False
+        try:
+            if need_takeover:
+                burst = TAKEOVER_BURST_OFF if as_off else TAKEOVER_BURST_COLOR
+                _takeover(report, burst=burst)
+            else:
+                _push_reports([report])
+                last_push = time.monotonic()
+        except (OSError, RuntimeError, ValueError):
+            _note_lost()
+            return False
+        return True
+
+    def _replay_last() -> None:
+        """重连成功后立刻 0x84 + Direct。关灯时强制全黑，不要把掉线前的彩色刷回去。"""
+        nonlocal last_push, last_report, last_rgb
+        if dev is None:
+            return
+        report = last_report
+        if last_off:
+            report = build_direct_report(0, 0, 0, led_count)
+            last_report = report
+            last_rgb = (0, 0, 0)
+        if report is None:
+            return
+        burst = TAKEOVER_BURST_OFF if last_off else TAKEOVER_BURST_COLOR
+        try:
+            _takeover(report, burst=burst)
+        except (OSError, RuntimeError, ValueError) as exc:
+            _stderr(f"[hi75] replay fail {exc}")
+            _note_lost()
+
+    # 没插键盘也要 READY：父进程不能把「暂时没设备」当成永久禁用。
+    opened = _try_open(force=True)
+    path_text = _path_text(info.get("path", b"")) if info else ""
+    _stdout(
+        f"READY path={path_text} leds={led_count} keepalive={keepalive_s:.2f} "
+        f"direct=0x08 frozen={int(_frozen())} disconnected={int(not opened)}"
+    )
 
     try:
         while not stop.is_set() or pending:
@@ -497,6 +661,7 @@ def serve(
                         test_enumerate()
                         _stdout("OK LIST")
                     elif op == "OFF":
+                        # 掉线也回 OK：目标已是全黑，插上由 replay 立刻推，避免父进程杀 exe。
                         _send_rgb(0, 0, 0, as_off=True)
                         _stdout("OK #000000")
                     elif op == "SET":
@@ -512,20 +677,27 @@ def serve(
                 continue
 
             now = time.monotonic()
-            if (
-                last_report is not None
-                and not last_off
-                and (now - last_push) >= keepalive_s
-            ):
+            if dev is None:
+                # 空闲时重开；成功后立刻 0x84 + Direct。关灯时 replay 强制 #000000。
+                if _try_open(force=False) and (last_report is not None or last_off):
+                    color = last_rgb if last_rgb is not None else (0, 0, 0)
+                    _stderr(
+                        f"[hi75] reconnected, replay "
+                        f"#{color[0]:02x}{color[1]:02x}{color[2]:02x} "
+                        f"off={int(last_off)} init=0x84"
+                    )
+                    _replay_last()
+            elif last_report is not None and (now - last_push) >= keepalive_s:
+                # 全黑也要保活：Direct 约 1s 不刷新会掉回板载灯效。
                 try:
                     send_feature_reports(dev, [last_report], delay_s=0.0, verbose=False)
                     last_push = now
                 except (OSError, RuntimeError, ValueError) as exc:
-                    _stdout(f"ERR keepalive {exc}")
-                    break
+                    _stderr(f"[hi75] keepalive fail {exc}")
+                    _note_lost()
             stop.wait(0.05)
     finally:
-        _close_quiet(dev)
+        _close_dev()
     return 0
 
 

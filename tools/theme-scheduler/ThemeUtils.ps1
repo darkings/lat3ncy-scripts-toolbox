@@ -28,6 +28,13 @@ function Get-ThemeConfig
       light_theme_file = 'light.theme'
       dark_theme_file = 'dark.theme'
     }
+    cursor = @{
+      enabled = $true
+      light_dir = ''
+      dark_dir = ''
+      light_scheme = 'Cursor Concept 3 Light'
+      dark_scheme = 'Cursor Concept 3 Dark'
+    }
   }
 
   if (-not (Test-Path -LiteralPath $configFile -PathType Leaf))
@@ -101,6 +108,180 @@ function Get-ThemeConfig
   return $config
 }
 
+function Get-ThemeCoordinates
+{
+  param($Config)
+
+  # 优先用 config.toml 里的经纬度，避免开机时网络还没好就去查 IP
+  if ($Config.schedule.latitude -and $Config.schedule.longitude)
+  {
+    return [pscustomobject]@{
+      Lat = [double]$Config.schedule.latitude
+      Lon = [double]$Config.schedule.longitude
+      Source = 'config'
+    }
+  }
+
+  try
+  {
+    $req = [System.Net.HttpWebRequest]::Create('https://ipinfo.io/json')
+    $req.Proxy = $null
+    $req.Timeout = 10000
+    $req.UserAgent = 'curl/8.0'
+    $req.Accept = 'application/json'
+    $resp = $req.GetResponse()
+    $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+    $json = $reader.ReadToEnd()
+    $reader.Close()
+    $resp.Close()
+    $r = $json | ConvertFrom-Json
+    $loc = ($r.loc -split ',')
+    if ($loc.Count -eq 2)
+    {
+      return [pscustomobject]@{ Lat = [double]$loc[0]; Lon = [double]$loc[1]; Source = 'ip' }
+    }
+  }
+  catch
+  {
+  }
+
+  return $null
+}
+
+function Get-ThemeSunTimes
+{
+  param([double]$Lat, [double]$Lon, [datetime]$Date = (Get-Date))
+
+  # NOAA 日出日落：民用曙暮光 -0.833°。极昼/极夜时 cosHa 越界，返回 $null
+  $latRad = $Lat * [Math]::PI / 180
+  $n  = $Date.DayOfYear
+  $hour = $Date.Hour + $Date.Minute / 60
+  $gamma = 2 * [Math]::PI / 365 * ($n - 1 + ($hour - 12) / 24)
+
+  $eqtime = 229.18 * (0.000075 + 0.001868 * [Math]::Cos($gamma) - 0.032077 * [Math]::Sin($gamma) `
+      - 0.014615 * [Math]::Cos(2 * $gamma) - 0.040849 * [Math]::Sin(2 * $gamma))
+  $decl = 0.006918 - 0.399912 * [Math]::Cos($gamma) + 0.070257 * [Math]::Sin($gamma) `
+    - 0.006758 * [Math]::Cos(2 * $gamma) + 0.000907 * [Math]::Sin(2 * $gamma) `
+    - 0.002697 * [Math]::Cos(3 * $gamma) + 0.00148 * [Math]::Sin(3 * $gamma)
+
+  $cosHa = ([Math]::Cos(90.833 * [Math]::PI / 180) / ([Math]::Cos($latRad) * [Math]::Cos($decl)) `
+      - [Math]::Tan($latRad) * [Math]::Tan($decl))
+  if ($cosHa -gt 1 -or $cosHa -lt -1)
+  {
+    return $null
+  }
+
+  $ha = [Math]::Acos($cosHa)
+  $utcRise = 720 - 4 * ($Lon + $ha * 180 / [Math]::PI) - $eqtime
+  $utcSet  = 720 - 4 * ($Lon - $ha * 180 / [Math]::PI) - $eqtime
+
+  $offset = [TimeZoneInfo]::Local.GetUtcOffset($Date).TotalMinutes
+  $rise = (Get-Date -Date $Date).Date.AddMinutes($utcRise + $offset)
+  $set  = (Get-Date -Date $Date).Date.AddMinutes($utcSet  + $offset)
+  return [pscustomobject]@{ Sunrise = $rise; Sunset = $set }
+}
+
+function Get-ExistingThemeTaskTime
+{
+  param([string]$TaskName)
+
+  # 登录时网络可能还没好。sun 模式算不出来时，复用已经校准过的 Daily 触发时间
+  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  if (-not $task)
+  {
+    return $null
+  }
+
+  $daily = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' }) | Select-Object -First 1
+  if (-not $daily -or -not $daily.StartBoundary)
+  {
+    return $null
+  }
+
+  try
+  {
+    return [datetime]::Parse($daily.StartBoundary)
+  }
+  catch
+  {
+    return $null
+  }
+}
+
+function Get-ThemeScheduleTimes
+{
+  param($Config = $null)
+
+  if (-not $Config)
+  {
+    $Config = Get-ThemeConfig
+  }
+
+  $fallbackLight = if ($Config.schedule.fixed_light_time) { $Config.schedule.fixed_light_time } else { '07:00' }
+  $fallbackDark  = if ($Config.schedule.fixed_dark_time) { $Config.schedule.fixed_dark_time } else { '19:00' }
+
+  if ($Config.schedule.trigger_mode -eq 'fixed')
+  {
+    return [pscustomobject]@{
+      RiseTime = [datetime]::Parse($fallbackLight)
+      SetTime = [datetime]::Parse($fallbackDark)
+      TriggerMode = 'fixed'
+      Source = 'fixed'
+    }
+  }
+
+  $coords = Get-ThemeCoordinates -Config $Config
+  if ($coords)
+  {
+    $sun = Get-ThemeSunTimes -Lat $coords.Lat -Lon $coords.Lon
+    if ($null -ne $sun)
+    {
+      return [pscustomobject]@{
+        RiseTime = $sun.Sunrise
+        SetTime = $sun.Sunset
+        TriggerMode = 'sun'
+        Source = $coords.Source
+      }
+    }
+  }
+
+  # 1) 复用已注册的 Theme-Light / Theme-Dark 时间  2) 再退到 config 里的固定备用时间
+  $existingRise = Get-ExistingThemeTaskTime -TaskName 'Theme-Light'
+  $existingSet = Get-ExistingThemeTaskTime -TaskName 'Theme-Dark'
+  if ($existingRise -and $existingSet)
+  {
+    return [pscustomobject]@{
+      RiseTime = $existingRise
+      SetTime = $existingSet
+      TriggerMode = 'sun'
+      Source = 'existing-task'
+    }
+  }
+
+  return [pscustomobject]@{
+    RiseTime = [datetime]::Parse($fallbackLight)
+    SetTime = [datetime]::Parse($fallbackDark)
+    TriggerMode = 'sun'
+    Source = 'fallback'
+  }
+}
+
+function Get-DesiredThemeMode
+{
+  param(
+    [datetime]$Now = (Get-Date),
+    [datetime]$RiseTime,
+    [datetime]$SetTime
+  )
+
+  # 日出前、日落及之后 -> 深色；日出到日落之间 -> 浅色
+  if ($Now -lt $RiseTime -or $Now -ge $SetTime)
+  {
+    return 'dark'
+  }
+  return 'light'
+}
+
 function Resolve-ThemeFilePath
 {
   param([string]$ThemeInput)
@@ -167,6 +348,419 @@ function Apply-ThemeFile
   }
 }
 
+function Get-ThemeRepoRoot
+{
+  # ThemeUtils.ps1 在 tools/theme-scheduler，仓库根是再上两级。
+  return Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+}
+
+function Resolve-ThemeCursorDirectory
+{
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('light', 'dark')]
+    [string]$Mode,
+    $Config
+  )
+
+  $repoRoot = Get-ThemeRepoRoot
+  $configured = ''
+  if ($Config.cursor)
+  {
+    $configured = if ($Mode -eq 'light') { [string]$Config.cursor.light_dir } else { [string]$Config.cursor.dark_dir }
+  }
+
+  $dir = if ($configured) { $configured } else { Join-Path $repoRoot ('resources\cursors\' + $Mode) }
+  if (-not [IO.Path]::IsPathRooted($dir))
+  {
+    $dir = Join-Path $repoRoot $dir
+  }
+  return $dir
+}
+
+function Ensure-CursorNative
+{
+  # Win11 上 SPI_SETCURSORS 会按系统默认 1bpp 箭头重载，把刚写进注册表的方案冲掉。
+  # 持久化仍写 HKCU\Control Panel\Cursors；当前会话用 LoadCursorFromFile + SetSystemCursor。
+  if (([System.Management.Automation.PSTypeName]'CursorNative').Type)
+  {
+    return $true
+  }
+
+  $code = @'
+using System;
+using System.Runtime.InteropServices;
+public static class CursorNative {
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern IntPtr LoadCursorFromFile(string lpFileName);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern IntPtr CopyIcon(IntPtr hIcon);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool DestroyCursor(IntPtr hCursor);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool SetSystemCursor(IntPtr hcur, uint id);
+  [DllImport("user32.dll")]
+  public static extern bool GetCursorInfo(ref CURSORINFO info);
+  [DllImport("user32.dll")]
+  public static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO info);
+  [DllImport("gdi32.dll")]
+  public static extern bool DeleteObject(IntPtr ho);
+  [StructLayout(LayoutKind.Sequential)]
+  public struct POINT { public int x; public int y; }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct CURSORINFO {
+    public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  public struct ICONINFO {
+    public bool fIcon; public int xHotspot; public int yHotspot; public IntPtr hbmMask; public IntPtr hbmColor;
+  }
+  // 从文件加载句柄；SetSystemCursor 会 Destroy 传入的句柄，所以必须 CopyIcon。
+  public static bool SetFile(string path, uint id) {
+    if (string.IsNullOrEmpty(path)) return false;
+    IntPtr loaded = LoadCursorFromFile(path);
+    if (loaded == IntPtr.Zero) return false;
+    IntPtr copy = CopyIcon(loaded);
+    DestroyCursor(loaded);
+    if (copy == IntPtr.Zero) return false;
+    return SetSystemCursor(copy, id);
+  }
+  // 核对当前箭头是不是彩色自定义指针。系统默认是 1bpp、热点 10,10。
+  public static string LiveArrow() {
+    CURSORINFO ci = new CURSORINFO();
+    ci.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
+    if (!GetCursorInfo(ref ci) || ci.hCursor == IntPtr.Zero) return "fail";
+    ICONINFO ii;
+    if (!GetIconInfo(ci.hCursor, out ii)) return "noinfo";
+    try {
+      if (ii.hbmColor == IntPtr.Zero)
+        return string.Format("hot={0},{1} mono", ii.xHotspot, ii.yHotspot);
+      return string.Format("hot={0},{1} color", ii.xHotspot, ii.yHotspot);
+    } finally {
+      if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor);
+      if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask);
+    }
+  }
+}
+'@
+  try
+  {
+    Add-Type -TypeDefinition $code -ErrorAction Stop
+    return $true
+  }
+  catch
+  {
+    Write-ThemeLog ("CursorNative load failed: {0}" -f $_.Exception.Message)
+    return $false
+  }
+}
+
+function Sync-ThemeFileCursors
+{
+  param(
+    [Parameter(Mandatory = $true)]$Roles,
+    [Parameter(Mandatory = $true)]$Paths,
+    [Parameter(Mandatory = $true)][string]$SchemeName
+  )
+
+  # 锁屏/切回会话时 Win11 会按 CurrentTheme 重载指针。不把自定义路径写进 .theme，系统就会打回 Windows_11_dark/light。
+  $themesKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes'
+  $themePath = (Get-ItemProperty -LiteralPath $themesKey -Name CurrentTheme -ErrorAction SilentlyContinue).CurrentTheme
+  if (-not $themePath -or -not (Test-Path -LiteralPath $themePath -PathType Leaf))
+  {
+    Write-ThemeLog 'Cursor theme file skip: CurrentTheme missing'
+    return
+  }
+
+  # 第一次改 CurrentTheme 前留一份备份，避免写坏 UTF-16 .theme。
+  $backupDir = Join-Path $PSScriptRoot 'backup-themes'
+  if (-not (Test-Path -LiteralPath $backupDir -PathType Container))
+  {
+    New-Item -ItemType Directory -Path $backupDir | Out-Null
+  }
+  $backupPath = Join-Path $backupDir (([IO.Path]::GetFileNameWithoutExtension($themePath)) + '.theme.before-cursor.bak')
+  if (-not (Test-Path -LiteralPath $backupPath -PathType Leaf))
+  {
+    Copy-Item -LiteralPath $themePath -Destination $backupPath -Force
+    Write-ThemeLog ("Cursor theme file backup: {0}" -f $backupPath)
+  }
+
+  $unicode = [Text.Encoding]::Unicode
+  $bytes = [IO.File]::ReadAllBytes($themePath)
+  $isUnicode = ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE)
+  $text = if ($isUnicode) { $unicode.GetString($bytes, 2, $bytes.Length - 2) } else { [Text.Encoding]::UTF8.GetString($bytes) }
+  $newline = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+  $rawLines = [regex]::Split($text, '\r\n|\n|\r')
+
+  $wanted = @{}
+  foreach ($role in $Roles)
+  {
+    $wanted[$role.Name] = [string]$Paths[$role.Name]
+  }
+  $wanted['DefaultValue'] = $SchemeName
+
+  $outLines = New-Object System.Collections.Generic.List[string]
+  $inSection = $false
+  $wroteSection = $false
+  $seen = @{}
+  foreach ($line in $rawLines)
+  {
+    if ($line -match '^\[(.+)\]\s*$')
+    {
+      if ($inSection)
+      {
+        foreach ($name in $wanted.Keys)
+        {
+          if (-not $seen.ContainsKey($name))
+          {
+            $outLines.Add($name + '=' + $wanted[$name])
+          }
+        }
+        $inSection = $false
+      }
+      $inSection = ($matches[1] -eq 'Control Panel\Cursors')
+      if ($inSection)
+      {
+        $wroteSection = $true
+        $seen = @{}
+      }
+      $outLines.Add($line)
+      continue
+    }
+
+    if ($inSection -and $line -match '^([^=]+)=(.*)$')
+    {
+      $name = $matches[1].Trim()
+      if ($wanted.ContainsKey($name))
+      {
+        $outLines.Add($name + '=' + $wanted[$name])
+        $seen[$name] = $true
+        continue
+      }
+    }
+    $outLines.Add($line)
+  }
+
+  if ($inSection)
+  {
+    foreach ($name in $wanted.Keys)
+    {
+      if (-not $seen.ContainsKey($name))
+      {
+        $outLines.Add($name + '=' + $wanted[$name])
+      }
+    }
+  }
+  elseif (-not $wroteSection)
+  {
+    if ($outLines.Count -gt 0 -and $outLines[$outLines.Count - 1] -ne '')
+    {
+      $outLines.Add('')
+    }
+    $outLines.Add('[Control Panel\Cursors]')
+    foreach ($name in $wanted.Keys)
+    {
+      $outLines.Add($name + '=' + $wanted[$name])
+    }
+  }
+
+  $text = ($outLines -join $newline)
+  if (-not $text.EndsWith($newline))
+  {
+    $text += $newline
+  }
+
+  if ($isUnicode)
+  {
+    [IO.File]::WriteAllBytes($themePath, ($unicode.GetPreamble() + $unicode.GetBytes($text)))
+  }
+  else
+  {
+    [IO.File]::WriteAllText($themePath, $text, (New-Object Text.UTF8Encoding $false))
+  }
+  Write-ThemeLog ("Cursor theme file synced: {0}" -f $themePath)
+}
+
+function Disable-AccessibilityCursorOverlay
+{
+  # Win11「辅助功能 → 鼠标指针样式」一旦设了颜色，DWM 就画彩色系统指针，
+  # 鼠标属性里的整套 .cur/.ani 方案不会显示。0xFFFFFFFF = Windows 默认，让方案文件生效。
+  $key = 'HKCU:\Software\Microsoft\Accessibility'
+  if (-not (Test-Path -LiteralPath $key))
+  {
+    return $false
+  }
+
+  $current = (Get-ItemProperty -LiteralPath $key -Name CursorColor -ErrorAction SilentlyContinue).CursorColor
+  if ($null -eq $current)
+  {
+    return $false
+  }
+
+  $asUint = [uint32]0
+  try
+  {
+    $asUint = [uint32][int]$current
+  }
+  catch
+  {
+    try { $asUint = [uint32]$current } catch { $asUint = 0 }
+  }
+
+  if ($asUint -eq [uint32]::MaxValue)
+  {
+    return $false
+  }
+
+  Set-ItemProperty -LiteralPath $key -Name CursorColor -Value ([int]-1) -Type DWord
+  $size = (Get-ItemProperty -LiteralPath $key -Name CursorSize -ErrorAction SilentlyContinue).CursorSize
+  if ($null -eq $size -or [int]$size -lt 1)
+  {
+    Set-ItemProperty -LiteralPath $key -Name CursorSize -Value 1 -Type DWord
+  }
+  Write-ThemeLog ("Cursor overlay cleared: CursorColor={0} -> default" -f $current)
+  return $true
+}
+
+function Set-WindowsCursorScheme
+{
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('light', 'dark')]
+    [string]$Mode,
+    $Config
+  )
+
+  if (-not $Config.cursor -or -not $Config.cursor.enabled)
+  {
+    Write-ThemeLog 'Cursor switch skipped: disabled'
+    return $false
+  }
+
+  $dir = Resolve-ThemeCursorDirectory -Mode $Mode -Config $Config
+  if (-not (Test-Path -LiteralPath $dir -PathType Container))
+  {
+    Write-ThemeLog ("Cursor switch skipped: missing {0}" -f $dir)
+    return $false
+  }
+
+  # 角色名对应 HKCU\Control Panel\Cursors 的值名；Id 是 SetSystemCursor 的 OCR_*。
+  $roles = @(
+    @{ Name = 'Arrow'; File = 'arrow.cur'; Id = 32512 },
+    @{ Name = 'Help'; File = 'help.cur'; Id = 32651 },
+    @{ Name = 'AppStarting'; File = 'appstarting.ani'; Id = 32650 },
+    @{ Name = 'Wait'; File = 'wait.ani'; Id = 32514 },
+    @{ Name = 'Crosshair'; File = 'crosshair.cur'; Id = 32515 },
+    @{ Name = 'IBeam'; File = 'ibeam.cur'; Id = 32513 },
+    @{ Name = 'NWPen'; File = 'nwpen.cur'; Id = 32631 },
+    @{ Name = 'No'; File = 'no.cur'; Id = 32648 },
+    @{ Name = 'SizeNS'; File = 'sizens.cur'; Id = 32645 },
+    @{ Name = 'SizeWE'; File = 'sizewe.cur'; Id = 32644 },
+    @{ Name = 'SizeNWSE'; File = 'sizenwse.cur'; Id = 32642 },
+    @{ Name = 'SizeNESW'; File = 'sizenesw.cur'; Id = 32643 },
+    @{ Name = 'SizeAll'; File = 'sizeall.cur'; Id = 32646 },
+    @{ Name = 'UpArrow'; File = 'uparrow.cur'; Id = 32516 },
+    @{ Name = 'Hand'; File = 'hand.cur'; Id = 32649 },
+    @{ Name = 'Person'; File = 'person.cur'; Id = 32672 },
+    @{ Name = 'Pin'; File = 'pin.cur'; Id = 32671 }
+  )
+
+  $paths = @{}
+  foreach ($role in $roles)
+  {
+    $path = Join-Path $dir $role.File
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf))
+    {
+      Write-ThemeLog ("Cursor switch skipped: missing {0}" -f $path)
+      return $false
+    }
+    $paths[$role.Name] = $path
+  }
+
+  $schemeName = if ($Mode -eq 'light') { [string]$Config.cursor.light_scheme } else { [string]$Config.cursor.dark_scheme }
+  if (-not $schemeName)
+  {
+    $schemeName = if ($Mode -eq 'light') { 'Cursor Concept 3 Light' } else { 'Cursor Concept 3 Dark' }
+  }
+
+  # Windows 方案字符串顺序固定，Person/Pin 是 Win10+ 扩展。
+  $schemeValue = @(
+    $paths.Arrow, $paths.Help, $paths.AppStarting, $paths.Wait, $paths.Crosshair, $paths.IBeam,
+    $paths.NWPen, $paths.No, $paths.SizeNS, $paths.SizeWE, $paths.SizeNWSE, $paths.SizeNESW,
+    $paths.SizeAll, $paths.UpArrow, $paths.Hand, $paths.Person, $paths.Pin
+  ) -join ','
+
+  $key = 'HKCU:\Control Panel\Cursors'
+  $schemesKey = 'HKCU:\Control Panel\Cursors\Schemes'
+  if (-not (Test-Path -LiteralPath $schemesKey))
+  {
+    New-Item -Path $schemesKey -Force | Out-Null
+  }
+
+  Set-ItemProperty -LiteralPath $schemesKey -Name $schemeName -Value $schemeValue -Type String
+  # REG_SZ 方案名；鼠标属性读的是这个默认值。
+  Set-ItemProperty -LiteralPath $key -Name '(default)' -Value $schemeName -Type String
+  Set-ItemProperty -LiteralPath $key -Name 'Scheme Source' -Value 1 -Type DWord
+  foreach ($role in $roles)
+  {
+    # REG_EXPAND_SZ：和 Install.inf / 鼠标属性写入类型一致。
+    Set-ItemProperty -LiteralPath $key -Name $role.Name -Value $paths[$role.Name] -Type ExpandString
+  }
+
+  # 辅助功能彩色指针会盖住整套方案。清掉后再按 17 个角色套文件。
+  $overlayCleared = $false
+  try
+  {
+    $overlayCleared = Disable-AccessibilityCursorOverlay
+  }
+  catch
+  {
+    Write-ThemeLog ("Cursor overlay clear failed: {0}" -f $_.Exception.Message)
+  }
+
+  # 不要调用 SPI_SETCURSORS：本机会话里它会把刚套上的方案打回系统默认 1bpp 箭头。
+  $setCount = 0
+  $live = 'skip'
+  if (Ensure-CursorNative)
+  {
+    foreach ($role in $roles)
+    {
+      try
+      {
+        if ([CursorNative]::SetFile($paths[$role.Name], [uint32]$role.Id))
+        {
+          $setCount++
+        }
+      }
+      catch
+      {
+        Write-ThemeLog ("Cursor SetSystemCursor failed: {0} {1}" -f $role.Name, $_.Exception.Message)
+      }
+    }
+    try
+    {
+      $live = [CursorNative]::LiveArrow()
+    }
+    catch
+    {
+      $live = 'error'
+    }
+  }
+
+  try
+  {
+    Sync-ThemeFileCursors -Roles $roles -Paths $paths -SchemeName $schemeName
+  }
+  catch
+  {
+    Write-ThemeLog ("Cursor theme file sync failed: {0}" -f $_.Exception.Message)
+  }
+
+  Write-ThemeLog ("Cursor switch done: mode={0} scheme={1} set={2}/{3} live={4} overlay={5} dir={6}" -f `
+      $Mode, $schemeName, $setCount, $roles.Count, $live, $overlayCleared, $dir)
+  return $true
+}
+
 function Set-DesktopWallpaper
 {
   param([string]$ImagePath)
@@ -203,14 +797,109 @@ function Get-ThemeHiddenAction
 
 function Get-ThemeTaskSettings
 {
-  return New-ScheduledTaskSettingsSet `
+  param([switch]$DisableStartWhenAvailable)
+
+  # Light/Dark 必须关掉 StartWhenAvailable：关机错过的日出/日落不能在开机时补跑，否则会和登录对齐任务抢最后一次切换
+  $settings = New-ScheduledTaskSettingsSet `
     -Hidden `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable `
     -WakeToRun `
     -MultipleInstances IgnoreNew `
     -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+
+  if (-not $DisableStartWhenAvailable)
+  {
+    $settings.StartWhenAvailable = $true
+  }
+  else
+  {
+    $settings.StartWhenAvailable = $false
+  }
+
+  return $settings
+}
+
+function Get-ThemeLogonTrigger
+{
+  param([string]$Delay = 'PT10S')
+
+  # 登录后稍等 DWM / Explorer，再按当前时间对齐主题
+  $trigger = New-ScheduledTaskTrigger -AtLogOn
+  $trigger.Delay = $Delay
+  return $trigger
+}
+
+function Get-ThemeSessionStateTrigger
+{
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('ConsoleConnect', 'SessionUnlock')]
+    [string]$StateChange
+  )
+
+  # New-ScheduledTaskTrigger 没有解锁/切回控制台。CIM 的 SessionStateChange 才能在锁屏回来时重套指针。
+  # TASK_SESSION_STATE_CHANGE_TYPE: ConsoleConnect=1, SessionUnlock=8
+  $id = if ($StateChange -eq 'SessionUnlock') { 8 } else { 1 }
+  $class = Get-CimClass -Namespace 'Root/Microsoft/Windows/TaskScheduler' -ClassName 'MSFT_TaskSessionStateChangeTrigger' -ErrorAction Stop
+  $trigger = New-CimInstance -CimClass $class -ClientOnly
+  $trigger.Enabled = $true
+  $trigger.StateChange = $id
+  # 解锁当下立刻跑。Win11 延迟覆盖由 Apply-CursorsNow 自己补套，不要再 Delay 触发器。
+  $trigger.Delay = 'PT0S'
+  $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  if ($user)
+  {
+    $trigger.UserId = $user
+  }
+  return $trigger
+}
+
+function Get-ThemeCursorUnlockTriggers
+{
+  # 锁屏解锁、Win+L 回来、切回本机会话都要抢在系统 .theme 把指针盖掉之前。
+  return @(
+    (Get-ThemeSessionStateTrigger -StateChange 'SessionUnlock'),
+    (Get-ThemeSessionStateTrigger -StateChange 'ConsoleConnect')
+  )
+}
+
+function Ensure-ThemeScheduledTask
+{
+  param(
+    [Parameter(Mandatory = $true)][string]$TaskName,
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    $Trigger = $null,
+    [switch]$DisableStartWhenAvailable
+  )
+
+  $action = Get-ThemeHiddenAction -ScriptPath $ScriptPath
+  $settings = Get-ThemeTaskSettings -DisableStartWhenAvailable:$DisableStartWhenAvailable
+  $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  if ($existing)
+  {
+    if ($null -ne $Trigger)
+    {
+      Repair-ThemeScheduledTaskWindow -TaskName $TaskName -ScriptPath $ScriptPath -Trigger $Trigger -DisableStartWhenAvailable:$DisableStartWhenAvailable
+    }
+    else
+    {
+      Repair-ThemeScheduledTaskWindow -TaskName $TaskName -ScriptPath $ScriptPath -DisableStartWhenAvailable:$DisableStartWhenAvailable
+    }
+    return
+  }
+
+  $register = @{
+    TaskName = $TaskName
+    Action = $action
+    Settings = $settings
+    Description = "Theme Scheduler - $TaskName"
+  }
+  if ($null -ne $Trigger)
+  {
+    $register.Trigger = $Trigger
+  }
+  Register-ScheduledTask @register | Out-Null
 }
 
 function Repair-ThemeScheduledTaskWindow
@@ -218,11 +907,12 @@ function Repair-ThemeScheduledTaskWindow
   param(
     [Parameter(Mandatory = $true)][string]$TaskName,
     [Parameter(Mandatory = $true)][string]$ScriptPath,
-    $Trigger = $null
+    $Trigger = $null,
+    [switch]$DisableStartWhenAvailable
   )
 
   $action = Get-ThemeHiddenAction -ScriptPath $ScriptPath
-  $settings = Get-ThemeTaskSettings
+  $settings = Get-ThemeTaskSettings -DisableStartWhenAvailable:$DisableStartWhenAvailable
   if ($null -ne $Trigger)
   {
     Set-ScheduledTask -TaskName $TaskName -Action $action -Settings $settings -Trigger $Trigger | Out-Null

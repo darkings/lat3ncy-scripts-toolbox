@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    常驻 WinUI 3 Island Renderer。唯一 IME HUD。
+    AHK CapsLock 状态芯片和 Caps+F 翻译面板都接入本进程。
+    标题 / mutex 都是 Lat3ncyImeHudWinUi。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Lat3ncyToolbox.ImeHudWinUi</RootNamespace>
+    <AssemblyName>ImeHudWinUi</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260804001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ApplicationDefinition Include="App.xaml" />
+    <Page Remove="App.xaml" />
+  </ItemGroup>
+
+  <!-- unpackaged WinUI 查 ms-appx 主题需要 exe 旁边的 resources.pri。 -->
+  <Target Name="CopyMergedPriAsResourcesPri" AfterTargets="Build">
+    <PropertyGroup>
+      <_MergedPri>$(OutputPath)$(AssemblyName).pri</_MergedPri>
+    </PropertyGroup>
+    <Copy Condition="Exists('$(_MergedPri)')"
+          SourceFiles="$(_MergedPri)"
+          DestinationFiles="$(OutputPath)resources.pri"
+          SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopyMergedPriAsResourcesPriOnPublish" AfterTargets="Publish">
+    <PropertyGroup>
+      <_MergedPri>$(OutputPath)$(AssemblyName).pri</_MergedPri>
+    </PropertyGroup>
+    <Copy Condition="Exists('$(_MergedPri)')"
+          SourceFiles="$(_MergedPri)"
+          DestinationFiles="$(PublishDir)resources.pri"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>

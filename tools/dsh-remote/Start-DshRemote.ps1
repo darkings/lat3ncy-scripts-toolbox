@@ -1,4 +1,4 @@
-﻿# Start-DshRemote.ps1
+# Start-DshRemote.ps1
 # 一键暴露本地 DSH 到 Tailscale 尾网（手机需加入同一 Tailnet）
 #
 # 用法:
@@ -12,7 +12,9 @@ param(
   [int]$Port = 0,
   [switch]$Disable,
   [switch]$Json,
-  [switch]$NoNotify
+  [switch]$NoNotify,
+  # 只检测核心 bundle 缺失并报告，不自动补建 junction。
+  [switch]$SkipBundleRepair
 )
 
 $ErrorActionPreference = 'Stop'
@@ -85,6 +87,13 @@ if ($Port -gt 0) {
   $portInfo = Get-DshPortInfo -ConfiguredPort $cfg.server.port
   $resolvedPort = [int]$portInfo.Port
   $portSource = [string]$portInfo.Source
+  if ($resolvedPort -le 0) {
+    # 端口探测失败不再静默退回 3081：那会让 relay 指向一个没人监听的端口，
+    # 最终以 "ECONNREFUSED 127.0.0.1:3081" 的形式把探测失败伪装成网络故障。
+    Emit "Could not resolve the local DSH port. Start DSH Desktop first, or set server.port in config.toml." 'fail'
+    if ($Json) { @{ ok = $false; error = 'port not resolved'; source = $portSource } | ConvertTo-Json -Compress | Write-Output }
+    exit 1
+  }
 }
 $probeTimeout = if ($cfg.watcher.probe_timeout) { [int]$cfg.watcher.probe_timeout } else { 12 }
 Emit "Target port: $resolvedPort (source: $portSource, https :$httpsPort)"
@@ -103,6 +112,42 @@ if (-not $found) {
   exit 1
 }
 Emit "Service listening on 127.0.0.1:$resolvedPort" 'ok'
+
+# --- 3b. 核心 bundle 自检 ---
+# 这是「DSH 在跑、页面 200、但 /api 404」的常见根因：profile 的 node_modules 里
+# 缺少核心 bundle（@deepseek-ai/dsh-web-app 负责挂载 /api），通常是插件增删失败
+# 触发恢复式卸载后留下的残缺状态。提前拦住，别等跑到最后的 API 探测才报错。
+$bundleState = Test-DshCoreBundles
+if ($bundleState.Unknown) {
+  Emit 'Skipped core bundle check (profile package.json not readable).' 'warn'
+} elseif (-not $bundleState.Ok) {
+  $names = ($bundleState.Missing | ForEach-Object { $_.Name }) -join ', '
+  Emit "Core bundle(s) missing from the web profile: $names" 'warn'
+  if ($bundleState.Restorable.Count -gt 0 -and -not $SkipBundleRepair) {
+    try {
+      $repair = Repair-DshCoreBundles
+      if ($repair.Created.Count -gt 0) {
+        Emit "Linked missing core bundle(s) from the dependency tree: $($repair.Created -join ', ')" 'ok'
+        Emit 'Restart DSH Desktop for the plugin tree to reload, then re-run this script.' 'warn'
+      }
+      foreach ($f in $repair.Failed) { Emit "Could not link $($f.Name): $($f.Error)" 'fail' }
+    } catch {
+      Emit "Core bundle repair failed: $($_.Exception.Message)" 'fail'
+    }
+  }
+  if ($bundleState.Unrestorable.Count -gt 0) {
+    $un = ($bundleState.Unrestorable | ForEach-Object { $_.Name }) -join ', '
+    Emit "Not present in the dependency tree (must be installed, not linked): $un" 'warn'
+    Emit 'Run a plugin add/remove in DSH Settings -> Plugins to trigger a profile reinstall.' 'warn'
+  }
+  $bundleState = Test-DshCoreBundles
+  if (-not $bundleState.Ok) {
+    Emit 'The /api route will not be mounted until these bundles are restored.' 'fail'
+    Emit 'Fix it, then fully quit and restart DSH Desktop before relying on remote access.' 'warn'
+  }
+} else {
+  Emit 'Core bundles present' 'ok'
+}
 
 # --- 4. 启动 loopback relay（让 DSH API 通过 trust fence）---
 $targetPort = $resolvedPort
@@ -184,23 +229,36 @@ $code = if ($probeResult.StatusCode) { [int]$probeResult.StatusCode } else { 200
 Emit "HTTP $code - $url" 'ok'
 
 # GET 只能证明静态页面可达；workspace 实际依赖 POST /api + WebSocket。
-# 通过 workspace.list 做真实 API 健康检查，避免把 403 页面误报为 ready。
+# 这里用 workspace.list 探测 /api 路由是否挂载，但状态码语义要分清：
+#   401 = 路由已挂载但本探测未带浏览器会话 cookie —— 这正是健康状态。
+#         DSH 自 0.1.2 起对整条 /api 面要求鉴权，而 curl 没有 cookie，
+#         所以 401 是「API 正常」的证据，不是失败。
+#   403 = Host/Origin 信任围栏拒绝 —— 说明 relay 没生效或 Host 未重写。
+#   404 = /api 路由根本没挂载 —— 通常是 DSH 进程启动了但插件树加载不完整
+#         （典型原因：端口被占导致 webserver 插件 EADDRINUSE，boot 半途失败）。
+#   2xx = 带了有效凭据且调用成功。
 $rpcBody = '{"type":"client-request","rpcId":"00000000-0000-4000-8000-000000000001","method":"workspace.list","payload":{}}'
 $apiCode = $null
 try {
   $apiRaw = curl.exe -s -o NUL -w "%{http_code}" -X POST "$url/api/workspace.list" -H "content-type: application/json" --data-raw $rpcBody --max-time 12 2>$null
   if ($apiRaw -match '^\d{3}$') { $apiCode = [int]$apiRaw }
 } catch {}
-if ($null -eq $apiCode -or $apiCode -lt 200 -or $apiCode -ge 300) {
+$apiOk = ($null -ne $apiCode) -and ($apiCode -eq 401 -or $apiCode -eq 403 -or ($apiCode -ge 200 -and $apiCode -lt 300))
+if (-not $apiOk) {
   $apiText = if ($null -eq $apiCode) { 'unreachable' } else { "HTTP $apiCode" }
   Emit "Workspace API check failed: $apiText" 'fail'
-  Emit 'The page is reachable, but DSH API is not usable. Keep relay enabled or add --trusted-host to DSH.' 'warn'
+  switch ($apiCode) {
+    404 { Emit 'The /api route is not mounted. DSH is running but its plugin tree did not load fully - restart DSH Desktop (check for EADDRINUSE on the harness port).' 'warn' }
+    403 { Emit 'The Host/Origin trust fence rejected the request. Ensure the loopback relay is running (it rewrites Host/Origin), or add the hostname to DSH trustedHosts.' 'warn' }
+    default { Emit 'The page is reachable, but the DSH API is not usable. Keep the relay enabled.' 'warn' }
+  }
   if ($Json) {
     @{ ok = $false; enabled = $true; url = $url; port = $resolvedPort; target_port = $targetPort; relay_enabled = $relayEnabled; relay_port = $relayPort; hostname = $hostname; http_code = $code; api_code = $apiCode } | ConvertTo-Json -Compress | Write-Output
   }
   exit 1
 }
-Emit "Workspace API HTTP $apiCode - relay/trust check passed" 'ok'
+$apiLabel = if ($apiCode -eq 401) { 'HTTP 401 (route mounted; auth expected for cookie-less probe)' } elseif ($apiCode -eq 403) { 'HTTP 403 (route mounted; trust fence active)' } else { "HTTP $apiCode" }
+Emit "Workspace API $apiLabel - relay/trust check passed" 'ok'
 
 if (-not $NoNotify) { Invoke-DshRemoteNotify -Type 'success' -Text "Remote ready $hostname" }
 

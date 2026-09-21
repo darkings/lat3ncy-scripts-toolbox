@@ -157,10 +157,5 @@ if (-not $reloadedProcesses)
 }
 
 $processIds = ($reloadedProcesses.ProcessId | Sort-Object -Unique) -join ', '
-# silent 会关 Raycast 窗口；Windows 上 stdout 不能稳定变成底部 HUD。
-# 成功改走共享通知；只有 HUD 启动失败时才把最后一行交给 Raycast。
-$successText = "AutoHotkey 已重载 (PID: $processIds)"
-if (-not (Show-ToolboxNotify -Type success -Icon '✓' -Text $successText -Duration 900))
-{
-  Write-Output "✓ $successText"
-}
+# silent 会关 Raycast 窗口。成功也走系统 Toast，不再弹共享 HUD / stdout。
+Show-SystemToast -Title '✓ AutoHotkey 已重载' -Message ("PID: {0}" -f $processIds) | Out-Null

@@ -1,4 +1,4 @@
-﻿# Get-DshRemoteStatus.ps1
+# Get-DshRemoteStatus.ps1
 # 查询当前 DSH 进程 + Tailscale Serve 状态，JSON/人类可读双输出
 
 param([switch]$Json)
@@ -14,7 +14,11 @@ $httpsPort = if ($cfg.server.https_port) { [int]$cfg.server.https_port } else { 
 $relayEnabled = $true
 if ($null -ne $cfg.relay.enabled) { $relayEnabled = [bool]$cfg.relay.enabled }
 $relayPort = if ($cfg.relay.port) { [int]$cfg.relay.port } else { 3090 }
-$targetPort = if ($relayEnabled) { $relayPort } else { $port }
+# target_port = Tailscale Serve 应当指向的端口，即对外暴露的那一跳。
+# relay 启用时是 relay 的监听端口，否则才是 DSH 自己的端口。
+# （此前这里把 target_port 直接赋成 $relayPort，语义上混淆了「relay 监听端口」
+#  与「relay 的上游目标」；取决于 relay 是否启用的条件本身是对的，保留。）
+$servePort = if ($relayEnabled) { $relayPort } else { $port }
 
 $dshProc = @($snapshot.Gui) | Select-Object -First 1
 $nodeProc = @($snapshot.Node) | Select-Object -First 1
@@ -33,7 +37,7 @@ $accessDenied = ($rawHostname -eq "__ACCESS_DENIED__" -or $rawServe -eq "__ACCES
 if ($accessDenied) { $hostname = $null; $serveOn = $false; $tailscaleOnline = $false }
 else {
   $hostname = $rawHostname
-  $serveOn = Test-TailscaleServeOn -Port $targetPort -HttpsPort $httpsPort -ServeStatus $rawServe
+  $serveOn = Test-TailscaleServeOn -Port $servePort -HttpsPort $httpsPort -ServeStatus $rawServe
   $tailscaleOnline = $null -ne $hostname
 }
 $url = if ($hostname) { "https://$hostname" } else { $null }
@@ -44,6 +48,10 @@ $watcherInfo = Get-DshWatcherTaskInfo
 $watcherTask = if ($watcherInfo.Exists) { $watcherInfo.Status } else { $null }
 $watcherLastRun = $watcherInfo.LastRun
 
+# 核心 bundle 自检：缺失会导致「页面 200 但 /api 404」，值得在状态里直接可见。
+$bundleState = Test-DshCoreBundles
+$bundleMissing = @($bundleState.Missing | ForEach-Object { $_.Name })
+
 $obj = [ordered]@{
   dsh_running = $dshRunning
   dsh_pid = $dshPid
@@ -53,13 +61,19 @@ $obj = [ordered]@{
   relay_port = $relayPort
   relay_pid = if ($relayProc.Count -gt 0) { $relayProc[0].ProcessId } else { $null }
   relay_listening = $relayListening
-  target_port = $targetPort
+  # serve_port: Tailscale Serve 的目标端口（relay 启用时是 relay 端口）。
+  # target_port: 保留旧字段名，语义同 serve_port，避免破坏已有调用方。
+  serve_port = $servePort
+  target_port = $servePort
+  relay_upstream_port = $port
   tailscale_online = $tailscaleOnline
   hostname = $hostname
   url = $url
   serve_on = $serveOn
   https_port = $httpsPort
   auto_off = [bool]$cfg.watcher.auto_off
+  core_bundles_ok = $bundleState.Ok
+  core_bundles_missing = $bundleMissing
   watcher_task = $watcherTask
   watcher_last_run = $watcherLastRun
   watcher_mode = 'event-driven (WITHIN 2s + 60s reconcile + filtered node)'
@@ -89,6 +103,14 @@ if ($accessDenied) {
   Write-Host "  Serve       : $(if($serveOn){"ON  -> $url"} else {"OFF"}) (https :$httpsPort)"
 }
 Write-Host "  AutoOff     : $($obj.auto_off)  IsAdmin=$(-not $needAdmin) HasSudo=$hasSudo"
+if ($bundleState.Unknown) {
+  Write-Host "  CoreBundles : unknown (profile package.json not readable)" -ForegroundColor Yellow
+} elseif ($bundleState.Ok) {
+  Write-Host "  CoreBundles : OK"
+} else {
+  Write-Host "  CoreBundles : MISSING $($bundleMissing -join ', ')" -ForegroundColor Red
+  Write-Host "                -> /api will return 404 until restored; run .\Start-DshRemote.ps1 to link them" -ForegroundColor Yellow
+}
 $watcherText = if ($watcherTask) {
   if ($watcherLastRun) { "$watcherTask (event-driven, last $watcherLastRun)" } else { "$watcherTask (event-driven)" }
 } else {

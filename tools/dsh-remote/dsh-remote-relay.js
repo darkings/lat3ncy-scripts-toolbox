@@ -68,7 +68,15 @@ const server = http.createServer((clientRequest, clientResponse) => {
 
   upstream.setTimeout(0);
   upstream.on('error', (error) => {
-    if (!clientResponse.destroyed) writeError(clientResponse, 502, `DSH relay upstream error: ${error.message}`);
+    if (!clientResponse.destroyed) {
+      // Name the target explicitly.  A bare "ECONNREFUSED 127.0.0.1:<port>" is
+      // read as a network fault; in practice it almost always means the DSH
+      // web server is not listening on the port this relay was pointed at.
+      const hint = error.code === 'ECONNREFUSED'
+        ? ` (nothing is listening on ${targetAuthority}; is DSH running on that port?)`
+        : '';
+      writeError(clientResponse, 502, `DSH relay upstream error: ${error.message}${hint}`);
+    }
   });
   clientRequest.on('aborted', () => upstream.destroy());
   clientResponse.on('close', () => upstream.destroy());
@@ -98,8 +106,14 @@ server.on('upgrade', (clientRequest, clientSocket, head) => {
 
   const reject = (error) => {
     if (connected) return;
-    clientSocket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\nDSH relay offline');
-    if (error) process.stderr.write(`[dsh-remote-relay] ${error.message}\n`);
+    const detail = error && error.code === 'ECONNREFUSED'
+      ? `DSH relay offline (nothing listening on ${targetAuthority})`
+      : 'DSH relay offline';
+    const body = detail;
+    clientSocket.end(
+      `HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+    );
+    if (error) process.stderr.write(`[dsh-remote-relay] upstream ${targetAuthority}: ${error.message}\n`);
   };
   upstreamSocket.once('error', reject);
   clientSocket.once('error', () => upstreamSocket.destroy());

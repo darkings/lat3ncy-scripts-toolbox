@@ -6,14 +6,14 @@
 # @raycast.timeout 90000
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
-# @raycast.description Screenshot, OCR text, copy to clipboard and show a unified HUD
+# @raycast.description Screenshot, OCR text, copy to clipboard and show a system toast
 # @raycast.icon 🧠
 
 # OCR 引擎切换：ocr/config.toml 的顶层 "ocr" 字段
 #   "system"   （默认）Win+Shift+T 系统文本操作（Windows 11 23H2+），
 #               框选识别复制全部由系统完成，本脚本不弹通知
 #   "rapidocr" 旧方案：先打开截图框，再 pythonw + RapidOCR（--no-screenshot），
-#               识别后弹气泡。框选不再被 ONNX 冷启动挡住。
+#               识别后弹系统 Toast。框选不再被 ONNX 冷启动挡住。
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')

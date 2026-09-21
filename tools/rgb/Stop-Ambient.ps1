@@ -10,6 +10,8 @@ $taskName = "RGB-Ambient"
 $hi75Exe = Join-Path $root "dist\hi75\hi75.exe"
 $hi75Legacy = Join-Path $root "dist\hi75.exe"
 $hi75DistRoot = (Join-Path $root "dist").ToLowerInvariant()
+$stateDir = Join-Path $env:LOCALAPPDATA "lat3ncy-toolbox"
+$quitFlag = Join-Path $stateDir "rgb-quit.flag"
 
 function Write-AmbientHost {
     param([string]$Message, [string]$Color = "Yellow")
@@ -32,9 +34,43 @@ function Stop-MatchingProcesses {
     return $procs.Count
 }
 
-# 先停解释器，-Wait 的计划任务会随 python 退出而结束
+function Get-AmbientPythonProcesses {
+    @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.CommandLine -and $_.CommandLine -match '(?i)[\\/]ambient\.py(\s|"|$)'
+        })
+}
+
+# 先写退出旗标，让 ambient 的 finally 推 Direct 全黑，再杀进程。
+# 直接 Stop-Process 的话键盘会掉回板载彩虹、风扇保持最后一色。
+try {
+    if (-not (Test-Path -LiteralPath $stateDir)) {
+        New-Item -ItemType Directory -Path $stateDir | Out-Null
+    }
+    Set-Content -LiteralPath $quitFlag -Value "1" -Encoding ascii
+} catch {
+}
+
+$graceDeadline = (Get-Date).AddSeconds(2.5)
+while ((Get-Date) -lt $graceDeadline) {
+    $still = Get-AmbientPythonProcesses
+    if ($still.Count -eq 0) {
+        break
+    }
+    Start-Sleep -Milliseconds 100
+}
+
+# 优雅退出失败再强杀。-Wait 的计划任务会随 python 退出而结束
 $pyCount = Stop-MatchingProcesses -Filter "Name='python.exe' OR Name='pythonw.exe'" -Match {
     $_.CommandLine -and $_.CommandLine -match '(?i)[\\/]ambient\.py(\s|"|$)'
+}
+
+# 旗标没被消费也要删，避免下次启动立刻退出。必须在强杀之后再清。
+try {
+    if (Test-Path -LiteralPath $quitFlag) {
+        Remove-Item -LiteralPath $quitFlag -Force -ErrorAction SilentlyContinue
+    }
+} catch {
 }
 
 # 任务 /End 可能没把 python 的 SIGTERM 送到，hi75.exe 会成孤儿

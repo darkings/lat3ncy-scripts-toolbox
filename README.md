@@ -22,7 +22,7 @@ AutoHotkey.exe .\ahk\main.ahk
 
 也可以为 `ahk/main.ahk` 创建快捷方式并放入 Windows 启动文件夹（`Win+R` 后输入 `shell:startup`），让工具箱登录后自动运行。
 
-- CapsLock 短按切中/英、长按进大写；状态 HUD 默认走 `tools/ime-hud/ImeHud.exe`（`中` / `A` / 大写底线）。效果不理想时把 `CapsLockIme.UseImeHud` 设为 `false`，立刻回退 AHK 芯片；完整回退用 `git checkout ime-hud-ahk-baseline`。
+- CapsLock 短按切中/英、长按进大写；状态 HUD 默认走 `tools/ime-hud-winui/out/ImeHudWinUi.exe`（CN 中框 / EN A / CAPS 上箭头）。效果不理想时把 `CapsLockIme.UseImeHud` 设为 `false`，立刻回退 AHK 芯片。
 - `ahk/shortcuts.ahk` 只保存快捷键配置，`ahk/hotkey-router.ahk` 统一完成校验与注册，`ahk/features/` 只实现功能。
 - 修改按键只编辑 `ahk/shortcuts.ahk`；停用某项功能时，在 Router 中注释对应的注册项即可，feature 文件无需修改。
 - 如果两个已启用功能使用了相同快捷键，脚本会在启动时报错，避免其中一个功能被静默覆盖。
@@ -117,7 +117,7 @@ powershell.exe -NoProfile -File .\ahk\tests\run-tests.ps1
 
 ## 统一通知
 
-AHK feature 与 Raycast PowerShell 脚本共用 `shared/notify/renderer.ahk` 绘制的 Win11 Fluent 级自适应 HUD。视觉参数统一在 Renderer 中维护；feature 统一调用 `Notify.State()`、`Notify.Info()`、`Notify.Success()` 或 `Notify.Error()`，不得自行创建通知 GUI 或直接调用 `ToolTip`。**例外：** CapsLock 的中 / 英 / 大写状态默认走独立进程 `tools/ime-hud/ImeHud.exe`（NoActivate popup + Desktop Acrylic + DWM 小圆角），失败或 `UseImeHud=false` 时回退 `Notify.State()` 芯片。
+AHK feature 统一调用 `Notify.State()`、`Notify.Info()`、`Notify.Success()` 或 `Notify.Error()`，不得自行创建通知 GUI 或直接调用 `ToolTip`。`state` / `popup` 由 `shared/notify/renderer.ahk` 绘制 Win11 Fluent 级自适应 HUD；`success` / `info` / `error` 走系统 Toast。**例外：** CapsLock 的中 / 英 / 大写状态默认走独立进程 `tools/ime-hud-winui/out/ImeHudWinUi.exe`（WinUI 3 Island，Acrylic.Default，圆角 `ROUNDSMALL`，点穿 NOACTIVATE），失败或 `UseImeHud=false` 时回退 `Notify.State()` 芯片。`Caps + F` 划词翻译也走同一 WinUI 进程的独立翻译面板。Raycast 生产通知一律 `Show-SystemToast`，不经过共享 HUD。
 
 - **4 级全场景输入锚点定位引擎（C# + UIA）**：
   - **L1（Win32 Caret）**：通过 `GetGUIThreadInfo` 捕获传统 Win32 控件光标。
@@ -130,10 +130,10 @@ AHK feature 与 Raycast PowerShell 脚本共用 `shared/notify/renderer.ahk` 绘
   - **浅色模式（Light Mode）**：极简纯白 `#FFFFFF` 背景、`#18181B` 高对比度墨黑文字、`#E4E4E7` 1px 浅灰色立体边框。
   - 硬件级亚像素抗锯齿大圆角（`DWMWA_WINDOW_CORNER_PREFERENCE`）与 1px 细描边（`DWMWA_BORDER_COLOR`）。
 - **调用链路**：
-  - AHK 调用链：CapsLock 的 `CN` / `EN` / `CAPS` 走 `ImeHud.exe`（`中` / `A` / 大写底线），失败回退 `NotifyRenderer` 芯片；其它 `state` / `popup` 仍走 `Notify` → `NotifyRenderer`；`success` / `info` / `error` 走 `Notify` → `toast.ps1` 系统 Toast，找不到脚本或启动失败时回退 `ToolTip`。
+  - AHK 调用链：CapsLock 的 `CN` / `EN` / `CAPS` 走 `ImeHudWinUi.exe`（WinUI 芯片），失败回退 `NotifyRenderer` 芯片；`Caps + F` 走同一进程的翻译面板；其它 `state` / `popup` 仍走 `Notify` → `NotifyRenderer`；`success` / `info` / `error` 走 `Notify` → `toast.ps1` 系统 Toast，找不到脚本或启动失败时回退 `ToolTip`。
   - 共享资源（`toast.ps1`、`anchor-locator.exe`）通过 `shared/notify/paths.ahk` 按入口脚本目录解析，不写死本机绝对路径。
   - 默认不写调试日志；仅启动参数 `--debug` 或环境变量 `LAT3NCY_DEBUG=1` 时写入 `%TEMP%\lat3ncy-toolbox-notify.log`。
-  - Raycast 调用链：script → `tools/raycast-scripts/_lib/notify.ps1` → `notify.exe` 或 `notify-cli.ahk`；调用失败时由脚本 `Write-Output`，交给 Raycast HUD 显示。
+  - Raycast 调用链：script → `tools/raycast-scripts/_lib/notify.ps1` → `Show-SystemToast` → `shared/notify/toast.ps1`。Caps 中/英/大写与 Caps+F 翻译面板仍走 WinUI；其余生产通知一律系统 Toast。
 - **生命周期**：同一时间只保留一个 HUD，新通知自动覆盖旧通知；默认时长：`state` 550ms、`info` 750ms、`success` 900ms、`error` 1400ms。
 - `Notify.Mode` 支持 `full`、`errors` 和 `off`；默认是 `full`。
 
@@ -147,13 +147,13 @@ python .\tools\raycast-scripts\ocr\install-deps.py
 
 安装脚本会先检测操作系统与 Python 环境，再按平台选用解释器（Windows 优先 `python`，macOS/Linux 优先 `python3`），仅安装缺失的 RapidOCR 依赖并验证引擎可加载；重复运行会自动跳过已装依赖，`--check` 参数可只检测不安装。安装完成后会询问是否下载 PP-OCRv4 移动端模型，以及是否在 `config.toml` 中切换为 `mobile`。
 
-推荐通过 Raycast 命令 **Screenshot OCR**（`tools/raycast-scripts/screenshot-ocr.ps1`）触发。`system` 模式直接注入 `Win+Shift+T`，进入 Windows 文本操作的框选识别，不显示本脚本通知；当前本机为 `rapidocr`，会先打开系统截图框，再启动 `ocr/ocr.py --no-screenshot` 加载模型并识别，完成后显示统一 HUD。手动运行 `ocr.py` 时也会先出框再加载模型：
+推荐通过 Raycast 命令 **Screenshot OCR**（`tools/raycast-scripts/screenshot-ocr.ps1`）触发。`system` 模式直接注入 `Win+Shift+T`，进入 Windows 文本操作的框选识别，不显示本脚本通知；当前本机为 `rapidocr`，会先打开系统截图框，再启动 `ocr/ocr.py --no-screenshot` 加载模型并识别，完成后显示系统 Toast。手动运行 `ocr.py` 时也会先出框再加载模型：
 
 ```powershell
 pythonw.exe .\tools\raycast-scripts\ocr\ocr.py
 ```
 
-RapidOCR 模式会轮询系统剪贴板中的图片（超时 45 秒，按 Esc 取消则直接退出），识别中英文后把文本写回剪贴板；Raycast 流程通过共享 Renderer 显示结果，调用失败时回退 Raycast HUD。手动运行 `ocr.py` 时仍使用其自身结果界面。system 模式由 Windows 完成框选、识别和复制，不经过 Python。
+RapidOCR 模式会轮询系统剪贴板中的图片（超时 45 秒，按 Esc 取消则直接退出），识别中英文后把文本写回剪贴板；Raycast 流程由 `screenshot-ocr.ps1` 以系统 Toast 显示结果，手动运行 `ocr.py` 时由脚本直接调用 `shared/notify/toast.ps1`。system 模式由 Windows 完成框选、识别和复制，不经过 Python。
 
 ### OCR 模型配置
 
@@ -175,8 +175,9 @@ RapidOCR 模式会轮询系统剪贴板中的图片（超时 45 秒，按 Esc �
 
 | 脚本 | 功能 |
 | --- | --- |
-| `reset-navicat.ps1` | **仅限合法授权测试环境**：识别当前操作系统后调用 Navicat 试用期重置脚本；`silent` 关闭 Raycast 窗口，成功走共享 HUD，失败走系统 Toast。公开仓库请勿默认启用 |
-| `restart-autohotkey.ps1` | 仅结束本工具箱的 `ahk/main.ahk` 进程，通过 PATH 中的 AutoHotkey v2 重新加载；`silent` 关闭 Raycast 窗口，成功走共享 HUD，失败走系统 Toast |
+| `reset-navicat.ps1` | **仅限合法授权测试环境**：识别当前操作系统后调用 Navicat 试用期重置脚本；`silent` 关闭 Raycast 窗口，成功/失败都走系统 Toast。公开仓库请勿默认启用 |
+| `restart-autohotkey.ps1` | 仅结束本工具箱的 `ahk/main.ahk` 进程，通过 PATH 中的 AutoHotkey v2 重新加载；`silent` 关闭 Raycast 窗口，成功/失败都走系统 Toast |
+| `toggle-rgb.ps1` | 切换技嘉风扇 + Hi75 灯光；只动 `rgb-disabled.flag`，不杀 Ambient、不停 OpenRGB。`silent` 关闭 Raycast 窗口，开关灯成功/失败都走系统 Toast |
 | `screenshot.ps1` | 用 `ms-screenclip:` 立刻打开截图框（失败才回退 `Win+Shift+S`），结果复制到剪贴板；若 Win11 自动保存截图已开启并写出文件，后台 Toast 完整路径 |
 | `screenshot-ocr.ps1` | 按 `ocr/config.toml` 选择引擎：`system` 注入 `Win+Shift+T`；本机当前 `rapidocr` 先打开截图框，再 `pythonw ocr.py --no-screenshot`。只处理文字，不报图片保存路径 |
 | `record-screen.ps1` | 注入 `Win+Shift+R` 直接打开截图工具（Snipping Tool）的屏幕录制框选；停止后若系统写出视频，后台 Toast `Videos\\Captures` 完整路径 |
@@ -209,7 +210,7 @@ Windows 主题 / 深浅色模式 / 壁纸自动化调度系统。支持根据日
 # 切换类型: "mode" (仅深浅色模式切换) | "theme" (完整主题包切换)
 # 本机当前生产配置是 mode：只切 Apps，不切系统壳。
 switch_type = "mode"
-show_notification = true # 是否弹出 HUD 通知
+show_notification = true # 是否弹出系统 Toast
 
 [schedule]
 trigger_mode = "sun" # "sun" (日出日落动态计算) | "fixed" (固定时间)
@@ -241,8 +242,8 @@ dark_theme_file  = "dark.theme"
 | 任务 | 时间 | 作用 |
 | --- | --- | --- |
 | `Theme-Schedule-Update` | 每天 00:10 | 定位经纬度，计算当天日出/日落，更新下面两个任务的触发时间 |
-| `Theme-Light` | 日出或指定时间 | 切换浅色（模式 / 主题 / 壁纸）并提示 HUD；仅 mode + switch_system 时才会重启 Explorer |
-| `Theme-Dark` | 日落或指定时间 | 切换深色（模式 / 主题 / 壁纸）并提示 HUD；仅 mode + switch_system 时才会重启 Explorer |
+| `Theme-Light` | 日出或指定时间 | 切换浅色（模式 / 主题 / 壁纸）并弹系统 Toast；仅 mode + switch_system 时才会重启 Explorer |
+| `Theme-Dark` | 日落或指定时间 | 切换深色（模式 / 主题 / 壁纸）并弹系统 Toast；仅 mode + switch_system 时才会重启 Explorer |
 
 ### 手动控制
 
@@ -404,9 +405,9 @@ lat3ncy-scripts-toolbox/
 │   └── tests/                # AHK 与 PowerShell 自动测试
 ├── shared/
 │   ├── python.ahk            # 本机 pythonw 解析；由 ahk/main.ahk 统一加载，朗读/翻译共用
-│   └── notify/               # AHK/Raycast 共用通知 API、Renderer、CLI 与 dev 视觉测试
+│   └── notify/               # AHK 芯片/popup HUD、WinUI 客户端、系统 Toast
 ├── tools/
-│   ├── ime-hud/              # CapsLock 中/英/大写候选框式 HUD（AHK 检测，ImeHud.exe 显示）
+│   ├── ime-hud-winui/        # CapsLock 中/英/大写芯片 + Caps+F 翻译面板（AHK 检测，ImeHudWinUi.exe 显示）
 │   ├── audio-switcher/       # Caps+D 音频切换（G27Q2 ↔ AirPods 自动拉起，config.toml 可配置）
 │   ├── rgb/                  # RGB Ambient 桌面取色（mss + 官方 OpenRGB 系统服务 + Hi75 Col06）
 │   ├── navicat-refresh/      # Navicat 试用期重置（仅限合法授权测试环境）

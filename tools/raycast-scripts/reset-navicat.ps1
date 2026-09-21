@@ -101,14 +101,10 @@ else
 }
 
 # ---------- 3. 结果通知与状态反馈 ----------
-# silent 关窗后，成功走共享 HUD；失败走系统 Toast。stdout 只作 HUD 失败回退。
+# silent 关窗后，成功/失败都走系统 Toast。失败再写一行 stdout 方便 Raycast 日志。
 if ($exitCode -eq 0 -or $null -eq $exitCode)
 {
-  $successText = 'Navicat 试用期已重置'
-  if (-not (Show-ToolboxNotify -Type success -Icon '✓' -Text $successText -Duration 900))
-  {
-    Write-Output "✓ $successText"
-  }
+  Show-SystemToast -Title '✓ Navicat 试用期已重置' -Message '' | Out-Null
 }
 else
 {

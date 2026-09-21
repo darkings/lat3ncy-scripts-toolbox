@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 
 function Get-DshRemoteConfig {
   $configFile = Join-Path $PSScriptRoot "config.toml"
@@ -41,28 +41,182 @@ function Get-DshRemoteConfig {
 
 function Get-DshProcessSnapshot {
   # GUI + DSH node 一次取齐，端口探测 / 运行判定 / 状态查询共用，避免同一轮重复扫进程。
+  #
+  # 注意：Get-CimInstance Win32_Process 在受限环境下可能返回空集（无 WMI 权限 /
+  # 服务被裁剪），此时它既不报错也不返回进程——比抛异常更隐蔽。因此这里对它做
+  # 可用性判定，不可用时退回 Get-Process，避免「探测一直失败但看起来正常」。
   $gui = @()
   $node = @()
+  $cimAvailable = $false
   try {
     $foundGui = Get-Process -Name "deepseek-harness-desktop" -ErrorAction SilentlyContinue
     if ($foundGui) { $gui = @($foundGui) }
   } catch {}
   try {
-    $foundNode = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-      Where-Object { $_.CommandLine -like "*deepseek-harness*" }
-    if ($foundNode) { $node = @($foundNode) }
+    $foundNode = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue
+    if ($foundNode) { $node = @($foundNode); $cimAvailable = $true }
   } catch {}
+  if (-not $cimAvailable) {
+    # 回退：Get-Process 拿不到 CommandLine，无法按 deepseek-harness 过滤。
+    # 不能把所有 node 都当成 DSH —— 机器上常有其它 node 服务在监听自己的端口，
+    # 全收进来会让「按 PID 找监听端口」选中无关进程（实测选中过一个跑在 7265
+    # 的无关 node）。这里改为只认「监听 3080/3081 的 node」——那是 DSH 的
+    # 配置默认端口与占用时的回退端口。
+    try {
+      $out = netstat -ano 2>$null | Out-String
+      $candidatePids = @()
+      foreach ($p in @(3080, 3081)) {
+        foreach ($m in [regex]::Matches($out, "127\.0\.0\.1:$p\s+\S+\s+LISTENING\s+(\d+)")) {
+          $candidatePids += [int]$m.Groups[1].Value
+        }
+      }
+      $candidatePids = @($candidatePids | Select-Object -Unique)
+      if ($candidatePids.Count -gt 0) {
+        $foundNode = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $candidatePids -contains $_.Id })
+        if ($foundNode) { $node = @($foundNode) }
+      }
+    } catch {}
+  }
   $guiPids = @($gui | ForEach-Object { $_.Id })
-  $nodePids = @($node | ForEach-Object { $_.ProcessId })
-  $portNodePids = @($node | Where-Object { $_.CommandLine -like "*--port*" } | ForEach-Object { $_.ProcessId })
+  $nodePids = @($node | ForEach-Object { if ($_.ProcessId) { $_.ProcessId } else { $_.Id } })
+  $portNodePids = @()
+  if ($cimAvailable) {
+    $portNodePids = @($node | Where-Object { $_.CommandLine -like "*--port*" } | ForEach-Object { $_.ProcessId })
+  }
   return @{
     Gui = $gui
     Node = $node
     GuiPids = $guiPids
     NodePids = $nodePids
     PortNodePids = $portNodePids
+    CimAvailable = $cimAvailable
     Running = (($guiPids.Count + $nodePids.Count) -gt 0)
   }
+}
+
+function Get-DshProfilePaths {
+  # web profile 与 dependencies 树的位置。二者都可能随版本迁移，集中一处便于调整。
+  $dataHome = Join-Path $env:APPDATA "io.github.hairyf.deepseek-harness-desktop"
+  return @{
+    DataHome = $dataHome
+    Profile = Join-Path $dataHome "data\dsh\profiles\web"
+    Deps = Join-Path $dataHome "dependencies\dsh\node_modules"
+  }
+}
+
+function Split-DshPackageName {
+  param([Parameter(Mandatory = $true)][string]$Name)
+  # "@scope/pkg" -> @{ Scope='@scope'; Name='pkg'; Rel='@scope\pkg' }
+  # "pkg"        -> @{ Scope='';      Name='pkg'; Rel='pkg' }
+  $scope = ''
+  $bare = $Name
+  if ($Name.StartsWith('@')) {
+    $idx = $Name.IndexOf('/')
+    if ($idx -gt 0) {
+      $scope = $Name.Substring(0, $idx)
+      $bare = $Name.Substring($idx + 1)
+    }
+  }
+  $rel = if ($scope) { Join-Path $scope $bare } else { $bare }
+  return @{ Scope = $scope; Name = $bare; Rel = $rel }
+}
+
+function Test-DshProfileBundle {
+  param(
+    [Parameter(Mandatory = $true)][string]$BundleName,
+    $Paths = $null
+  )
+  # 一个 bundle 算「已就位」= profile 的 node_modules 里能解析到它的 package.json。
+  # 注意不能只看 Junction：pnpm 的 hoisted 布局下也可能是真实目录。
+  if ($null -eq $Paths) { $Paths = Get-DshProfilePaths }
+  $split = Split-DshPackageName -Name $BundleName
+  # 逐段 Join-Path：-AdditionalChildPath 在 Windows PowerShell 5.1 上不存在，
+  # 三步式拼法在 5.1 与 7+ 上都可用。
+  $inProfile = Join-Path (Join-Path $Paths.Profile "node_modules") $split.Rel
+  $inDeps = Join-Path $Paths.Deps $split.Rel
+  # 用 [pscustomobject] 而非哈希表：哈希表被管道展开时会退化成一串键值对
+  # （Format-Table 打出一堆重复的 Name/Present 行），对象不会。
+  return [pscustomobject]@{
+    Name = $BundleName
+    Present = (Test-Path -LiteralPath (Join-Path $inProfile "package.json") -PathType Leaf)
+    ProfilePath = $inProfile
+    DepsPath = $inDeps
+    SourceAvailable = (Test-Path -LiteralPath (Join-Path $inDeps "package.json") -PathType Leaf)
+  }
+}
+
+function Get-DshProfileBundles {
+  param($Paths = $null)
+  # 以 profile package.json 的 dsh.profile.bundles 为准——不硬编码包名，
+  # 这样 DSH 升级增删核心 bundle 时本自检自动跟随。
+  if ($null -eq $Paths) { $Paths = Get-DshProfilePaths }
+  $pkgFile = Join-Path $Paths.Profile "package.json"
+  if (-not (Test-Path -LiteralPath $pkgFile -PathType Leaf)) { return @() }
+  try {
+    $j = Get-Content -LiteralPath $pkgFile -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    $bundles = @($j.dsh.profile.bundles) | Where-Object { $_ }
+    # 逐个收集到数组，最后一次性输出，避免 ForEach-Object 的流式展开。
+    $out = @(foreach ($b in $bundles) { Test-DshProfileBundle -BundleName ([string]$b) -Paths $Paths })
+    return $out
+  } catch {
+    return @()
+  }
+}
+
+function Test-DshCoreBundles {
+  param($Paths = $null)
+  # 核心 bundle 缺失是「DSH 在跑但 /api 返回 404」的根因：
+  # @deepseek-ai/dsh-web-app 负责挂载 /api 路由，它没加载 → 路由根本没注册。
+  # 桌面端日志里的信号是 CORE_PLUGIN_PROFILE_ENTRY_MISSING。
+  if ($null -eq $Paths) { $Paths = Get-DshProfilePaths }
+  $all = @(Get-DshProfileBundles -Paths $Paths)
+  if ($all.Count -eq 0) {
+    return @{ Ok = $false; Unknown = $true; Missing = @(); Restorable = @(); Unrestorable = @(); All = @() }
+  }
+  $missing = @($all | Where-Object { -not $_.Present })
+  # 只有「依赖树里存在」的缺失项才可能用 junction 修复；否则必须先装包。
+  $restorable = @($missing | Where-Object { $_.SourceAvailable })
+  $unrestorable = @($missing | Where-Object { -not $_.SourceAvailable })
+  return @{
+    Ok = ($missing.Count -eq 0)
+    Unknown = $false
+    Missing = $missing
+    Restorable = $restorable
+    Unrestorable = $unrestorable
+    All = $all
+  }
+}
+
+function Repair-DshCoreBundles {
+  param(
+    [switch]$WhatIf,
+    $Paths = $null
+  )
+  # 为缺失、但依赖树里存在的 bundle 补建 junction。
+  # 只做链接，不下载、不改 package.json——把「装包」留给 DSH 自己。
+  if ($null -eq $Paths) { $Paths = Get-DshProfilePaths }
+  $state = Test-DshCoreBundles -Paths $Paths
+  $created = @()
+  $failed = @()
+  if ($state.Unknown) { return @{ Created = @(); Failed = @(); State = $state } }
+  $scopeDir = Join-Path $Paths.Profile "node_modules\@deepseek-ai"
+  foreach ($item in $state.Restorable) {
+    $split = Split-DshPackageName -Name $item.Name
+    $linkPath = $item.ProfilePath
+    if ($split.Scope -and -not (Test-Path -LiteralPath $scopeDir)) {
+      if (-not $WhatIf) { New-Item -ItemType Directory -Force -Path $scopeDir | Out-Null }
+    }
+    if ($WhatIf) { $created += $item.Name; continue }
+    try {
+      New-Item -ItemType Junction -Path $linkPath -Target $item.DepsPath -Force -ErrorAction Stop | Out-Null
+      $created += $item.Name
+    } catch {
+      # 常见原因：权限不足（profile 在 %APPDATA% 下，普通用户可写；但受限沙箱/
+      # 只读环境会拒绝），或目标已存在且类型冲突。把原因带上，别只说「失败」。
+      $failed += @{ Name = $item.Name; Error = $_.Exception.Message }
+    }
+  }
+  return @{ Created = $created; Failed = $failed; State = $state }
 }
 
 function Test-DshProcessRunning {
@@ -77,7 +231,11 @@ function Get-DshPortInfo {
     $Snapshot = $null
   )
   # 一次探测同时给出 Port 与 Source，避免 Get-DshPort / Get-DshPortSource 各扫一遍进程。
-  # 端口优先级保持不变：config -> .store.dat -> 进程监听 -> netstat -> 3081/3080 -> 3081。
+  # 端口优先级：config -> .store.dat -> 进程监听 -> netstat -> 3080/3081 探测 -> 报错。
+  # 兜底探测顺序是 3080 优先：3080 是 DSH 的配置默认端口，3081 只是 3080 被占用时的
+  # 临时回退端口（桌面端日志: "port changed from 3080 to 3081 because ... occupied"）。
+  # 探测全失败时不再静默返回一个猜测端口——那会让 relay 去连一个没人监听的端口，
+  # 把一个「探测失败」伪装成 ECONNREFUSED 网络故障。
   if ($ConfiguredPort -gt 0) {
     return @{ Port = $ConfiguredPort; Source = "config.toml:$ConfiguredPort" }
   }
@@ -116,17 +274,20 @@ function Get-DshPortInfo {
 
   try {
     $out = netstat -ano 2>$null | Out-String
-    foreach ($pId in $allPids) {
-      if ($out -match "127\.0\.0\.1:(\d+)\s+.*LISTENING\s+$pId") {
+    # 注意：变量名不能用 $pId —— PowerShell 变量大小写不敏感，$pId 与只读的
+    # 自动变量 $PID 冲突，赋值即抛错；而外层 try/catch 会把它吞掉，导致
+    # 整条 netstat 兜底分支静默失效（表现为端口「解析不出来」）。
+    foreach ($procId in $allPids) {
+      if ($out -match "127\.0\.0\.1:(\d+)\s+.*LISTENING\s+$procId") {
         $found = [int]$matches[1]
-        return @{ Port = $found; Source = "netstat:$found (pid $pId)" }
+        return @{ Port = $found; Source = "netstat:$found (pid $procId)" }
       }
-      if ($out -match "0\.0\.0\.0:(\d+)\s+.*LISTENING\s+$pId") {
+      if ($out -match "0\.0\.0\.0:(\d+)\s+.*LISTENING\s+$procId") {
         $found = [int]$matches[1]
-        return @{ Port = $found; Source = "netstat:$found (pid $pId)" }
+        return @{ Port = $found; Source = "netstat:$found (pid $procId)" }
       }
     }
-    foreach ($p in @(3081, 3080)) {
+    foreach ($p in @(3080, 3081)) {
       if ($out -match ":$p\s+.*LISTENING") {
         return @{ Port = $p; Source = "netstat:$p" }
       }
@@ -134,7 +295,7 @@ function Get-DshPortInfo {
   } catch {}
 
   try {
-    foreach ($p in @(3081, 3080)) {
+    foreach ($p in @(3080, 3081)) {
       $c = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
       if ($c) {
         return @{ Port = [int]$c.LocalPort; Source = "netstat:$p (pid $($c.OwningProcess))" }
@@ -142,7 +303,25 @@ function Get-DshPortInfo {
     }
   } catch {}
 
-  return @{ Port = 3081; Source = "fallback:3081" }
+  # 探测全部失败：明确报错，不再猜端口。
+  # 返回一个未监听的端口会让 Start/Status/Watcher 三方一致地把
+  # "DSH 没在跑 / 端口探测失败" 误报成 relay 上游 ECONNREFUSED。
+  return @{ Port = 0; Source = "unresolved"; Error = 'port not resolved' }
+}
+
+function Get-DshPortInfoResolved {
+  param(
+    [int]$ConfiguredPort = 0,
+    $Snapshot = $null
+  )
+  # Get-DshPortInfo 的严格版本：端口解析不出来就抛异常。
+  # 供 Start / Status 这类「必须拿到真实端口」的调用方使用；
+  # Watcher 那种「探不到就当作 DSH 没在跑」的场景仍用 Get-DshPortInfo 自行判断 Port -le 0。
+  $info = Get-DshPortInfo -ConfiguredPort $ConfiguredPort -Snapshot $Snapshot
+  if ([int]$info.Port -le 0) {
+    throw "Could not resolve the local DSH port (tried .store.dat, process listeners, netstat, 3080, 3081). Start DSH Desktop first."
+  }
+  return $info
 }
 
 function Get-DshPort {
@@ -162,7 +341,25 @@ function Test-IsAdmin {
 }
 
 function Test-SudoAvailable {
-  try { return $null -ne (Get-Command sudo -ErrorAction SilentlyContinue) } catch { return $false }
+  try {
+    if (Get-Command sudo -ErrorAction SilentlyContinue) { return $true }
+    return $null -ne (Get-Command gsudo -ErrorAction SilentlyContinue)
+  } catch { return $false }
+}
+
+function Resolve-DshElevator {
+  # 优先 Windows 内置 sudo.exe；否则退回 gsudo（Scoop 安装，本机可用）。
+  # 两者参数形态不同：sudo.exe 用 `sudo --inline <cmd> <args...>`；
+  # gsudo 用 `gsudo <cmd> <args...>`（默认即为一次性提权执行）。
+  $sudo = Get-Command sudo -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($sudo -and $sudo.Source) {
+    return @{ Path = $sudo.Source; Prefix = @('--inline'); Name = 'sudo' }
+  }
+  $gsudo = Get-Command gsudo -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($gsudo -and $gsudo.Source) {
+    return @{ Path = $gsudo.Source; Prefix = @(); Name = 'gsudo' }
+  }
+  return $null
 }
 
 function Resolve-DshNativeCommand {
@@ -258,13 +455,35 @@ function Get-DshRelayProcess {
   )
   $scriptPattern = [regex]::Escape((Get-DshRelayScriptPath))
   try {
-    return @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+    $byCim = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
       Where-Object {
         $_.CommandLine -and $_.CommandLine -match $scriptPattern -and
         ($ListenPort -le 0 -or $_.CommandLine -match "--listen-port\s+$ListenPort(?:\s|$)") -and
         ($TargetPort -le 0 -or $_.CommandLine -match "--target-port\s+$TargetPort(?:\s|$)")
       })
-  } catch { return @() }
+    if ($byCim.Count -gt 0) { return $byCim }
+  } catch {}
+
+  # CIM 不可用（Win32_Process 返回空集）时的回退：不按命令行匹配，改为
+  # 「谁在监听 $ListenPort」反查 PID。虽拿不到 target-port，但对
+  # Start-DshRelay 的存活判定和 Stop-DshRelay 的清理已经够用。
+  if ($ListenPort -gt 0) {
+    try {
+      $conn = Get-NetTCPConnection -LocalPort $ListenPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($conn) {
+        return @([pscustomobject]@{ ProcessId = [int]$conn.OwningProcess; CommandLine = $null })
+      }
+    } catch {}
+    try {
+      $out = netstat -ano 2>$null | Out-String
+      $m = [regex]::Match($out, "127\.0\.0\.1:$ListenPort\s+\S+\s+LISTENING\s+(\d+)")
+      if (-not $m.Success) { $m = [regex]::Match($out, "0\.0\.0\.0:$ListenPort\s+\S+\s+LISTENING\s+(\d+)") }
+      if ($m.Success) {
+        return @([pscustomobject]@{ ProcessId = [int]$m.Groups[1].Value; CommandLine = $null })
+      }
+    } catch {}
+  }
+  return @()
 }
 
 function Start-DshRelay {
@@ -308,8 +527,11 @@ function Start-DshRelay {
   $deadline = (Get-Date).AddSeconds(8)
   while ((Get-Date) -lt $deadline) {
     if (Test-DshListening -Port $ListenPort) {
+      # 只要端口在 Listen 就算成功。此前额外要求「能按命令行找到该进程」，
+      # 在 CIM 不可用的环境下必然失败——relay 明明已就绪却被判为启动失败。
       $started = @(Get-DshRelayProcess -ListenPort $ListenPort -TargetPort $TargetPort)
       if ($started.Count -gt 0) { return $started[0] }
+      return [pscustomobject]@{ ProcessId = $null; CommandLine = $null }
     }
     Start-Sleep -Milliseconds 200
   }
@@ -337,12 +559,15 @@ function Invoke-DshElevatedProcess {
   } catch {
     return @{ Output = [string]$_.Exception.Message; ExitCode = 1 }
   }
-  if ($direct.Output -match "Access is denied" -and (Test-SudoAvailable)) {
-    try {
-      $sudo = Resolve-DshNativeCommand "sudo"
-      return Invoke-DshHiddenProcess -FilePath $sudo -ArgumentList (@("--inline", $CommandName) + $ArgumentList)
-    } catch {
-      return @{ Output = [string]$_.Exception.Message; ExitCode = 1 }
+  if ($direct.Output -match "Access is denied") {
+    $elevator = Resolve-DshElevator
+    if ($elevator) {
+      try {
+        return Invoke-DshHiddenProcess -FilePath $elevator.Path `
+          -ArgumentList (@($elevator.Prefix) + @($CommandName) + $ArgumentList)
+      } catch {
+        return @{ Output = [string]$_.Exception.Message; ExitCode = 1 }
+      }
     }
   }
   return $direct

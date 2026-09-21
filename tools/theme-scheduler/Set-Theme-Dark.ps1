@@ -18,6 +18,9 @@ if ($config.wallpaper.enabled -and $config.wallpaper.dark_wallpaper)
   Set-DesktopWallpaper -ImagePath $config.wallpaper.dark_wallpaper | Out-Null
 }
 
+# 颜色切完再换指针；缺文件或关闭 cursor.enabled 时静默跳过。
+Set-WindowsCursorScheme -Mode 'dark' -Config $config | Out-Null
+
 if ($config.general.show_notification)
 {
   Invoke-ThemeNotify -Type 'state' -Icon '🌙' -Text '已切换为深色模式'

@@ -1,5 +1,8 @@
 #Requires AutoHotkey v2.0
 
+; AHK v2 #Include 同一路径只加载一次。renderer.ahk（AHK 芯片）和 ime-hud.ahk
+; （WinUI STATE）都可以 include 本文件；重复 include 会被跳过，不会重定义类。
+
 ; =====================================================================
 ; InputAnchor — 4 级全场景输入锚点定位引擎
 ;
@@ -58,13 +61,23 @@ class InputAnchor {
             threadId := DllCall("User32\GetWindowThreadProcessId", "Ptr", activeHwnd, "UInt*", 0, "UInt")
             if !threadId
                 return 0
+            ; GUITHREADINFO：两个 DWORD 之后跟 6 个 HWND，再跟 RECT rcCaret。
+            ; x64 布局：
+            ;   cbSize 0, flags 4,
+            ;   hwndActive 8, hwndFocus 16, hwndCapture 24,
+            ;   hwndMenuOwner 32, hwndMoveSize 40, hwndCaret 48,
+            ;   rcCaret 56（Left / Top / Right / Bottom，各 4 字节）
+            ; hwndCaret = 8 + 5*A_PtrSize；rcCaret = 8 + 6*A_PtrSize。
+            ; 不要写成 8+4*A_PtrSize，那是 hwndMoveSize，空闲时几乎总是 0。
             guiInfo := Buffer(8 + (6 * A_PtrSize) + 16, 0)
             NumPut("UInt", guiInfo.Size, guiInfo, 0)
             if !DllCall("User32\GetGUIThreadInfo", "UInt", threadId, "Ptr", guiInfo.Ptr, "Int")
                 return 0
-            hwndCaret := NumGet(guiInfo, 8 + 4*A_PtrSize, "Ptr")
-            rcLeft   := NumGet(guiInfo, 8 + 6*A_PtrSize + 0, "Int")
-            rcBottom := NumGet(guiInfo, 8 + 6*A_PtrSize + 12, "Int")
+            hwndCaretOffset := 8 + 5 * A_PtrSize
+            rcCaretOffset := 8 + 6 * A_PtrSize
+            hwndCaret := NumGet(guiInfo, hwndCaretOffset, "Ptr")
+            rcLeft   := NumGet(guiInfo, rcCaretOffset + 0, "Int")
+            rcBottom := NumGet(guiInfo, rcCaretOffset + 12, "Int")
             if !(hwndCaret && (rcLeft != 0 || rcBottom != 0))
                 return 0
             pt := Buffer(8, 0)

@@ -7,10 +7,10 @@ OpenRGB 由 **官方 Windows 系统服务** 常驻，之后只复用 `127.0.0.1:
 ## 架构
 
 ```
-mss 中心320x180 step=8 --丢弃黑场--> 亮像素饱和度top30% --> EMA
+mss 中心320x180 step=8 --丢弃黑场--> 亮像素饱和度加权均值 --> EMA
         --> OpenRGB Direct(可较勤) + Hi75 Direct 0x08(限频/限色差)
         静止 6Hz / 活动 12Hz；切场黑帧保持上一色
-当前生产: fps 12/6 threshold=6 ema_alpha=0.18 lerp_alpha=0.35 min_brightness=22
+当前生产: fps 12/6 threshold=6 ema_alpha=0.18 lerp_alpha=0.50 sat_boost=1.25 min_brightness=22
 早期压测(历史): threshold=8 brightness=16 12Hz；中间版本曾用 8/4Hz threshold=14 ema=0.35
 ```
 
@@ -30,7 +30,7 @@ PawnIO（winget）
 
 ## 文件
 
-* `ambient.py` — 主程序（`--dry-run/--bench/--bench-capture/--time/--fps`）
+* `ambient.py` — 主程序（`--dry-run/--bench/--bench-capture/--time/--fps/--lights-off`）
 * `config.toml` — 阈值/FPS/EMA/亮度/HID 路径
 * `hi75.py` — Hi75 单控（`--list/--preset/--color/--off/--serve`）
 * `dist/hi75/hi75.exe` — `--onedir` 打包的 `--serve` 子进程（任务管理器里只有一个进程）。**被 gitignore，换机先跑 `build_hi75.ps1`，不要误删本机已有产物**
@@ -41,8 +41,9 @@ PawnIO（winget）
 * `Start-OpenRGB.ps1` — 6742 已监听则直接退出；否则启动系统服务
 * `Stop-OpenRGB.ps1` — 停止系统服务（日常 ambient 不要调用）
 * `Start-Ambient.ps1` — 无窗口拉起 `pythonw ambient.py` 后立刻返回；不再 `powershell -Wait`（那会弹出 SDK/PID 那几行）；已在跑则复用
-* `Stop-Ambient.ps1` — 结束 ambient / hi75.exe，不碰 OpenRGB
+* `Stop-Ambient.ps1` — 先写 `rgb-quit.flag` 让 ambient 推 Direct 全黑再退出；失败才强杀。不碰 OpenRGB
 * `Install-Ambient.ps1` — 登录任务 `RGB-Ambient`（直接 `pythonw`，+15s 等 DWM；注册任务需要提权）
+* `../raycast-scripts/toggle-rgb.ps1` — Raycast 单切换。只动 `%LOCALAPPDATA%\lat3ncy-toolbox\rgb-disabled.flag`，不杀 Ambient、不停 OpenRGB 服务
 
 ## 一次性准备
 
@@ -70,8 +71,29 @@ python tools/rgb/ambient.py --dry-run --time 3
 python tools/rgb/ambient.py --time 10
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/rgb/Start-Ambient.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/rgb/Stop-Ambient.ps1
+# Raycast：Toggle RGB Lights。关灯只推 Direct 全黑，Ambient 继续跑
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/raycast-scripts/toggle-rgb.ps1
+# Ambient 没在跑时一次性关灯（已在跑不要调，会抢 HID）
+python tools/rgb/ambient.py --lights-off
 Get-Content tools/rgb/logs/ambient.out.log -Tail 20 -Wait
 ```
+
+## 开关灯 / 关机推黑
+
+Raycast 只有一个 `toggle-rgb.ps1`。旗标：
+
+```text
+%LOCALAPPDATA%\lat3ncy-toolbox\rgb-disabled.flag
+```
+
+* **关灯**：写旗标。Ambient 仍保持运行，风扇和 Hi75 都推 Direct `#000000`，并继续 keepalive / HID 重连。关灯期间不抓屏。
+* **开灯**：删旗标。Ambient 下一帧取色后立刻推灯，不等下一次明显色差。
+* **Direct 全黑必须 keepalive**：Hi75 `0x08` 约 1 秒不刷新会掉回板载彩虹，不是自动关灯。
+* **拔插键盘**：`hi75.exe --serve` 没插键盘时约 50ms 轮询；只等 Col06，不抢先打开 Col05。设备在但 Col06 未就绪先短重试，打不开才 1/2/4/8/16/30s 退避。成功后立刻发 `0x84` 握手并连发 Direct。关灯状态下插上强制 Direct `#000000`，不重放掉线前的彩色。USB 上电到 HID 打开之前的板载灯效无法用软件完全挡住，只能把闪灯压到枚举完成之后立刻盖住。
+* **正常停止**：`Stop-Ambient.ps1` 先写 `rgb-quit.flag`，ambient `finally` 推黑再退出。
+* **正常关机**：隐藏顶层窗口收 `WM_QUERYENDSESSION`，尽量先推黑。突然断电 / 硬断电软件发不出 HID，只能靠 BIOS。
+* **BIOS 兜底**：开启 `ErP Ready`，关闭 `RGB lighting in S5` / `LEDs in sleep/shutdown`。Windows 快速启动也可能让硬件停在类似 S4。
+* **不要停 OpenRGB 服务**，也不要改主题调度器。
 
 ## 排错
 

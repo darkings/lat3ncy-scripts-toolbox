@@ -4,7 +4,6 @@
 ; A_ScriptDir 永远是入口脚本目录，不是被 include 的本文件目录：
 ;   ahk\main.ahk            -> ...\ahk
 ;   ahk\tests\run-tests.ahk -> ...\ahk\tests
-;   shared\notify\notify-cli.ahk -> ...\shared\notify
 class NotifyPaths {
     static Resolve(fileName) {
         fileName := Trim(fileName)
@@ -42,15 +41,15 @@ class NotifyPaths {
         return this.Resolve("toast.ps1")
     }
 
-    ; IME 状态 HUD。不放在 shared/notify，避免和普通芯片 HUD 混在一起。
-    static ImeHudExe() {
+    ; WinUI Renderer：唯一 IME HUD。CapsLock 状态芯片 + Caps+F 翻译面板。
+    static ImeHudWinUiExe() {
         candidates := [
-            A_ScriptDir "\..\tools\ime-hud\ImeHud.exe",
-            A_ScriptDir "\..\..\tools\ime-hud\ImeHud.exe",
-            A_ScriptDir "\..\..\..\tools\ime-hud\ImeHud.exe",
-            A_WorkingDir "\tools\ime-hud\ImeHud.exe",
-            A_WorkingDir "\..\tools\ime-hud\ImeHud.exe",
-            A_WorkingDir "\..\..\tools\ime-hud\ImeHud.exe"
+            A_ScriptDir "\..\tools\ime-hud-winui\out\ImeHudWinUi.exe",
+            A_ScriptDir "\..\..\tools\ime-hud-winui\out\ImeHudWinUi.exe",
+            A_ScriptDir "\..\..\..\tools\ime-hud-winui\out\ImeHudWinUi.exe",
+            A_WorkingDir "\tools\ime-hud-winui\out\ImeHudWinUi.exe",
+            A_WorkingDir "\..\tools\ime-hud-winui\out\ImeHudWinUi.exe",
+            A_WorkingDir "\..\..\tools\ime-hud-winui\out\ImeHudWinUi.exe"
         ]
         seen := Map()
         for candidate in candidates {

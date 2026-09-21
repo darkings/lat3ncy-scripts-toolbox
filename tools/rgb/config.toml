@@ -21,9 +21,11 @@ min_valid_ratio = 0.12
 # 只有真正切场才瞬切；日常滑动走平滑。全程奶油感可改 999
 snap_delta = 80
 gamma = 1.0
-saturation_boost = 1.45
+# 绕 Rec.709 亮度扩饱和；1.45 容易把色相拧偏，1.25 更跟屏幕
+saturation_boost = 1.25
 # <1 打开二次插值，让每帧往目标色爬；1.0 等于关掉
-lerp_alpha = 0.35
+# 0.35 过渡偏泥；0.50 跟手一些，中间色更少
+lerp_alpha = 0.50
 auto_off = false
 off_brightness = 2
 off_hold_s = 8.0

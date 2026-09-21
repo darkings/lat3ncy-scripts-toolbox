@@ -2,7 +2,7 @@
 # 一键移除主题调度计划任务
 
 $ErrorActionPreference = 'Continue'
-$tasks = @('Theme-Light','Theme-Dark','Theme-Schedule-Update')
+$tasks = @('Theme-Light','Theme-Dark','Theme-Schedule-Update','Theme-Apply-Now','Theme-Apply-Cursors')
 foreach ($t in $tasks) {
   $existing = Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
   if ($existing) {

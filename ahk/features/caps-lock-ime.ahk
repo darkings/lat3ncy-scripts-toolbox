@@ -37,7 +37,7 @@ class CapsLockIme {
     static ChordImeLockoutMs := 180
     static MessageTimeout := 80
     static RestoreImeAfterCaps := true
-    ; true = ImeHud.exe 候选框式 HUD；false = 立刻回退 AHK NotifyRenderer 芯片。
+    ; true = WinUI ImeHudWinUi.exe 候选框式 HUD；false = 立刻回退 AHK NotifyRenderer 芯片。
     static UseImeHud := true
     ; --- 跨窗口恢复：改这里 ---
     static PersistImeAcrossWindows := true
@@ -254,7 +254,7 @@ class CapsLockIme {
         return newState
     }
 
-    ; 中 / 英 / 大写走 ImeHud.exe。
+    ; 中 / 英 / 大写走 WinUI ImeHudWinUi.exe。
     ; kind: "CN" | "EN" | "CAPS"。失败、测试入口或 UseImeHud=false 时回退 AHK 芯片。
     static ShowImeHud(kind) {
         if this.UseImeHud && this.IsImeHudEnabled() {

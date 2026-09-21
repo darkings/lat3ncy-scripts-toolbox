@@ -8,7 +8,7 @@
 - **自动端口**：`config.toml` 设 `port=0` 时自动读 `~/.store.dat` 的 `port`，再探测 `3081/3080` Listen
 - **API 兼容**：默认使用 `127.0.0.1:3090` relay -> DSH 实际端口，解决远程域名访问 API 返回 `403 forbidden`
 - **幂等**：重复执行不会重复创建 Serve
-- **通知**：走 `shared/notify` HUD（可关）
+- **通知**：走系统 Toast（可关）
 - **常驻/短暂可选**：`auto_off=true` 关闭 DSH 就 `tailscale serve off`
 
 ## 文件
@@ -25,12 +25,8 @@ tools/dsh-remote/
 ├── Restart-Watcher.ps1      # 只 /End + /Run 已有任务，让它重载当前脚本
 ├── Uninstall-Watcher.ps1    # 卸载
 ├── dsh-remote-relay.js      # loopback HTTP/SSE/WebSocket Host/Origin relay
-├── watcher.log              # 运行日志（超过 5 MB 轮转为 watcher.log.1）
-├── preload-opencode.js      # *非 remote*：opencode.ai JA3 绕过（curl --http1.1），历史遗留
-└── diag-endpoints.ps1       # *非 remote*：opencode 诊断脚本，历史遗留
+└── watcher.log              # 运行日志（超过 5 MB 轮转为 watcher.log.1）
 ```
-
-> `preload-opencode.js` / `diag-endpoints.ps1` 与 Remote 无关，为避免破坏现有引用暂保留，建议后续迁至 `tools/dsh/patches/`。
 
 ## 快速开始
 

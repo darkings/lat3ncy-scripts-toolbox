@@ -552,7 +552,7 @@ class NotifyRenderer {
             if this._gui {
                 try currentHwnd := this._gui.Hwnd
             }
-            ; 只回收本进程的 HUD，避免误关 notify-cli 等临时进程的窗口。
+            ; 只回收本进程的 HUD，避免误关其它 AutoHotkey 进程的窗口。
             for hwnd in WinGetList(this.HudTitle " ahk_class AutoHotkeyGUI ahk_pid " ProcessExist()) {
                 if (currentHwnd && hwnd = currentHwnd)
                     continue

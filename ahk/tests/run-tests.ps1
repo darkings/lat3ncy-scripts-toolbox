@@ -80,6 +80,7 @@ function Test-FeatureLoadsIndependently
   # 生产入口统一加载 python helper。独立加载也始终注入：
   # 朗读/翻译依赖 ToolboxPython，漏注入会弹 AHK 错误框并把 runner 卡死。
   # AHK 对同一 helper 只会加载一次，重复注入本身无害。
+  # caret 锚点由 renderer.ahk / ime-hud.ahk include-once 加载，stub 不要再引一次。
   $pythonHelper = Join-Path (Split-Path $NotifyRoot -Parent) 'python.ahk'
   $stub = @"
 #Requires AutoHotkey v2.0
@@ -166,6 +167,7 @@ try
     (Join-Path $featureRoot 'switch-app-window.ahk'),
     (Join-Path $notifyRoot 'run-nowindow.ahk'),
     (Join-Path $notifyRoot 'ime-hud.ahk'),
+    (Join-Path $notifyRoot 'translation-panel.ahk'),
     (Join-Path (Split-Path $notifyRoot -Parent) 'python.ahk')
   )
   foreach ($featurePath in $independentFeatures)
@@ -186,8 +188,8 @@ try
     (Join-Path (Join-Path $raycastRoot 'capture') 'watch-save.ps1'),
     (Join-Path $raycastRoot 'restart-autohotkey.ps1'),
     (Join-Path $raycastRoot 'reset-navicat.ps1'),
+    (Join-Path $raycastRoot 'toggle-rgb.ps1'),
     (Join-Path $raycastRoot 'open-neomutt.ps1'),
-    (Join-Path (Join-Path $notifyRoot 'dev') 'capture.ps1'),
     (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'DshRemoteUtils.ps1'),
     (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Watch-DshRemote.ps1'),
     (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'dsh-remote') 'Start-DshRemote.ps1'),
@@ -202,6 +204,8 @@ try
     (Join-Path $themeRoot 'Uninstall-ThemeScheduler.ps1'),
     (Join-Path $themeRoot 'Set-Theme-Light.ps1'),
     (Join-Path $themeRoot 'Set-Theme-Dark.ps1'),
+    (Join-Path $themeRoot 'Apply-ThemeNow.ps1'),
+    (Join-Path $themeRoot 'Apply-CursorsNow.ps1'),
     (Join-Path $rgbRoot 'install.ps1'),
     (Join-Path $rgbRoot 'Start-OpenRGB.ps1'),
     (Join-Path $rgbRoot 'Stop-OpenRGB.ps1'),
@@ -210,17 +214,51 @@ try
     (Join-Path $rgbRoot 'Install-Ambient.ps1'),
     (Join-Path $rgbRoot 'build_hi75.ps1')
   )
-  $imeHudDll = Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'ime-hud') 'ImeHud.dll'
-  if (-not (Test-Path -LiteralPath $imeHudDll -PathType Leaf))
+  $legacyImeHudDir = Join-Path (Join-Path $repoRoot 'tools') 'ime-hud'
+  if (Test-Path -LiteralPath $legacyImeHudDir)
   {
-    throw "ImeHud.dll is missing; publish tools/ime-hud before running tests"
+    throw "legacy tools/ime-hud still exists; only tools/ime-hud-winui is allowed"
   }
-  & dotnet exec $imeHudDll --self-test
-  if ($LASTEXITCODE -ne 0)
+  $legacyNotifyCli = Join-Path $notifyRoot 'notify-cli.ahk'
+  if (Test-Path -LiteralPath $legacyNotifyCli)
   {
-    throw ("ImeHud --self-test failed with exit code {0}" -f $LASTEXITCODE)
+    throw "legacy shared/notify/notify-cli.ahk still exists; Raycast/OCR now use system toast only"
   }
-  [Console]::Out.WriteLine('PASS: ImeHud --self-test')
+  $legacyNotifyDev = Join-Path $notifyRoot 'dev'
+  if (Test-Path -LiteralPath $legacyNotifyDev)
+  {
+    throw "legacy shared/notify/dev still exists; old HUD visual tests are gone"
+  }
+
+  $imeHudWinUiExe = Join-Path (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'ime-hud-winui') 'out') 'ImeHudWinUi.exe'
+  if (-not (Test-Path -LiteralPath $imeHudWinUiExe -PathType Leaf))
+  {
+    throw "ImeHudWinUi.exe is missing; publish tools/ime-hud-winui before running tests"
+  }
+  # WinUI 是 WinExe，直接 & 调用时 5.1 经常不填 $LASTEXITCODE。
+  # 用 Process 读 ExitCode，避免把 0 误判成失败。
+  $selfTestInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $selfTestInfo.FileName = $imeHudWinUiExe
+  $selfTestInfo.Arguments = '--self-test'
+  $selfTestInfo.UseShellExecute = $false
+  $selfTestInfo.CreateNoWindow = $true
+  $selfTestInfo.RedirectStandardOutput = $true
+  $selfTestInfo.RedirectStandardError = $true
+  $selfTestProcess = [System.Diagnostics.Process]::Start($selfTestInfo)
+  $selfTestOut = $selfTestProcess.StandardOutput.ReadToEndAsync()
+  $selfTestErr = $selfTestProcess.StandardError.ReadToEndAsync()
+  if (-not $selfTestProcess.WaitForExit(30000))
+  {
+    try { $selfTestProcess.Kill() } catch {}
+    throw 'ImeHudWinUi --self-test timed out'
+  }
+  [void]$selfTestOut.Result
+  [void]$selfTestErr.Result
+  if ($selfTestProcess.ExitCode -ne 0)
+  {
+    throw ("ImeHudWinUi --self-test failed with exit code {0}" -f $selfTestProcess.ExitCode)
+  }
+  [Console]::Out.WriteLine('PASS: ImeHudWinUi --self-test')
 
   foreach ($scriptPath in $powerShellScripts)
   {

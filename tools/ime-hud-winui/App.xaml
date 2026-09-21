@@ -1,0 +1,12 @@
+<Application
+    x:Class="Lat3ncyToolbox.ImeHudWinUi.HudApp"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!--
+      只要 Application 把 WinUI ThemeResource 挂上。
+      不在这里创建 Window；HUD 仍是自己的 Win32 HWND + Island。
+    -->
+    <Application.Resources>
+        <ResourceDictionary />
+    </Application.Resources>
+</Application>

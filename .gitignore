@@ -16,11 +16,10 @@ __pycache__/
 !/task_plan.md
 /docs/
 
-# 运行日志（含 DSH 轮转后的 watcher.log.1）
+# 运行日志
 **/*.log
 **/*.log.1
 /tools/rgb/logs/
-/tools/dsh-remote/*.log
 /tools/tts/*.log
 /tools/theme-scheduler/*.log
 

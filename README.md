@@ -369,30 +369,6 @@ Get-Content .\tools\rgb\logs\ambient.out.log -Tail 20 -Wait
 
 详见 `tools/rgb/README.md`。Hi75 协议基于 `OpenRGB #4297`（`258A:010C` / `Col06` / `060a` 520B）。
 
-## DSH Remote — 手机远程访问
-
-通过 **Tailscale Serve 动态端口暴露**把本地 `deepseek-harness-desktop` 的 `http://127.0.0.1:<动态端口>` 暴露为 `https://<tailnet>.ts.net`，手机加入同一 Tailnet 即可访问。默认额外经过 loopback relay 重写 `Host`/`Origin`，使 workspace API 和 WebSocket 通过 DSH 的 trust fence。**不写死端口**：`config.toml` 的 `port=0` 时自动从 `~/.store.dat` 读取 DSH 真实端口，失败则通过 `Get-NetTCPConnection` 探测 `deepseek-harness-desktop` 进程的监听端口。
-
-- **事件驱动 + 60s 对账**：WMI `__InstanceCreationEvent/__InstanceDeletionEvent (WITHIN 2s)` 事件唤醒，0 CPU 休眠；每 60s 对账一次
-- **自动 sudo 提权**：Windows `sudo --inline`（`ConsentPromptBehaviorAdmin=0`）无弹窗，已封装 `Invoke-TailscaleCommand` 自动回退
-- **幂等**：重复执行不会重复创建 Serve
-- **远程 API 兼容**：默认 `127.0.0.1:3090 -> DSH` relay，避免远程域名访问 `/api` 返回 `403 forbidden`
-
-```powershell
-# 查看当前动态端口与暴露状态
-pwsh -File .\tools\dsh-remote\Get-DshRemoteStatus.ps1
-# 手动暴露（自动查询 .store.dat -> 进程监听 -> 3081 兜底）
-pwsh -File .\tools\dsh-remote\Start-DshRemote.ps1
-# 安装跟随启停的 Watcher（推荐，自动 sudo）
-pwsh -File .\tools\dsh-remote\Install-Watcher.ps1
-# 改完 Watcher 脚本后只 /End + /Run，不删任务、不动 Serve/relay
-pwsh -File .\tools\dsh-remote\Restart-Watcher.ps1
-# 日志
-Get-Content .\tools\dsh-remote\watcher.log -Tail 50 -Wait
-```
-
-详见 `tools/dsh-remote/README.md` 与 `tools/dsh-remote/config.toml`。
-
 ## 仓库结构
 
 ```text
@@ -413,8 +389,7 @@ lat3ncy-scripts-toolbox/
 │   ├── navicat-refresh/      # Navicat 试用期重置（仅限合法授权测试环境）
 │   ├── raycast-scripts/      # Raycast 命令（ocr/ 识字；capture/ 截图与录屏落盘监视）
 │   ├── theme-scheduler/      # Windows 主题 / 深浅色自动切换（日出日落调度）
-│   ├── tts/                  # Text-to-Speech 核心播放器、依赖安装与配置
-│   └── dsh-remote/           # DSH 手机远程访问（Tailscale Serve 动态端口暴露 + Watcher）
+│   └── tts/                  # Text-to-Speech 核心播放器、依赖安装与配置
 ├── findings.md               # 研究与决策记录（含历史压测参数）
 ├── progress.md               # 会话进度
 ├── task_plan.md              # 阶段性任务计划

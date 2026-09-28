@@ -178,6 +178,7 @@ try
   $raycastRoot = Join-Path (Join-Path $repoRoot 'tools') 'raycast-scripts'
   $rgbRoot = Join-Path (Join-Path $repoRoot 'tools') 'rgb'
   $themeRoot = Join-Path (Join-Path $repoRoot 'tools') 'theme-scheduler'
+  $startupRoot = Join-Path (Join-Path $repoRoot 'tools') 'startup'
   # 只做 AST 解析，绝不执行 install.ps1 / Install-*：那些脚本会改服务、计划任务和硬件。
   $powerShellScripts = @(
     (Join-Path (Join-Path $featureRoot 'smart-paste') 'save-clipboard-image.ps1'),
@@ -198,6 +199,8 @@ try
     (Join-Path $themeRoot 'Set-Theme-Dark.ps1'),
     (Join-Path $themeRoot 'Apply-ThemeNow.ps1'),
     (Join-Path $themeRoot 'Apply-CursorsNow.ps1'),
+    (Join-Path $themeRoot 'Set-LockScreenFromWallpaper.ps1'),
+    (Join-Path $startupRoot 'Start-Toolbox.ps1'),
     (Join-Path $rgbRoot 'install.ps1'),
     (Join-Path $rgbRoot 'Start-OpenRGB.ps1'),
     (Join-Path $rgbRoot 'Stop-OpenRGB.ps1'),

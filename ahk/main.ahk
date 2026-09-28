@@ -18,7 +18,23 @@ IsToolboxDebugMode() {
     return false
 }
 
+; 启动/退出都写 %LOCALAPPDATA%\lat3ncy-toolbox\startup.log。
+; 登录自启失败（热键冲突、依赖缺失、引擎路径失效）过去没有任何痕迹，只能靠猜；
+; 与之配套的是 tools/startup/Start-Toolbox.ps1（负责重试、校验存活与失败 Toast）。
+WriteStartupLog(message) {
+    try {
+        logDir := EnvGet("LOCALAPPDATA") "\lat3ncy-toolbox"
+        DirCreate logDir
+        FileAppend("[" FormatTime(, "yyyy-MM-dd HH:mm:ss") "] " message "`n", logDir "\startup.log", "UTF-8")
+    } catch {
+    }
+}
+
 LogToolboxExit(exitReason, exitCode) {
+    ; 非调试模式也记一行：这样"起来又立刻退出"能留下原因与退出码。
+    ; 测试运行（--test）不写：否则 run-tests 的进程退出会污染这份登录自启诊断日志。
+    if !IsToolboxTestMode()
+        WriteStartupLog("main.ahk 退出: reason=" exitReason " code=" exitCode)
     if !IsToolboxDebugMode()
         return
     try {
@@ -37,7 +53,19 @@ HandleToolboxError(exception, mode) {
     if !ToolboxStarting
         return false
 
-    MsgBox "工具箱启动失败：`n" exception.Message, "脚本工具箱启动错误", "Iconx"
+    reason := "未知错误"
+    try {
+        reason := exception.Message
+    } catch {
+    }
+    detail := ""
+    try {
+        detail := " (line " exception.Line ", " exception.What ")"
+    } catch {
+    }
+
+    WriteStartupLog("main.ahk 启动失败: " reason detail)
+    MsgBox "工具箱启动失败：`n" reason, "脚本工具箱启动错误", "Iconx"
     ExitApp 1
 }
 

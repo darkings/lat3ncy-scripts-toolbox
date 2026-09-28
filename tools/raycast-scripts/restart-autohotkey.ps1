@@ -91,15 +91,21 @@ function Resolve-AutoHotkeyV2Executable
     }
   }
 
-  # Scoop 常见路径兜底
-  $scoopRoots = @($env:USERPROFILE, $env:SCOOP)
-  foreach ($root in $scoopRoots | Where-Object { $_ })
+  # Scoop 兜底：$env:SCOOP 本身就是 Scoop 根目录，$env:USERPROFILE 才需要再拼 scoop；
+  # 引擎在 v2\ 子目录下（current\AutoHotkey64.exe 一般不存在）。
+  $scoopRoots = @()
+  if ($env:SCOOP) { $scoopRoots += $env:SCOOP }
+  if ($env:USERPROFILE) { $scoopRoots += (Join-Path $env:USERPROFILE 'scoop') }
+  foreach ($scoopRoot in $scoopRoots)
   {
-    foreach ($candidate in @(
-        (Join-Path $root 'scoop\apps\autohotkey\current\AutoHotkey64.exe'),
-        (Join-Path $root 'scoop\apps\autohotkey\current\AutoHotkey32.exe')
+    foreach ($relative in @(
+        'apps\autohotkey\current\v2\AutoHotkey64.exe',
+        'apps\autohotkey\current\v2\AutoHotkey32.exe',
+        'apps\autohotkey\current\AutoHotkey64.exe',
+        'apps\autohotkey\current\AutoHotkey32.exe'
       ))
     {
+      $candidate = Join-Path $scoopRoot $relative
       if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
     }
   }

@@ -1,4 +1,4 @@
-﻿# Apply-ThemeNow.ps1
+# Apply-ThemeNow.ps1
 # 登录时按当前时间对齐深浅色：日出前/日落后切深色，日出到日落之间切浅色。
 # 已经是目标模式则跳过，避免每次开机都弹 HUD。
 
@@ -38,8 +38,10 @@ else
 
 if ($already)
 {
-  # 颜色已经对时仍补一次鼠标，避免刚加上光标资源后要等到下一次日出日落才生效。
+  # 颜色已经对时仍补套鼠标，避免刚加上光标资源后要等到下一次日出日落才生效。
   Set-WindowsCursorScheme -Mode $desired -Config $config | Out-Null
+  # Keep the lock screen aligned with the current desktop wallpaper on logon as well.
+  Sync-LockScreenWallpaper -Config $config -ImagePath '' | Out-Null
   Write-ThemeLog ("Apply-Now skip: already {0}" -f $desired)
   exit 0
 }
@@ -60,4 +62,5 @@ if (-not (Test-Path -LiteralPath $targetScript -PathType Leaf))
 }
 
 & $targetScript
+Set-WindowsCursorScheme -Mode $desired -Config $config | Out-Null
 Write-ThemeLog ("Apply-Now switched to {0}" -f $desired)

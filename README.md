@@ -20,7 +20,17 @@ AutoHotkey.exe .\ahk\main.ahk
 
 如果 `Get-Command` 没有结果，请把 AutoHotkey v2 的安装目录加入 `PATH`，或使用能提供 `AutoHotkey.exe` shim 的包管理器安装方式，然后重开终端验证。
 
-也可以为 `ahk/main.ahk` 创建快捷方式并放入 Windows 启动文件夹（`Win+R` 后输入 `shell:startup`），让工具箱登录后自动运行。
+登录自启：启动文件夹里的快捷方式指向 `tools/startup/Start-Toolbox.ps1`（`Win+R` 输入 `shell:startup` 查看），由它解析 AutoHotkey v2 引擎（官方安装 → Scoop shim/UX → `current\v2` → Program Files）、带重试地启动 `ahk/main.ahk`、校验进程真的存活（包括识别 main.ahk 弹出的启动错误框），并把每次结果追加到 `%LOCALAPPDATA%\lat3ncy-toolbox\startup.log`（main.ahk 的启动失败原因与退出码也写在这里）；失败会弹系统 Toast，不会再静默。
+
+```powershell
+# 手动验证整条自启链路（不必重启）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\startup\Start-Toolbox.ps1
+
+# 看启动/退出原因
+Get-Content "$env:LOCALAPPDATA\lat3ncy-toolbox\startup.log" -Tail 20
+```
+
+> 已知坑：profile 迁移后 Scoop 的 `apps\autohotkey\current` 可能变成**实目录**（正常应为 junction）。此时引擎正在运行会让 `scoop update autohotkey` 半删除该目录，下次开机就找不到引擎。修法：先停工具箱 AHK，再 `Remove-Item ...\current -Recurse -Force` 并用 `New-Item -ItemType Junction -Path ...\current -Target ...\<版本>` 指向版本目录。
 
 - CapsLock 短按切中/英、长按进大写；状态 HUD 默认走 `tools/ime-hud-winui/out/ImeHudWinUi.exe`（CN 中框 / EN A / CAPS 上箭头）。效果不理想时把 `CapsLockIme.UseImeHud` 设为 `false`，立刻回退 AHK 芯片。
 - `ahk/shortcuts.ahk` 只保存快捷键配置，`ahk/hotkey-router.ahk` 统一完成校验与注册，`ahk/features/` 只实现功能。
@@ -203,6 +213,12 @@ RapidOCR 模式会轮询系统剪贴板中的图片（超时 45 秒，按 Esc �
 
 Windows 主题 / 深浅色模式 / 壁纸自动化调度系统。支持根据日出/日落时间动态对齐太阳作息，或按固定时间准时切换。
 
+锁屏同步：`wallpaper.sync_lock_screen = true` 时，每次切换后把锁屏背景设为同一张壁纸（未启用壁纸联动则同步当前桌面壁纸）。走官方 WinRT `LockScreen.SetImageFileAsync`，按用户生效、免管理员，不写 `PersonalizationCSP`，设置页不会变成「由组织管理」。实现见 `tools/theme-scheduler/Set-LockScreenFromWallpaper.ps1`，该脚本必须由 Windows PowerShell 5.1 执行（WinRT 互操作依赖 `System.Runtime.WindowsRuntime`），文件本身需为 UTF-8 BOM，也可单独手动运行。
+
+壁纸目录：`wallpaper.directory` 指向一个图池（本机为 `C:\Users\Jie\Pictures\Wallpaper`）。挑图优先级为「显式 `light_wallpaper` / `dark_wallpaper` → 目录下的 `light`/`day`、`dark`/`night` 子目录 → 目录内全部图片」。`pick = "daily"` 同一天固定一张并逐日轮换；`"each"` 日出/日落各推进一张（由日期直接推算，无需状态文件、可重复执行）；`"random"` 每次随机。
+
+锁屏脚本的两个实现要点（踩过的坑）：副本文件名每次唯一（`wallpaper-<时间戳>-<内容哈希>.<ext>`，默认保留最近 5 份），因为 Windows 的锁屏影像存储会按路径/内容去重，复用同名文件出现过「调用成功但锁屏没变」的静默失效；设置完成后用 `LockScreen.GetImageStream()` 读回并比对像素尺寸，不一致就以非 0 退出——否则这类失败无法察觉。
+
 ### 统一配置文件（`tools/theme-scheduler/config.toml`）
 
 ```toml
@@ -225,9 +241,12 @@ switch_apps = true
 switch_system = false
 
 [wallpaper]
-enabled = false # 是否在切换时联动更换桌面壁纸 (true / false)
-light_wallpaper = "C:\\path\\to\\Day.jpg"
+enabled = true # 是否在切换时联动更换桌面壁纸 (true / false)
+directory = "C:\\Users\\Jie\\Pictures\\Wallpaper" # 壁纸目录（图池）；也可在其下建 light/day、dark/night 子目录
+pick = "daily" # 同一模式下多张候选的挑法：daily (每天一张) | each (每次切换换一张) | random
+light_wallpaper = "C:\\path\\to\\Day.jpg" # 显式单张，优先级高于 directory；支持相对 directory 的文件名
 dark_wallpaper  = "C:\\path\\to\\Night.jpg"
+sync_lock_screen = true # 切换后把锁屏背景同步为同一张壁纸（未启用壁纸联动时同步当前桌面壁纸）
 
 [theme_settings]
 # 智能名称/路径寻址：支持 "light"、"dark" 或绝对路径

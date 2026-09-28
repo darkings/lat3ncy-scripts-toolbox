@@ -51,13 +51,13 @@ $updateTrigger = New-ScheduledTaskTrigger -Daily -At '00:10'
 Ensure-ThemeTask -TaskName $UpdateTask -ScriptPath $updateScript -Trigger $updateTrigger
 
 # 2) Light/Dark 先用 fixed 时间占位（避免 Get-SunTimes 失败导致无 Trigger）
-#    关掉 StartWhenAvailable：错过的日出/日落不能在开机时补跑
+#    打开 StartWhenAvailable：错过的日出/日落允许在开机时补跑，由脚本内的时间窗口判断兜底
 $fallbackLight = if ($config.schedule.fixed_light_time) { $config.schedule.fixed_light_time } else { '07:00' }
 $fallbackDark  = if ($config.schedule.fixed_dark_time)  { $config.schedule.fixed_dark_time }  else { '19:00' }
 $lightTrigger = New-ScheduledTaskTrigger -Daily -At $fallbackLight
 $darkTrigger  = New-ScheduledTaskTrigger -Daily -At $fallbackDark
-Ensure-ThemeTask -TaskName $LightTask -ScriptPath $lightScript -Trigger $lightTrigger -DisableStartWhenAvailable
-Ensure-ThemeTask -TaskName $DarkTask  -ScriptPath $darkScript  -Trigger $darkTrigger  -DisableStartWhenAvailable
+Ensure-ThemeTask -TaskName $LightTask -ScriptPath $lightScript -Trigger $lightTrigger
+Ensure-ThemeTask -TaskName $DarkTask  -ScriptPath $darkScript  -Trigger $darkTrigger
 
 # 3) 登录时按当前时间对齐一次（延迟 10s，等 DWM / Explorer）
 $applyTrigger = Get-ThemeLogonTrigger

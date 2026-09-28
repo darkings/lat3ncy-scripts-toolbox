@@ -37,14 +37,28 @@ switch_system = false  # 是否切换系统任务栏、开始菜单、操作中�
 # ============================================================
 [wallpaper]
 # 是否在切换时自动更换桌面壁纸 (true / false)
-# 若设为 false，则不改变当前壁纸 (默认 false)
-enabled = false
+# true：日出/日落切换时按下面的 directory 轮换壁纸；锁屏是否跟随由 sync_lock_screen 控制
+enabled = true
 
-# 白天 / 浅色模式专属壁纸绝对路径 (支持 jpg, png, bmp)
+# 壁纸目录：目录内直接放图片，或建 light/day 与 dark/night 子目录分别放日/夜壁纸
+# 留空则只能使用下面的显式路径
+directory = "C:\\Users\\Jie\\Pictures\\Wallpaper"
+
+# 同一模式有多张候选时的挑选策略
+#   daily  = 每天一张（同一天的日出/日落/登录都用同一张，跨天换下一张，默认）
+#   each   = 每次切换换一张（日出 N、日落 N+1；同一时段内稳定，不需要状态文件）
+#   random = 每次随机
+pick = "daily"
+
+# 显式指定单张壁纸（优先级高于 directory；可填绝对路径，或相对 directory 的文件名）
 light_wallpaper = ""
 
-# 夜间 / 深色模式专属壁纸绝对路径 (支持 jpg, png, bmp)
 dark_wallpaper = ""
+
+# 是否让锁屏背景跟随壁纸 (true / false)
+# true：每次切换主题后同步锁屏；若启用了上面的壁纸联动，锁屏用同一张新壁纸，否则同步当前桌面壁纸。
+# 走官方 WinRT API（按用户、免管理员），不写 PersonalizationCSP，不会把设置页变成「由组织管理」。
+sync_lock_screen = true
 
 # ============================================================
 # 模式 B: 官方 / 自定义 .theme 主题包配置 (当 switch_type = "theme" 时生效)
@@ -64,11 +78,19 @@ dark_theme_file  = "dark.theme"
 # 切深浅色时同步换鼠标。false 则只切颜色/壁纸，不改光标。
 enabled = true
 
-# 光标目录。留空则用仓库 resources/cursors/light 与 resources/cursors/dark。
-# 也可填相对仓库根的路径，或绝对路径。
+# 配色方案名。对应 resources/cursors/<配色> 目录。
+# 可用配色：light, dark, blueberry, greentea, mint, strawberry, thaitea, vanilla, yogurt
+light_color = "light"
+dark_color  = "dark"
+# 光标目录。留空则按上面的配色自动解析为 resources/cursors/<配色>。
+# 也可填相对仓库根的路径，或绝对路径（填了则忽略配色设置）。
 light_dir = ""
 dark_dir  = ""
 
 # 写入「鼠标属性」方案名。只在本机注册表出现，不覆盖系统自带方案。
 light_scheme = "Cursor Concept 3 Light"
 dark_scheme  = "Cursor Concept 3 Dark"
+
+# 尺寸由系统按 DPI 从多尺寸资源里选，脚本不写 CursorBaseSize / CursorSize。
+# 资源包内含 32/48/64/96/128。本机 200% 缩放对应 64。
+# 不要用 SetSystemCursor 强行塞句柄：DPI 不感知的 powershell.exe 会把 64 再放大成 128。

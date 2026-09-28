@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 
 function Get-ThemeConfig
 {
@@ -21,8 +21,11 @@ function Get-ThemeConfig
     }
     wallpaper = @{
       enabled = $false
+      directory = ''
+      pick = 'daily'
       light_wallpaper = ''
       dark_wallpaper = ''
+      sync_lock_screen = $false
     }
     theme_settings = @{
       light_theme_file = 'light.theme'
@@ -370,18 +373,46 @@ function Resolve-ThemeCursorDirectory
     $configured = if ($Mode -eq 'light') { [string]$Config.cursor.light_dir } else { [string]$Config.cursor.dark_dir }
   }
 
-  $dir = if ($configured) { $configured } else { Join-Path $repoRoot ('resources\cursors\' + $Mode) }
-  if (-not [IO.Path]::IsPathRooted($dir))
+  # 显式配置的目录优先，不做尺寸推导。
+  if ($configured)
   {
-    $dir = Join-Path $repoRoot $dir
+    $dir = $configured
+    if (-not [IO.Path]::IsPathRooted($dir))
+    {
+      $dir = Join-Path $repoRoot $dir
+    }
+    return $dir
   }
-  return $dir
+
+  # 按配色解析目录：resources\cursors\<配色>。
+  # 配色由 config 的 light_color / dark_color 指定，默认 light / dark。
+  # 资源包内含 32/48/64/96/128 五个原生尺寸，覆盖 100%-200% DPI，
+  # 系统按 DPI 请求任意尺寸都能命中原生资源，不会被缩放导致模糊或视觉过大。
+  $color = $Mode
+  if ($Config.cursor)
+  {
+    $key = if ($Mode -eq 'light') { 'light_color' } else { 'dark_color' }
+    if ($Config.cursor.ContainsKey($key) -and $Config.cursor.$key)
+    {
+      $color = [string]$Config.cursor.$key
+    }
+  }
+  $colorDir = Join-Path $repoRoot ('resources\cursors\' + $color)
+  if (Test-Path -LiteralPath $colorDir -PathType Container)
+  {
+    return $colorDir
+  }
+
+  # 回退：按模式名解析 resources\cursors\<mode>。
+  $baseDir = Join-Path $repoRoot ('resources\cursors\' + $Mode)
+  Write-ThemeLog ("Cursor color dir missing, fallback to base: {0}" -f $colorDir)
+  return $baseDir
 }
 
 function Ensure-CursorNative
 {
-  # Win11 上 SPI_SETCURSORS 会按系统默认 1bpp 箭头重载，把刚写进注册表的方案冲掉。
-  # 持久化仍写 HKCU\Control Panel\Cursors；当前会话用 LoadCursorFromFile + SetSystemCursor。
+  # CursorNative 保留作诊断。套用路径不要调用 SetFile / SetSystemCursor。
+  # powershell.exe 不感知 DPI，SetSystemCursor 塞 64px 会被 200% 缩放再放大成 128。
   if (([System.Management.Automation.PSTypeName]'CursorNative').Type)
   {
     return $true
@@ -391,8 +422,10 @@ function Ensure-CursorNative
 using System;
 using System.Runtime.InteropServices;
 public static class CursorNative {
+  // LoadCursorFromFile 只返回 32x32 位图，会忽略 .cur 里的更大尺寸；
+  // 必须用 LoadImage + LR_LOADFROMFILE 才能拿到原始尺寸（如 64/96/144）。
   [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  public static extern IntPtr LoadCursorFromFile(string lpFileName);
+  public static extern IntPtr LoadImage(IntPtr hinst, string lpszName, uint uType, int cxDesired, int cyDesired, uint fuLoad);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern IntPtr CopyIcon(IntPtr hIcon);
   [DllImport("user32.dll", SetLastError = true)]
@@ -415,10 +448,31 @@ public static class CursorNative {
   public struct ICONINFO {
     public bool fIcon; public int xHotspot; public int yHotspot; public IntPtr hbmMask; public IntPtr hbmColor;
   }
+  [DllImport("user32.dll")]
+  public static extern int GetSystemMetrics(int nIndex);
+  [DllImport("user32.dll")]
+  public static extern int GetSystemMetricsForDpi(int nIndex, uint dpi);
+  // powershell.exe 默认 DPI 不感知：GetSystemMetrics / GetDeviceCaps 在 200% 下都返回 96dpi 的 32。
+  // AppliedDPI 是系统真实缩放。200% = 192 -> SM_CXCURSOR 64。
+  public static int ExpectedSize() {
+    int dpi = 96;
+    try {
+      object v = Microsoft.Win32.Registry.GetValue(
+        @"HKEY_CURRENT_USER\Control Panel\Desktop\WindowMetrics", "AppliedDPI", 96);
+      if (v != null) dpi = Convert.ToInt32(v);
+    } catch { dpi = 96; }
+    if (dpi < 96) dpi = 96;
+    int cx = GetSystemMetricsForDpi(13, (uint)dpi);
+    if (cx <= 0) cx = 32;
+    return cx;
+  }
   // 从文件加载句柄；SetSystemCursor 会 Destroy 传入的句柄，所以必须 CopyIcon。
-  public static bool SetFile(string path, uint id) {
+  // size 显式指定目标像素：多尺寸 .cur 里 cx/cy=0 只会取第一个条目（32px），
+  // 必须传具体值才能命中 32/64/96/144 的原生资源。
+  public static bool SetFile(string path, uint id, int size) {
     if (string.IsNullOrEmpty(path)) return false;
-    IntPtr loaded = LoadCursorFromFile(path);
+    // IMAGE_CURSOR=2, LR_LOADFROMFILE=0x10
+    IntPtr loaded = LoadImage(IntPtr.Zero, path, 2, size, size, 0x10);
     if (loaded == IntPtr.Zero) return false;
     IntPtr copy = CopyIcon(loaded);
     DestroyCursor(loaded);
@@ -498,7 +552,9 @@ function Sync-ThemeFileCursors
     $wanted[$role.Name] = [string]$Paths[$role.Name]
   }
   $wanted['DefaultValue'] = $SchemeName
-
+  # SchemeName 必须写成自定义方案名。若保留原主题里的 @mmres.dll,-800（默认方案 ID），
+  # 重启/锁屏后 Windows 会按该 ID 把指针打回系统默认。
+  $wanted['SchemeName'] = $SchemeName
   $outLines = New-Object System.Collections.Generic.List[string]
   $inSection = $false
   $wroteSection = $false
@@ -533,8 +589,12 @@ function Sync-ThemeFileCursors
       $name = $matches[1].Trim()
       if ($wanted.ContainsKey($name))
       {
-        $outLines.Add($name + '=' + $wanted[$name])
-        $seen[$name] = $true
+        # 同名键只写一次；重复行（如残留的 SchemeName=@mmres.dll,-800）直接丢弃。
+        if (-not $seen.ContainsKey($name))
+        {
+          $outLines.Add($name + '=' + $wanted[$name])
+          $seen[$name] = $true
+        }
         continue
       }
     }
@@ -613,11 +673,8 @@ function Disable-AccessibilityCursorOverlay
   }
 
   Set-ItemProperty -LiteralPath $key -Name CursorColor -Value ([int]-1) -Type DWord
-  $size = (Get-ItemProperty -LiteralPath $key -Name CursorSize -ErrorAction SilentlyContinue).CursorSize
-  if ($null -eq $size -or [int]$size -lt 1)
-  {
-    Set-ItemProperty -LiteralPath $key -Name CursorSize -Value 1 -Type DWord
-  }
+  # 只清颜色。不要在这里写 CursorSize，否则会和系统 DPI 选档打架。
+  # 尺寸由 SPI_SETCURSORS 按注册表和当前 DPI 决定。
   Write-ThemeLog ("Cursor overlay cleared: CursorColor={0} -> default" -f $current)
   return $true
 }
@@ -701,13 +758,18 @@ function Set-WindowsCursorScheme
   # REG_SZ 方案名；鼠标属性读的是这个默认值。
   Set-ItemProperty -LiteralPath $key -Name '(default)' -Value $schemeName -Type String
   Set-ItemProperty -LiteralPath $key -Name 'Scheme Source' -Value 1 -Type DWord
+
+  # 不写 CursorBaseSize / CursorSize，也不调用 SetSystemCursor。
+  # powershell.exe 不感知 DPI。它用 SetSystemCursor 塞 64px 句柄时，
+  # 200% 缩放的系统会再放大成 128；登录/主题重载又按注册表加载 64，于是一会儿大一会儿小。
+  # 持久化只写注册表路径和 .theme。当前会话用 SPI_SETCURSORS 让系统自己按 DPI 选尺寸。
   foreach ($role in $roles)
   {
     # REG_EXPAND_SZ：和 Install.inf / 鼠标属性写入类型一致。
     Set-ItemProperty -LiteralPath $key -Name $role.Name -Value $paths[$role.Name] -Type ExpandString
   }
 
-  # 辅助功能彩色指针会盖住整套方案。清掉后再按 17 个角色套文件。
+  # 辅助功能彩色指针会盖住整套方案。只清颜色，不写 CursorSize。
   $overlayCleared = $false
   try
   {
@@ -718,35 +780,6 @@ function Set-WindowsCursorScheme
     Write-ThemeLog ("Cursor overlay clear failed: {0}" -f $_.Exception.Message)
   }
 
-  # 不要调用 SPI_SETCURSORS：本机会话里它会把刚套上的方案打回系统默认 1bpp 箭头。
-  $setCount = 0
-  $live = 'skip'
-  if (Ensure-CursorNative)
-  {
-    foreach ($role in $roles)
-    {
-      try
-      {
-        if ([CursorNative]::SetFile($paths[$role.Name], [uint32]$role.Id))
-        {
-          $setCount++
-        }
-      }
-      catch
-      {
-        Write-ThemeLog ("Cursor SetSystemCursor failed: {0} {1}" -f $role.Name, $_.Exception.Message)
-      }
-    }
-    try
-    {
-      $live = [CursorNative]::LiveArrow()
-    }
-    catch
-    {
-      $live = 'error'
-    }
-  }
-
   try
   {
     Sync-ThemeFileCursors -Roles $roles -Paths $paths -SchemeName $schemeName
@@ -754,6 +787,25 @@ function Set-WindowsCursorScheme
   catch
   {
     Write-ThemeLog ("Cursor theme file sync failed: {0}" -f $_.Exception.Message)
+  }
+
+  $setCount = $roles.Count
+  $live = 'registry'
+  if (-not ('SystemParametersInfoCursor' -as [type]))
+  {
+    $spiCode = "using System; using System.Runtime.InteropServices; public static class SystemParametersInfoCursor { [DllImport(`"user32.dll`", SetLastError=true)] public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, System.IntPtr pvParam, uint fWinIni); }"
+    Add-Type -TypeDefinition $spiCode -ErrorAction Stop
+  }
+  try
+  {
+    # SPI_SETCURSORS = 0x0057. 让系统按注册表和当前 DPI 自己选尺寸。
+    [SystemParametersInfoCursor]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 0x0003) | Out-Null
+    $live = 'reloaded'
+  }
+  catch
+  {
+    Write-ThemeLog ("Cursor SPI_SETCURSORS failed: {0}" -f $_.Exception.Message)
+    $live = 'reload-fail'
   }
 
   Write-ThemeLog ("Cursor switch done: mode={0} scheme={1} set={2}/{3} live={4} overlay={5} dir={6}" -f `
@@ -783,6 +835,137 @@ function Set-DesktopWallpaper
   }
   catch
   {
+    return $false
+  }
+}
+
+function Get-WallpaperImageFile
+{
+  param([Parameter(Mandatory = $true)][string]$Directory)
+
+  return @(Get-ChildItem -LiteralPath $Directory -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Extension -match '(?i)^\.(jpg|jpeg|png|bmp)$' })
+}
+
+function Resolve-WallpaperImage
+{
+  param($Config, [Parameter(Mandatory = $true)][ValidateSet('light', 'dark')][string]$Mode)
+
+  $wallpaper = $Config.wallpaper
+  $directory = [string]$wallpaper.directory
+
+  # 1) Explicit file wins: absolute path, or a name relative to wallpaper.directory.
+  $explicit = if ($Mode -eq 'light') { [string]$wallpaper.light_wallpaper } else { [string]$wallpaper.dark_wallpaper }
+  if ($explicit)
+  {
+    $candidate = $explicit
+    if (-not [System.IO.Path]::IsPathRooted($candidate) -and $directory)
+    {
+      $candidate = Join-Path $directory $candidate
+    }
+    if (Test-Path -LiteralPath $candidate -PathType Leaf)
+    {
+      return (Resolve-Path -LiteralPath $candidate).Path
+    }
+    Write-ThemeLog ("Wallpaper explicit path missing: {0}" -f $candidate)
+  }
+
+  if (-not $directory -or -not (Test-Path -LiteralPath $directory -PathType Container))
+  {
+    return $null
+  }
+
+  # 2) Mode subdirectory: light/day/sunrise vs dark/night/sunset.
+  $subNames = if ($Mode -eq 'light') { @('light', 'day', 'sunrise') } else { @('dark', 'night', 'sunset') }
+  $images = @()
+  foreach ($subName in $subNames)
+  {
+    $subDirectory = Join-Path $directory $subName
+    if (Test-Path -LiteralPath $subDirectory -PathType Container)
+    {
+      $images = @(Get-WallpaperImageFile -Directory $subDirectory)
+      if ($images.Count -gt 0)
+      {
+        break
+      }
+    }
+  }
+
+  # 3) Flat pool: every image in the directory.
+  if ($images.Count -eq 0)
+  {
+    $images = @(Get-WallpaperImageFile -Directory $directory)
+  }
+  if ($images.Count -eq 0)
+  {
+    Write-ThemeLog ("Wallpaper directory has no images: {0}" -f $directory)
+    return $null
+  }
+
+  $sorted = @($images | Sort-Object FullName)
+  $count = $sorted.Count
+  $pick = if ($wallpaper.pick) { [string]$wallpaper.pick } else { 'daily' }
+  if ($pick -eq 'random')
+  {
+    $index = Get-Random -Minimum 0 -Maximum $count
+  }
+  elseif ($pick -eq 'each')
+  {
+    # Sunrise and sunset each advance one slot; stable inside a time slot without a state file.
+    $index = (((Get-Date).Date.DayOfYear * 2) + $(if ($Mode -eq 'dark') { 1 } else { 0 })) % $count
+  }
+  else
+  {
+    $index = (Get-Date).Date.DayOfYear % $count
+  }
+  return $sorted[$index].FullName
+}
+
+function Sync-LockScreenWallpaper
+{
+  param($Config, [string]$ImagePath)
+
+  if (-not $Config.wallpaper.sync_lock_screen)
+  {
+    return $false
+  }
+
+  $scriptPath = Join-Path $PSScriptRoot 'Set-LockScreenFromWallpaper.ps1'
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf))
+  {
+    Write-ThemeLog 'LockScreen skipped: Set-LockScreenFromWallpaper.ps1 missing'
+    return $false
+  }
+
+  # WinRT lock screen API requires Windows PowerShell 5.1 (System.Runtime.WindowsRuntime).
+  # Spawn a child host so the script's exit code stays contained.
+  $winPs = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  if (-not (Test-Path -LiteralPath $winPs -PathType Leaf))
+  {
+    $winPs = 'powershell.exe'
+  }
+
+  $arguments = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
+  $source = 'desktop-wallpaper'
+  if ($ImagePath -and (Test-Path -LiteralPath $ImagePath -PathType Leaf))
+  {
+    $arguments += @('-ImagePath', $ImagePath)
+    $source = $ImagePath
+  }
+
+  try
+  {
+    & $winPs @arguments | Out-Null
+    if ($LASTEXITCODE -ne 0)
+    {
+      throw ("exit code {0}" -f $LASTEXITCODE)
+    }
+    Write-ThemeLog ("LockScreen synced from {0}" -f $source)
+    return $true
+  }
+  catch
+  {
+    Write-ThemeLog ("LockScreen sync failed: {0}" -f $_.Exception.Message)
     return $false
   }
 }
@@ -1357,12 +1540,12 @@ function Invoke-ThemeNotify
 {
   param(
     [string]$Type = 'info',
-    [string]$Icon = '☀️',
+    [string]$Icon = ([string][char]0x2600 + [string][char]0xFE0F),
     [string]$Text = ''
   )
   try
   {
-    $notifyLib = Join-Path (Split-Path $PSScriptRoot -Parent) 'raycast-scripts\_lib\notify.ps1'
+    $notifyLib = Join-Path (Split-Path $PSScriptRoot -Parent) "raycast-scripts\_lib\notify.ps1"
     if (Test-Path -LiteralPath $notifyLib -PathType Leaf)
     {
       . $notifyLib

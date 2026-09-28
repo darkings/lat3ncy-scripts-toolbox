@@ -30,7 +30,8 @@ $riseTime = $schedule.RiseTime
 $setTime = $schedule.SetTime
 Write-Log ('Schedule mode: {0} source={1} ({2}, {3})' -f $schedule.TriggerMode, $schedule.Source, $riseTime.ToString('HH:mm'), $setTime.ToString('HH:mm'))
 
-# Light/Dark 关掉 StartWhenAvailable，避免关机错过的日出/日落在开机时补跑，和登录对齐抢最后一次切换
+# Light/Dark 打开 StartWhenAvailable，让关机错过的日出/日落在开机时补跑；
+# 是否真的切换由 Set-Theme-*.ps1 里的 Test-ThemeSwitchWindow 时间窗口决定
 $lightScript = Join-Path $PSScriptRoot 'Set-Theme-Light.ps1'
 $darkScript = Join-Path $PSScriptRoot 'Set-Theme-Dark.ps1'
 $applyScript = Join-Path $PSScriptRoot 'Apply-ThemeNow.ps1'
@@ -38,7 +39,7 @@ $cursorScript = Join-Path $PSScriptRoot 'Apply-CursorsNow.ps1'
 try
 {
   $lightTrigger = New-ScheduledTaskTrigger -Daily -At $riseTime
-  Repair-ThemeScheduledTaskWindow -TaskName $LightTask -ScriptPath $lightScript -Trigger $lightTrigger -DisableStartWhenAvailable
+  Repair-ThemeScheduledTaskWindow -TaskName $LightTask -ScriptPath $lightScript -Trigger $lightTrigger
   Write-Log ("Theme-Light -> {0}: OK" -f $riseTime.ToString('HH:mm'))
 }
 catch
@@ -49,7 +50,7 @@ catch
 try
 {
   $darkTrigger = New-ScheduledTaskTrigger -Daily -At $setTime
-  Repair-ThemeScheduledTaskWindow -TaskName $DarkTask -ScriptPath $darkScript -Trigger $darkTrigger -DisableStartWhenAvailable
+  Repair-ThemeScheduledTaskWindow -TaskName $DarkTask -ScriptPath $darkScript -Trigger $darkTrigger
   Write-Log ("Theme-Dark -> {0}: OK" -f $setTime.ToString('HH:mm'))
 }
 catch

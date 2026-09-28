@@ -92,12 +92,19 @@ function Show-SystemToast
       return $false
     }
 
-    return Start-ToolboxNotifyProcess -FilePath "powershell.exe" -Arguments @(
-      "-ExecutionPolicy", "Bypass",
-      "-NoProfile",
-      "-File", $toastScript,
-      $Title,
-      $Message
+    # 用 -EncodedCommand 传参，避免 powershell.exe 5.1 按 ANSI 解析命令行导致中文乱码。
+    # 载荷格式：第一行是 toast.ps1 路径，第二行是标题，第三行是正文。
+    $payload = @($toastScript, $Title, $Message) -join "`n"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
+
+    $bootstrap = '$parts = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('' + $encoded + '')) -split "`n", 3' + "`n" +
+                 '& $parts[0] -Title $parts[1] -Message $parts[2]'
+    $bootstrapEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
+
+    return Start-ToolboxNotifyProcess -FilePath 'powershell.exe' -Arguments @(
+      '-ExecutionPolicy', 'Bypass',
+      '-NoProfile',
+      '-EncodedCommand', $bootstrapEncoded
     )
   } catch
   {

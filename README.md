@@ -185,29 +185,15 @@ RapidOCR 模式会轮询系统剪贴板中的图片（超时 45 秒，按 Esc �
 
 | 脚本 | 功能 |
 | --- | --- |
-| `reset-navicat.ps1` | **仅限合法授权测试环境**：识别当前操作系统后调用 Navicat 试用期重置脚本；`silent` 关闭 Raycast 窗口，成功/失败都走系统 Toast。公开仓库请勿默认启用 |
 | `restart-autohotkey.ps1` | 仅结束本工具箱的 `ahk/main.ahk` 进程，通过 PATH 中的 AutoHotkey v2 重新加载；`silent` 关闭 Raycast 窗口，成功/失败都走系统 Toast |
 | `toggle-rgb.ps1` | 切换技嘉风扇 + Hi75 灯光；只动 `rgb-disabled.flag`，不杀 Ambient、不停 OpenRGB。`silent` 关闭 Raycast 窗口，开关灯成功/失败都走系统 Toast |
 | `screenshot.ps1` | 用 `ms-screenclip:` 立刻打开截图框（失败才回退 `Win+Shift+S`），结果复制到剪贴板；若 Win11 自动保存截图已开启并写出文件，后台 Toast 完整路径 |
 | `screenshot-ocr.ps1` | 按 `ocr/config.toml` 选择引擎：`system` 注入 `Win+Shift+T`；本机当前 `rapidocr` 先打开截图框，再 `pythonw ocr.py --no-screenshot`。只处理文字，不报图片保存路径 |
 | `record-screen.ps1` | 注入 `Win+Shift+R` 直接打开截图工具（Snipping Tool）的屏幕录制框选；停止后若系统写出视频，后台 Toast `Videos\\Captures` 完整路径 |
-| `open-neomutt.ps1` | 使用 PowerShell 7+（`pwsh.exe`）打开窗口，在默认 WSL 发行版的 home 目录运行 `neomutt` |
 | `ocr/install-deps.py` | 安装 OCR 依赖（Pillow + RapidOCR + pyperclip），按提示下载移动端模型，已装则跳过 |
+| `codex-switch.ps1` | 一个命令完成状态、OpenAI、中转切换和保存登录。成功和失败都走系统 Toast；密钥留在本机 |
 
 在 Raycast 的 Script Commands 设置中添加 `tools/raycast-scripts` 目录即可使用，并可对每个命令单独绑定 Hotkey。
-
-## Navicat-refresh
-
-跨平台 Navicat Premium 试用期重置工具，支持 Windows、macOS 与 Linux。**仅限已购买授权或官方允许的测试环境**；会删除试用期相关注册表、哈希文件和凭据。公开或远程推送仓库时，应从默认 Raycast 清单中移除。
-
-- **快速触发**：通过 Raycast 运行 `Reset Navicat Trial`（`tools/raycast-scripts/reset-navicat.ps1`）一键自动适配系统执行。
-- **手动运行**：
-  ```powershell
-  # Windows
-  powershell -File ./tools/navicat-refresh/reset_navicat.ps1
-  # macOS / Linux
-  bash ./tools/navicat-refresh/reset_navicat.sh
-  ```
 
 ## Theme Scheduler
 
@@ -405,8 +391,8 @@ lat3ncy-scripts-toolbox/
 │   ├── ime-hud-winui/        # CapsLock 中/英/大写芯片 + Caps+F 翻译面板（AHK 检测，ImeHudWinUi.exe 显示）
 │   ├── audio-switcher/       # Caps+D 音频切换（G27Q2 ↔ AirPods 自动拉起，config.toml 可配置）
 │   ├── rgb/                  # RGB Ambient 桌面取色（mss + 官方 OpenRGB 系统服务 + Hi75 Col06）
-│   ├── navicat-refresh/      # Navicat 试用期重置（仅限合法授权测试环境）
 │   ├── raycast-scripts/      # Raycast 命令（ocr/ 识字；capture/ 截图与录屏落盘监视）
+│   ├── codex-switch/         # Codex OpenAI / 中转切换；密钥留在本机 LocalAppData
 │   ├── theme-scheduler/      # Windows 主题 / 深浅色自动切换（日出日落调度）
 │   └── tts/                  # Text-to-Speech 核心播放器、依赖安装与配置
 ├── findings.md               # 研究与决策记录（含历史压测参数）

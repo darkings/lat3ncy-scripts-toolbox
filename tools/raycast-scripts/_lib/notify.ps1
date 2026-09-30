@@ -1,4 +1,4 @@
-﻿# Lat3ncy Notify - Raycast Adapter
+# Lat3ncy Notify - Raycast Adapter
 # Raycast 生产通知只走系统 Toast；旧 HUD CLI / Show-ToolboxNotify 已删除。
 try {
   [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -68,8 +68,17 @@ function Start-ToolboxNotifyProcess
     return $false
   }
 
+  # Raycast silent mode kills child processes on exit. Wait until the toast is shown.
+  if (-not $process.WaitForExit(5000))
+  {
+    try { $process.Kill() } catch {}
+    $process.Dispose()
+    return $false
+  }
+
+  $exitCode = $process.ExitCode
   $process.Dispose()
-  return $true
+  return ($exitCode -eq 0)
 }
 
 function Show-SystemToast
@@ -92,20 +101,27 @@ function Show-SystemToast
       return $false
     }
 
-    # 用 -EncodedCommand 传参，避免 powershell.exe 5.1 按 ANSI 解析命令行导致中文乱码。
-    # 载荷格式：第一行是 toast.ps1 路径，第二行是标题，第三行是正文。
-    $payload = @($toastScript, $Title, $Message) -join "`n"
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($payload))
+    # 长 EncodedCommand 在当前环境会被拒绝启动。参数写入 UTF-8 临时脚本，命令行只保留短 -File 路径。
+    $runnerPath = Join-Path ([IO.Path]::GetTempPath()) ("lat3ncy-toast-{0}.ps1" -f [guid]::NewGuid().ToString('n'))
+    $runner = @(
+      'param([string]$ToastScript, [string]$Title, [string]$Message)',
+      '& $ToastScript -Title $Title -Message $Message'
+    ) -join [Environment]::NewLine
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [IO.File]::WriteAllText($runnerPath, $runner, $utf8)
 
-    $bootstrap = '$parts = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('' + $encoded + '')) -split "`n", 3' + "`n" +
-                 '& $parts[0] -Title $parts[1] -Message $parts[2]'
-    $bootstrapEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
-
-    return Start-ToolboxNotifyProcess -FilePath 'powershell.exe' -Arguments @(
-      '-ExecutionPolicy', 'Bypass',
-      '-NoProfile',
-      '-EncodedCommand', $bootstrapEncoded
-    )
+    try {
+      return Start-ToolboxNotifyProcess -FilePath 'powershell.exe' -Arguments @(
+        '-ExecutionPolicy', 'Bypass',
+        '-NoProfile',
+        '-File', $runnerPath,
+        '-ToastScript', $toastScript,
+        '-Title', $Title,
+        '-Message', $Message
+      )
+    } finally {
+      Remove-Item -LiteralPath $runnerPath -Force -ErrorAction SilentlyContinue
+    }
   } catch
   {
     return $false

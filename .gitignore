@@ -46,3 +46,9 @@ __pycache__/
 /tools/ime-hud-winui/obj/
 /tools/ime-hud-winui/out/
 /tools/ime-hud-winui/*.pdb
+
+# Codex switch secrets stay on the machine.
+/tools/codex-switch/relays/
+/tools/codex-switch/openai/
+/tools/codex-switch/backups/
+

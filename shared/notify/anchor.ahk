@@ -1,4 +1,5 @@
 #Requires AutoHotkey v2.0
+#Include run-nowindow.ahk
 
 ; AHK v2 #Include 同一路径只加载一次。renderer.ahk（AHK 芯片）和 ime-hud.ahk
 ; （WinUI STATE）都可以 include 本文件；重复 include 会被跳过，不会重定义类。
@@ -29,7 +30,7 @@ class InputAnchor {
         ; L2/L3：仅 Win32 拿不到 caret 时才启动独立 C# UIA 定位器。
         if (locExe != "" && FileExist(locExe)) {
             try {
-                exitCode := RunWait('"' locExe '" ' activeHwnd, , 'Hide')
+                exitCode := ProcessNoWindow.RunWait('"' locExe '" ' activeHwnd, "", 3000)
                 if (exitCode > 0) {
                     bx := exitCode & 0x3FFF
                     by := (exitCode >> 14) & 0x3FFF

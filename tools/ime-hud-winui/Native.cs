@@ -349,6 +349,9 @@ internal static class Native
     public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
 
     [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 
     [DllImport("Shcore.dll")]
@@ -479,9 +482,24 @@ internal static class Native
 
     public static RECT GetPrimaryWorkArea()
     {
-        if (SystemParametersInfo(SPI_GETWORKAREA, 0, out RECT rect, 0))
-            return rect;
-        return new RECT { Left = 0, Top = 0, Right = 1920, Bottom = 1080 };
+        RECT rect = default;
+        SystemParametersInfo(SPI_GETWORKAREA, 0, out rect, 0);
+        return rect;
+    }
+
+    public static bool TryGetWindowWorkArea(IntPtr hwnd, out RECT work)
+    {
+        work = default;
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd))
+            return false;
+        IntPtr monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if (monitor == IntPtr.Zero)
+            return false;
+        MONITORINFO info = new() { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(monitor, ref info))
+            return false;
+        work = info.rcWork;
+        return work.Width > 0 && work.Height > 0;
     }
 
     public static RECT GetWorkAreaFromPoint(int x, int y)

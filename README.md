@@ -36,6 +36,7 @@ Get-Content "$env:LOCALAPPDATA\lat3ncy-toolbox\startup.log" -Tail 20
 - `ahk/shortcuts.ahk` 只保存快捷键配置，`ahk/hotkey-router.ahk` 统一完成校验与注册，`ahk/features/` 只实现功能。
 - 修改按键只编辑 `ahk/shortcuts.ahk`；停用某项功能时，在 Router 中注释对应的注册项即可，feature 文件无需修改。
 - 如果两个已启用功能使用了相同快捷键，脚本会在启动时报错，避免其中一个功能被静默覆盖。
+- 快速左右摇鼠标会临时换成当前箭头资源的 128 帧，停下约 1.4 秒后按系统 DPI 恢复。钩子等脚本空闲后再装，放大在主线程里交给 DPI 感知的辅助进程，不改 `Arrow` 路径。这不是快捷键，停用时把 `FindMouse.Enabled` 设为 `false`。
 
 ### 默认快捷键
 
@@ -129,7 +130,7 @@ powershell.exe -NoProfile -File .\ahk\tests\run-tests.ps1
 
 AHK feature 统一调用 `Notify.State()`、`Notify.Info()`、`Notify.Success()` 或 `Notify.Error()`，不得自行创建通知 GUI 或直接调用 `ToolTip`。`state` / `popup` 由 `shared/notify/renderer.ahk` 绘制 Win11 Fluent 级自适应 HUD；`success` / `info` / `error` 走系统 Toast。**例外：** CapsLock 的中 / 英 / 大写状态默认走独立进程 `tools/ime-hud-winui/out/ImeHudWinUi.exe`（WinUI 3 Island，Acrylic.Default，圆角 `ROUNDSMALL`，点穿 NOACTIVATE），失败或 `UseImeHud=false` 时回退 `Notify.State()` 芯片。`Caps + F` 划词翻译也走同一 WinUI 进程的独立翻译面板。Raycast 生产通知一律 `Show-SystemToast`，不经过共享 HUD。
 
-- **4 级全场景输入锚点定位引擎（C# + UIA）**：
+- **输入锚点**：AHK 先查 Win32 caret，再调用 `anchor-locator.exe`（UIA / 窗口 / 目标显示器）。WinUI 收到坐标后只做 clamp，不再跑 UIA。路径由 `NotifyPaths.LocatorExe()` 解析，不依赖入口脚本目录。
   - **L1（Win32 Caret）**：通过 `GetGUIThreadInfo` 捕获传统 Win32 控件光标。
   - **L2（UIA TextPattern / TextPattern2）**：毫秒级精准捕获 Chromium 内核（Edge / Chrome）、Windows Terminal、WinUI3 记事本、VS Code 等现代文本输入光标。
   - **L3（UIA FocusedElement）**：针对自绘搜索框与无选区输入框进行物理边界锚定。
@@ -192,6 +193,7 @@ RapidOCR 模式会轮询系统剪贴板中的图片（超时 45 秒，按 Esc �
 | `record-screen.ps1` | 注入 `Win+Shift+R` 直接打开截图工具（Snipping Tool）的屏幕录制框选；停止后若系统写出视频，后台 Toast `Videos\\Captures` 完整路径 |
 | `ocr/install-deps.py` | 安装 OCR 依赖（Pillow + RapidOCR + pyperclip），按提示下载移动端模型，已装则跳过 |
 | `codex-switch.ps1` | 一个命令完成状态、OpenAI、中转切换和保存登录。成功和失败都走系统 Toast；密钥留在本机 |
+| `next-wallpaper.ps1` | 从 `theme-scheduler` 壁纸目录按文件名取下一张，同时设置桌面和锁屏。不改深浅色，也不改 `config.toml` |
 
 在 Raycast 的 Script Commands 设置中添加 `tools/raycast-scripts` 目录即可使用，并可对每个命令单独绑定 Hotkey。
 

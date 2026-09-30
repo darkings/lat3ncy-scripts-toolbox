@@ -15,15 +15,24 @@ internal static class Anchor
         public int Y { get; init; }
         public int Height { get; init; }
         public string Source { get; init; }
-        public bool Ok => X != 0 || Y != 0;
+        public bool Found { get; init; }
+        public bool Ok => Found || X != 0 || Y != 0;
     }
 
     public static Result Locate(int hintX = 0, int hintY = 0)
     {
-        if (hintX != 0 || hintY != 0)
-            return new Result { X = hintX, Y = hintY, Height = 20, Source = "hint" };
+        return Locate(hintX, hintY, 0);
+    }
 
-        IntPtr hwnd = Native.GetForegroundWindow();
+    public static Result Locate(int hintX, int hintY, long targetHwnd)
+    {
+        if (hintX != 0 || hintY != 0)
+            return new Result { X = hintX, Y = hintY, Height = 20, Source = "hint", Found = true };
+
+        IntPtr target = targetHwnd == 0 ? IntPtr.Zero : new IntPtr(targetHwnd);
+        if (target != IntPtr.Zero && !Native.IsWindow(target))
+            target = IntPtr.Zero;
+        IntPtr hwnd = target != IntPtr.Zero ? target : Native.GetForegroundWindow();
         Result imm = TryImmComposition(hwnd);
         if (imm.Ok)
             return imm;
@@ -32,7 +41,12 @@ internal static class Anchor
         if (caret.Ok)
             return caret;
 
-        return TryWindowBottom(hwnd);
+        Result bottom = TryWindowBottom(hwnd);
+        if (bottom.Ok)
+            return target != IntPtr.Zero
+                ? new Result { X = bottom.X, Y = bottom.Y, Height = bottom.Height, Source = "target-window-bottom" }
+                : bottom;
+        return default;
     }
 
     static Result TryImmComposition(IntPtr hwnd)
@@ -78,7 +92,7 @@ internal static class Anchor
                 return default;
 
             int height = form.rcArea.Height > 0 ? form.rcArea.Height : 20;
-            return new Result { X = pt.X, Y = pt.Y, Height = Math.Max(12, height), Source = "tsf-imm" };
+            return new Result { X = pt.X, Y = pt.Y, Height = Math.Max(12, height), Source = "tsf-imm", Found = true };
         }
         catch
         {
@@ -110,7 +124,7 @@ internal static class Anchor
                 return default;
 
             int height = Math.Max(12, gui.rcCaret.Height);
-            return new Result { X = pt.X, Y = pt.Y, Height = height, Source = "win32-caret" };
+            return new Result { X = pt.X, Y = pt.Y, Height = height, Source = "win32-caret", Found = true };
         }
         catch
         {
@@ -133,7 +147,8 @@ internal static class Anchor
                 X = rc.Left + rc.Width / 2,
                 Y = rc.Top + (int)(rc.Height * 0.85),
                 Height = 0,
-                Source = "window-bottom"
+                Source = "window-bottom",
+                Found = true
             };
         }
         catch

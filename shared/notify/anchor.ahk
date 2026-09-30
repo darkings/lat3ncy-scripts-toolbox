@@ -1,128 +1,178 @@
 #Requires AutoHotkey v2.0
-#Include run-nowindow.ahk
+#Include paths.ahk
 
-; AHK v2 #Include 同一路径只加载一次。renderer.ahk（AHK 芯片）和 ime-hud.ahk
-; （WinUI STATE）都可以 include 本文件；重复 include 会被跳过，不会重定义类。
-
-; =====================================================================
-; InputAnchor — 4 级全场景输入锚点定位引擎
-;
-; L1: Win32 GetGUIThreadInfo (传统 Win32 Edit/RichEdit)
-; L2: UIA TextPattern2 / TextPattern (Edge, Chrome, Windows Terminal, WinUI3 记事本, VS Code)
-; L3: UIA FocusedElement.BoundingRectangle (自绘输入框、搜索栏兜底)
-; Fallback: 活动窗口底栏 / 屏幕工作区底部
-; =====================================================================
-
+; 输入锚点：优先光标/选区，失败时落到指定窗口底部，而不是主屏。
+; control HWND 只用于 caret / UIA；窗口矩形和显示器兜底使用 root HWND。
 class InputAnchor {
-    static Get() {
-        activeHwnd := WinExist("A")
-        if !activeHwnd
-            return this.GetFallback()
+    static LastSource := ""
+    static LastTargetHwnd := 0
 
-        ; L1 先走进程内 Win32 caret。C# locator 每次 RunWait 都要冷启动 CLR/UIA，
-        ; 普通编辑框不该为定位阻塞芯片弹出。
-        win32 := this.GetWin32Caret(activeHwnd)
-        if win32
-            return win32
+    static Get(&x, &y, targetHwnd := 0) {
+        x := 0
+        y := 0
+        this.LastSource := ""
+        this.LastTargetHwnd := 0
+        controlHwnd := this.NormalizeHwnd(targetHwnd)
+        if !controlHwnd
+            controlHwnd := WinExist("A")
+        if !controlHwnd
+            return false
 
-        locExe := NotifyPaths.LocatorExe()
+        rootHwnd := this.GetRootHwnd(controlHwnd)
+        if !rootHwnd
+            rootHwnd := controlHwnd
+        this.LastTargetHwnd := rootHwnd
 
-        ; L2/L3：仅 Win32 拿不到 caret 时才启动独立 C# UIA 定位器。
-        if (locExe != "" && FileExist(locExe)) {
-            try {
-                exitCode := ProcessNoWindow.RunWait('"' locExe '" ' activeHwnd, "", 3000)
-                if (exitCode > 0) {
-                    bx := exitCode & 0x3FFF
-                    by := (exitCode >> 14) & 0x3FFF
-                    sourceId := (exitCode >> 28) & 0x7
-                    cx := bx - 8192
-                    cy := by - 8192
-                    if (sourceId >= 1 && sourceId <= 3 && (cx != 0 || cy != 0)) {
-                        sourceName := (sourceId == 1) ? "win32-caret" : (sourceId == 2 ? "uia-text-caret" : "uia-focused-element")
-                        conf := (sourceId == 1) ? 100 : (sourceId == 2 ? 98 : 70)
-                        return {
-                            x: cx,
-                            y: cy,
-                            w: 2,
-                            h: 20,
-                            source: sourceName,
-                            confidence: conf
-                        }
-                    }
-                }
-            } catch {
-            }
+        if this.TryCaret(&x, &y, controlHwnd) {
+            this.LastSource := "caret"
+            return true
         }
-
-        return this.GetFallback(activeHwnd)
+        if this.TryLocator(&x, &y, controlHwnd) {
+            this.LastSource := "locator"
+            return true
+        }
+        if this.TryWindowBottom(&x, &y, rootHwnd) {
+            this.LastSource := "target-window-bottom"
+            return true
+        }
+        if this.TryMonitorFallback(&x, &y, rootHwnd) {
+            this.LastSource := "target-monitor-fallback"
+            return true
+        }
+        return false
     }
 
-    static GetWin32Caret(activeHwnd) {
-        try {
-            threadId := DllCall("User32\GetWindowThreadProcessId", "Ptr", activeHwnd, "UInt*", 0, "UInt")
-            if !threadId
-                return 0
-            ; GUITHREADINFO：两个 DWORD 之后跟 6 个 HWND，再跟 RECT rcCaret。
-            ; x64 布局：
-            ;   cbSize 0, flags 4,
-            ;   hwndActive 8, hwndFocus 16, hwndCapture 24,
-            ;   hwndMenuOwner 32, hwndMoveSize 40, hwndCaret 48,
-            ;   rcCaret 56（Left / Top / Right / Bottom，各 4 字节）
-            ; hwndCaret = 8 + 5*A_PtrSize；rcCaret = 8 + 6*A_PtrSize。
-            ; 不要写成 8+4*A_PtrSize，那是 hwndMoveSize，空闲时几乎总是 0。
-            guiInfo := Buffer(8 + (6 * A_PtrSize) + 16, 0)
-            NumPut("UInt", guiInfo.Size, guiInfo, 0)
-            if !DllCall("User32\GetGUIThreadInfo", "UInt", threadId, "Ptr", guiInfo.Ptr, "Int")
-                return 0
-            hwndCaretOffset := 8 + 5 * A_PtrSize
-            rcCaretOffset := 8 + 6 * A_PtrSize
-            hwndCaret := NumGet(guiInfo, hwndCaretOffset, "Ptr")
-            rcLeft   := NumGet(guiInfo, rcCaretOffset + 0, "Int")
-            rcBottom := NumGet(guiInfo, rcCaretOffset + 12, "Int")
-            if !(hwndCaret && (rcLeft != 0 || rcBottom != 0))
-                return 0
-            pt := Buffer(8, 0)
-            NumPut("Int", rcLeft, pt, 0), NumPut("Int", rcBottom, pt, 4)
-            DllCall("User32\ClientToScreen", "Ptr", hwndCaret, "Ptr", pt)
-            sx := NumGet(pt, 0, "Int"), sy := NumGet(pt, 4, "Int")
-            if (sx = 0 && sy = 0)
-                return 0
-            return {
-                x: sx,
-                y: sy,
-                w: 2,
-                h: 20,
-                source: "win32-caret",
-                confidence: 100
-            }
-        } catch {
+    static GetRootHwnd(hwnd) {
+        hwnd := this.NormalizeHwnd(hwnd)
+        if !hwnd || !WinExist("ahk_id " hwnd)
             return 0
-        }
+        ; GA_ROOT = 2。子控件先归一到顶层窗口，再做矩形和显示器兜底。
+        root := DllCall("GetAncestor", "Ptr", hwnd, "UInt", 2, "Ptr")
+        if root && WinExist("ahk_id " root)
+            return root
+        return hwnd
     }
 
-    static GetFallback(hwnd := 0) {
-        if hwnd {
-            try {
-                WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " hwnd)
-                if (ww > 50 && wh > 50) {
-                    return {
-                        x: wx + Floor(ww / 2),
-                        y: wy + Floor(wh * 0.85),
-                        w: 0,
-                        h: 0,
-                        source: "active-window-bottom",
-                        confidence: 40
-                    }
-                }
-            }
+    static NormalizeHwnd(hwnd) {
+        if !hwnd
+            return 0
+        if IsInteger(hwnd)
+            return Integer(hwnd)
+        text := String(hwnd)
+        if RegExMatch(text, "^0[xX][0-9A-Fa-f]+$")
+            return Integer(text)
+        if RegExMatch(text, "^\d+$")
+            return Integer(text)
+        return 0
+    }
+
+    static GetWin32Caret(activeHwnd := 0, &x := 0, &y := 0) {
+        return this.TryCaret(&x, &y, activeHwnd)
+    }
+
+    static TryCaret(&x, &y, targetHwnd := 0) {
+        info := Buffer(8 + 6 * A_PtrSize + 16, 0)
+        NumPut("UInt", info.Size, info, 0)
+        hwndCaretOffset := 8 + 5 * A_PtrSize
+        rcCaretOffset := 8 + 6 * A_PtrSize
+        if !DllCall("GetGUIThreadInfo", "UInt", 0, "Ptr", info)
+            return false
+        caretHwnd := NumGet(info, hwndCaretOffset, "Ptr")
+        if !caretHwnd
+            return false
+        if targetHwnd && !this.BelongsTo(caretHwnd, targetHwnd)
+            return false
+        left := NumGet(info, rcCaretOffset, "Int")
+        top := NumGet(info, rcCaretOffset + 4, "Int")
+        right := NumGet(info, rcCaretOffset + 8, "Int")
+        bottom := NumGet(info, rcCaretOffset + 12, "Int")
+        if (right <= left || bottom <= top)
+            return false
+        point := Buffer(8, 0)
+        NumPut("Int", left, point, 0)
+        NumPut("Int", bottom, point, 4)
+        if !DllCall("ClientToScreen", "Ptr", caretHwnd, "Ptr", point)
+            return false
+        x := NumGet(point, 0, "Int")
+        y := NumGet(point, 4, "Int")
+        return true
+    }
+
+    static TryLocator(&x, &y, targetHwnd := 0) {
+        exe := NotifyPaths.LocatorExe()
+        if (exe = "" || !FileExist(exe))
+            return false
+        command := Format('"{1}"', exe)
+        if targetHwnd
+            command .= " --hwnd " targetHwnd
+        output := ""
+        outputFile := A_Temp "\lat3ncy-anchor-" A_TickCount "-" Random(1000, 9999) ".txt"
+        exitCode := 1
+        try {
+            exitCode := ProcessNoWindow.RunWait(command, outputFile, 800)
+            output := FileExist(outputFile) ? FileRead(outputFile, "UTF-8") : ""
+        } catch {
+            return false
+        } finally {
+            if FileExist(outputFile)
+                try FileDelete(outputFile)
         }
-        return {
-            x: 0,
-            y: 0,
-            w: 0,
-            h: 0,
-            source: "screen-fallback",
-            confidence: 10
+        if (exitCode != 0 || !RegExMatch(output, "m)^(-?\d+)\|(-?\d+)\|([A-Za-z0-9_-]+)$", &match))
+            return false
+        x := Integer(match[1])
+        y := Integer(match[2])
+        this.LastSource := match[3]
+        return true
+    }
+
+    static TryWindowBottom(&x, &y, hwnd) {
+        if !hwnd || !WinExist("ahk_id " hwnd)
+            return false
+        WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " hwnd)
+        if (ww < 32 || wh < 32)
+            return false
+        x := wx + Floor(ww / 2)
+        y := wy + Floor(wh * 0.85)
+        return true
+    }
+
+    static TryMonitorFallback(&x, &y, hwnd) {
+        point := Buffer(8, 0)
+        if hwnd && WinExist("ahk_id " hwnd) {
+            WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " hwnd)
+            NumPut("Int", wx + Floor(ww / 2), point, 0)
+            NumPut("Int", wy + Floor(wh / 2), point, 4)
+        } else if !DllCall("GetCursorPos", "Ptr", point) {
+            return false
         }
+        monitor := DllCall("MonitorFromPoint", "Int64", NumGet(point, 0, "Int64"), "UInt", 2, "Ptr")
+        if !monitor
+            return false
+        info := Buffer(40, 0)
+        NumPut("UInt", info.Size, info, 0)
+        if !DllCall("GetMonitorInfo", "Ptr", monitor, "Ptr", info)
+            return false
+        left := NumGet(info, 20, "Int")
+        top := NumGet(info, 24, "Int")
+        right := NumGet(info, 28, "Int")
+        bottom := NumGet(info, 32, "Int")
+        if (right <= left || bottom <= top)
+            return false
+        x := left + Floor((right - left) / 2)
+        y := top + Floor((bottom - top) * 0.82)
+        return true
+    }
+
+    static BelongsTo(child, root) {
+        child := this.NormalizeHwnd(child)
+        root := this.GetRootHwnd(root)
+        if !child || !root
+            return false
+        if (child = root)
+            return true
+        childRoot := this.GetRootHwnd(child)
+        if (childRoot && childRoot = root)
+            return true
+        return DllCall("IsChild", "Ptr", root, "Ptr", child)
     }
 }

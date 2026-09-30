@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -7,7 +8,7 @@ namespace Lat3ncyToolbox.ImeHudWinUi;
 /// IME 状态协议。窗口标题 / 类名 / mutex 只认本 Renderer。
 /// 只查找 Lat3ncyImeHudWinUi，不查找其他窗口。
 ///
-/// STATE|&lt;CN|EN|CAPS&gt;|&lt;x&gt;|&lt;y&gt;|&lt;dpi&gt;|&lt;durationMs&gt;
+/// STATE|&lt;CN|EN|CAPS&gt;|&lt;x&gt;|&lt;y&gt;|&lt;dpi&gt;|&lt;durationMs&gt;[|&lt;targetHwnd&gt;]
 /// HIDE / PING / QUIT
 /// </summary>
 internal static class Protocol
@@ -38,6 +39,7 @@ internal static class Protocol
         public int Y { get; init; }
         public int Dpi { get; init; }
         public int DurationMs { get; init; }
+        public long TargetHwnd { get; init; }
     }
 
     public static Message Parse(string? text)
@@ -64,6 +66,13 @@ internal static class Protocol
         if (state.Length == 0)
             return default;
 
+        long targetHwnd = 0;
+        if (parts.Length >= 7
+            && long.TryParse(parts[6].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsedHwnd)
+            && parsedHwnd > 0)
+        {
+            targetHwnd = parsedHwnd;
+        }
         return new Message
         {
             Kind = Kind.State,
@@ -71,7 +80,8 @@ internal static class Protocol
             X = ReadInt(parts, 2),
             Y = ReadInt(parts, 3),
             Dpi = ReadInt(parts, 4),
-            DurationMs = ReadInt(parts, 5)
+            DurationMs = ReadInt(parts, 5),
+            TargetHwnd = targetHwnd,
         };
     }
 
@@ -103,7 +113,9 @@ internal static class Protocol
     {
         if (index >= parts.Length)
             return 0;
-        return int.TryParse(parts[index].Trim(), out int value) ? value : 0;
+        return int.TryParse(parts[index].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int value)
+            ? value
+            : 0;
     }
 
     /// <summary>
@@ -142,6 +154,15 @@ internal static class Protocol
             return 14;
         if (ClampDuration(2000) != MaxDurationMs)
             return 15;
+        Message targeted = Parse("STATE|CN|10|20|96|750|12345");
+        if (targeted.Kind != Kind.State || targeted.X != 10 || targeted.Y != 20 || targeted.TargetHwnd != 12345)
+            return 16;
+        if (Parse("STATE|EN|0|0|0|0").TargetHwnd != 0)
+            return 17;
+        if (Parse("STATE|CN|1.280|20|96|750").X != 0)
+            return 18;
+        if (Parse("STATE|CN|10|20|96|750|0").TargetHwnd != 0)
+            return 19;
 
         // 面板协议 / 定位是独立骨架，失败码从 101 / 201 起，不和芯片协议撞号。
         int panel = TranslationPanelProtocol.SelfTest();

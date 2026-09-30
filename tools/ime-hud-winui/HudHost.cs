@@ -152,11 +152,12 @@ internal sealed class HudHost : IDisposable
         int hintY = 0,
         int hintDpi = 0,
         int durationMs = 0,
+        long targetHwnd = 0,
         bool animate = true)
     {
         _content.SetState(state);
         ApplyHostChrome();
-        PlaceAtCaret(hintX, hintY, hintDpi, log: logFocus);
+        PlaceAtCaret(hintX, hintY, hintDpi, targetHwnd, log: logFocus);
 
         if (logFocus)
         {
@@ -261,6 +262,7 @@ internal sealed class HudHost : IDisposable
                     message.Y,
                     message.Dpi,
                     message.DurationMs,
+                    message.TargetHwnd,
                     animate: true);
                 break;
         }
@@ -646,9 +648,9 @@ internal sealed class HudHost : IDisposable
     /// <summary>
     /// 芯片跟 caret：默认落在锚点下方，下方不够翻到上方。显示期间不持续跟踪。
     /// </summary>
-    void PlaceAtCaret(int hintX, int hintY, int hintDpi, bool log = false)
+    void PlaceAtCaret(int hintX, int hintY, int hintDpi, long targetHwnd = 0, bool log = false)
     {
-        Anchor.Result anchor = Anchor.Locate(hintX, hintY);
+        Anchor.Result anchor = Anchor.Locate(hintX, hintY, targetHwnd);
         int dpi = hintDpi > 0 ? hintDpi : Native.GetDpiForPoint(anchor.X, anchor.Y);
         if (dpi <= 0)
             dpi = Native.GetSystemDpi();
@@ -675,9 +677,17 @@ internal sealed class HudHost : IDisposable
         }
         else
         {
-            Native.RECT work = Native.GetPrimaryWorkArea();
+            IntPtr target = targetHwnd == 0 ? IntPtr.Zero : new IntPtr(targetHwnd);
+            if (!Native.TryGetWindowWorkArea(target, out Native.RECT work))
+                work = Native.GetPrimaryWorkArea();
             x = work.Left + Math.Max(0, (work.Width - width) / 2);
             y = work.Top + Math.Max(0, (int)(work.Height * 0.82) - height / 2);
+            anchor = new Anchor.Result
+            {
+                Source = target == IntPtr.Zero || !Native.IsWindow(target)
+                    ? "fallback"
+                    : "target-monitor-fallback"
+            };
         }
 
         Native.SetWindowPos(
@@ -690,7 +700,8 @@ internal sealed class HudHost : IDisposable
             Native.SWP_NOACTIVATE | Native.SWP_NOOWNERZORDER);
         if (log)
         {
-            HudLog.Line("place source=" + (anchor.Ok ? anchor.Source : "fallback")
+            HudLog.Line("place source=" + (string.IsNullOrEmpty(anchor.Source) ? "fallback" : anchor.Source)
+                + " target-hwnd=0x" + targetHwnd.ToString("X")
                 + " x=" + x + " y=" + y
                 + " dpi=" + dpi
                 + " size=" + width + "x" + height);

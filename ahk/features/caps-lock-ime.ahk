@@ -58,6 +58,8 @@ class CapsLockIme {
     static _lastForegroundHwnd := 0
     static _watcherStarted := false
     static _restoreAttemptsLeft := 0
+    static _imeTargetControlHwnd := 0
+    static _imeTargetRootHwnd := 0
 
     static WM_IME_CONTROL := 0x0283
     static IMC_GETOPENSTATUS := 0x0005
@@ -91,6 +93,7 @@ class CapsLockIme {
         this._exitingCaps := false
         this._downTick := A_TickCount
         this._lastReleaseAction := ""
+        this.CaptureImeTarget()
 
         ; 大写已开启时，再按 CapsLock 立即退出，不参与短按/长按判断。
         ; 这一次按住期间的字母不当组合键，避免退出大写时误触发工具。
@@ -128,11 +131,12 @@ class CapsLockIme {
         this._downTick := 0
 
         if shouldToggleIme {
+            targetHwnd := this._imeTargetControlHwnd
             newState := this.ToggleIme()
             if (newState = "chinese")
-                this.ShowImeHud("CN")
+                this.ShowImeHud("CN", targetHwnd)
             else if (newState = "english")
-                this.ShowImeHud("EN")
+                this.ShowImeHud("EN", targetHwnd)
             else
                 Notify.State("↔", "已切换")
         }
@@ -159,6 +163,7 @@ class CapsLockIme {
         if !this._pressed && GetKeyState("CapsLock", "P") {
             this._pressed := true
             this._downTick := A_TickCount
+            this.CaptureImeTarget()
         }
 
         if !this._pressed
@@ -197,9 +202,10 @@ class CapsLockIme {
         this._imeBeforeCaps := this.GetCurrentImeState()
 
         ; 大写输入必须使用英文；直接 API 失败时 SetImeState 会做受控回退。
+        targetHwnd := this._imeTargetControlHwnd
         this.SetImeState("english")
         SetCapsLockState "On"
-        this.ShowImeHud("CAPS")
+        this.ShowImeHud("CAPS", targetHwnd)
     }
 
     static ExitCapsMode() {
@@ -218,10 +224,11 @@ class CapsLockIme {
             restored := this.SetImeState("english")
         }
 
+        targetHwnd := this._imeTargetControlHwnd
         if (desiredState = "chinese" && restored)
-            this.ShowImeHud("CN")
+            this.ShowImeHud("CN", targetHwnd)
         else if (desiredState = "english" && restored)
-            this.ShowImeHud("EN")
+            this.ShowImeHud("EN", targetHwnd)
         else
             Notify.Error("!", "输入法恢复失败")
 
@@ -256,13 +263,12 @@ class CapsLockIme {
 
     ; 中 / 英 / 大写走 WinUI ImeHudWinUi.exe。
     ; kind: "CN" | "EN" | "CAPS"。失败、测试入口或 UseImeHud=false 时回退 AHK 芯片。
-    static ShowImeHud(kind) {
+    static ShowImeHud(kind, targetHwnd := 0) {
         if this.UseImeHud && this.IsImeHudEnabled() {
             try {
-                if ImeHud.Show(kind)
+                if ImeHud.Show(kind, targetHwnd)
                     return true
             } catch {
-                ; 显示层失败不能影响输入法切换。
             }
         }
         switch kind {
@@ -643,6 +649,11 @@ class CapsLockIme {
         } catch {
             return false
         }
+    }
+
+    static CaptureImeTarget() {
+        this._imeTargetControlHwnd := this.GetFocusedControlHwnd()
+        this._imeTargetRootHwnd := InputAnchor.GetRootHwnd(this._imeTargetControlHwnd)
     }
 
     static GetFocusedControlHwnd() {

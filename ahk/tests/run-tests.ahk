@@ -818,6 +818,7 @@ AssertContains(ocrPySource, "if inject_screenshot:", "ocr can still inject Win+S
 AssertEqual(true, InStr(ocrPySource, "if inject_screenshot:") < InStr(ocrPySource, "engine = load_engine()"), "ocr injects screenshot before loading RapidOCR")
 restartAhkSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\restart-autohotkey.ps1", "UTF-8")
 toggleRgbSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\toggle-rgb.ps1", "UTF-8")
+nextWallpaperSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\next-wallpaper.ps1", "UTF-8")
 AssertContains(restartAhkSource, "@raycast.mode silent", "restart AutoHotkey stays silent so Raycast closes")
 AssertContains(restartAhkSource, "Show-SystemToast -Title '✓ AutoHotkey 已重载'", "restart AutoHotkey success uses system toast")
 AssertNotContains(restartAhkSource, "Show-ToolboxNotify", "restart AutoHotkey no longer uses shared HUD")
@@ -827,6 +828,12 @@ AssertContains(toggleRgbSource, "Show-SystemToast -Title `"💡 $Text`"", "toggl
 AssertContains(toggleRgbSource, "RGB 灯光已关闭", "toggle RGB reports lights off")
 AssertContains(toggleRgbSource, "RGB 灯光已开启", "toggle RGB reports lights on")
 AssertNotContains(toggleRgbSource, "Show-ToolboxNotify", "toggle RGB no longer uses shared HUD")
+AssertContains(nextWallpaperSource, "@raycast.mode silent", "next wallpaper stays silent so Raycast closes")
+AssertContains(nextWallpaperSource, "lat3ncy-next-wallpaper", "next wallpaper serializes concurrent calls")
+AssertContains(nextWallpaperSource, "Get-NextWallpaperImage", "next wallpaper advances the configured pool")
+AssertContains(nextWallpaperSource, "Set-DesktopWallpaper", "next wallpaper sets the desktop image")
+AssertContains(nextWallpaperSource, "Sync-LockScreenWallpaper", "next wallpaper syncs the same image to the lock screen")
+AssertContains(nextWallpaperSource, "Show-SystemToast -Title 'Wallpaper and lock screen updated'", "next wallpaper success uses system toast")
 AssertContains(screenshotOcrSource, "Show-SystemToast -Title '✓ OCR 文本已复制'", "screenshot OCR success uses system toast")
 AssertNotContains(screenshotOcrSource, "Show-ToolboxNotify", "screenshot OCR no longer uses shared HUD")
 AssertNotContains(ocrPySource, "Show-ToolboxNotify", "ocr.py comments no longer mention shared HUD adapter")
@@ -840,7 +847,7 @@ AssertNotContains(toastAdapterSource, "notify-cli.ahk", "toast adapter no longer
 AssertNotContains(toastAdapterSource, "notify.exe", "toast adapter no longer looks for notify.exe")
 AssertContains(toastAdapterSource, "Start-ToolboxNotifyProcess -FilePath", "toast adapter reuses hidden process starter")
 AssertContains(toastAdapterSource, "powershell.exe", "toast adapter launches powershell.exe through the hidden starter")
-AssertContains(toastAdapterSource, "-EncodedCommand", "toast adapter passes the payload via EncodedCommand so 5.1 does not mangle non-ASCII")
+AssertContains(toastAdapterSource, "-File', `$runnerPath", "toast adapter passes the payload via a UTF-8 runner so 5.1 does not mangle non-ASCII")
 AssertNotContains(toastAdapterSource, "Start-Process -FilePath `"powershell.exe`"", "toast adapter no longer uses Start-Process")
 AssertEqual(false, FileExist(A_ScriptDir "\..\..\shared\notify\notify-cli.ahk") != "", "legacy notify-cli.ahk is gone")
 AssertEqual(false, DirExist(A_ScriptDir "\..\..\shared\notify\dev") != "", "legacy shared/notify/dev directory is gone")
@@ -863,6 +870,9 @@ AssertContains(themeUtilsSource, "RefreshExplorerWindows", "theme refresh expose
 AssertContains(themeUtilsSource, "SendMessageTimeoutStr(hWnd, WM_SETTINGCHANGE", "theme refresh pokes open Explorer windows with ImmersiveColorSet")
 AssertContains(themeUtilsSource, "Shell.Application", "theme refresh reloads open Explorer views without closing them")
 AssertContains(themeUtilsSource, "$window.Refresh()", "theme refresh calls Shell.Application.Refresh on folder windows")
+AssertContains(themeUtilsSource, "function ConvertTo-CanonicalPath", "wallpaper selection canonicalizes paths")
+AssertContains(themeUtilsSource, "function Test-SameWallpaperPath", "wallpaper selection compares canonical paths")
+AssertContains(themeUtilsSource, "function Get-NextWallpaperImage", "theme can pick the next wallpaper from the pool")
 AssertContains(themeUtilsSource, "function Set-WindowsCursorScheme", "theme can switch cursor schemes with color mode")
 AssertContains(themeUtilsSource, "function Disable-AccessibilityCursorOverlay", "cursor scheme clears the Accessibility colored pointer overlay")
 AssertContains(themeUtilsSource, "CursorColor", "cursor overlay uses the Accessibility CursorColor value")
@@ -996,7 +1006,7 @@ AssertContains(imeHudClientSource, "NotifyPaths.ImeHudWinUiExe()", "IME HUD clie
 AssertContains(imeHudClientSource, "MessageTimeout := 2500", "IME HUD COPYDATA timeout covers WinUI ShowState")
 AssertContains(rendererSource, "#Include anchor.ahk", "renderer loads caret anchor for AHK chips")
 AssertContains(imeHudClientSource, "#Include anchor.ahk", "IME HUD client loads caret anchor")
-AssertContains(imeHudClientSource, "InputAnchor.Get()", "IME HUD Show samples caret before sending STATE")
+AssertContains(imeHudClientSource, "InputAnchor.Get(&x, &y, targetHwnd)", "IME HUD Show samples caret before sending STATE")
 AssertContains(imeHudClientSource, "static BuildStateCommand(", "IME HUD can format STATE without launching WinUI")
 AssertNotContains(imeHudClientSource, "x := 0, y := 0, durationMs := 0", "IME HUD Show no longer defaults caret to origin")
 AssertNotContains(imeHudClientSource, "NotifyPaths.ImeHudExe()", "IME HUD client does not launch ImeHud.exe")
@@ -1008,6 +1018,8 @@ AssertNotContains(translationPanelSource, "NotifyPaths.ImeHudExe()", "translatio
 AssertNotContains(translationPanelSource, "Lat3ncyImeHud`"", "translation client does not look up a non-WinUI HUD title")
 AssertContains(translationPanelSource, "WM_COPYDATA", "translation client sends WM_COPYDATA")
 AssertContains(translateSource, "#Include ..\..\shared\notify\translation-panel.ahk", "translate loads WinUI panel client")
+AssertContains(anchorSource, "NotifyPaths.LocatorExe()", "anchor resolves locator without assuming the entry directory")
+AssertContains(anchorSource, "GetRootHwnd", "anchor separates control HWND from root HWND")
 AssertContains(anchorSource, "GetWin32Caret", "anchor probes Win32 caret in-process")
 AssertContains(anchorSource, "hwndCaretOffset := 8 + 5 * A_PtrSize", "Win32 caret reads hwndCaret, not hwndMoveSize")
 AssertContains(anchorSource, "rcCaretOffset := 8 + 6 * A_PtrSize", "Win32 caret RECT starts after six HWND fields")
@@ -1024,6 +1036,8 @@ AssertContains(mainSource, "for arg in A_Args", "debug/test flags scan all argum
 AssertContains(mainSource, 'A_Temp "\lat3ncy-toolbox-notify.log"', "debug log stays in TEMP")
 AssertNotContains(mainSource, "debug-notify.log", "main no longer writes repo-root debug log")
 smartPasteHelperSource := FileRead(A_ScriptDir "\..\features\smart-paste\save-clipboard-image.ps1", "UTF-8")
+AssertContains(capsLockSource, "_imeTargetControlHwnd", "Caps snapshots the control HWND on key down")
+AssertContains(capsLockSource, "GetRootHwnd", "Caps also snapshots the root HWND")
 AssertContains(capsLockSource, "TapMaxMs", "Caps state machine owns short-press ceiling")
 AssertContains(capsLockSource, "AbortCapsModeForChord", "Caps state machine can undo late caps-mode")
 AssertContains(capsLockSource, "_exitingCaps", "Caps state machine blocks chords while exiting caps")
@@ -1032,9 +1046,9 @@ AssertContains(capsLockSource, "PersistImeAcrossWindows", "Caps can persist IME 
 AssertContains(capsLockSource, "RememberImeState", "Caps records last explicit IME state")
 AssertContains(capsLockSource, "WatchForeground", "Caps restores IME after focus change")
 AssertContains(capsLockSource, "static UseImeHud := true", "Caps can roll back to AHK HUD with one switch")
-AssertContains(capsLockSource, 'this.ShowImeHud("CN")', "Caps shows CN through ImeHud")
-AssertContains(capsLockSource, 'this.ShowImeHud("EN")', "Caps shows EN through ImeHud")
-AssertContains(capsLockSource, 'this.ShowImeHud("CAPS")', "Caps shows CAPS through ImeHud")
+AssertContains(capsLockSource, 'this.ShowImeHud("CN", targetHwnd)', "Caps shows CN through ImeHud")
+AssertContains(capsLockSource, 'this.ShowImeHud("EN", targetHwnd)', "Caps shows EN through ImeHud")
+AssertContains(capsLockSource, 'this.ShowImeHud("CAPS", targetHwnd)', "Caps shows CAPS through ImeHud")
 AssertContains(capsLockSource, "#Include ..\..\shared\notify\ime-hud.ahk", "Caps loads ImeHud client")
 AssertContains(capsLockSource, "ImmSetOpenStatus", "Caps closes IME when switching to English")
 AssertContains(capsLockSource, "IMC_SETOPENSTATUS", "Caps window path also sets IME open status")
@@ -1101,6 +1115,60 @@ hideWindowSource := FileRead(A_ScriptDir "\..\features\hide-active-window.ahk", 
 fileExtSource := FileRead(A_ScriptDir "\..\features\toggle-file-extensions.ahk", "UTF-8")
 dotfilesSource := FileRead(A_ScriptDir "\..\features\toggle-dotfiles.ahk", "UTF-8")
 AssertContains(mainSource, "#Include features\toggle-dotfiles.ahk", "main loads toggle-dotfiles")
+AssertContains(mainSource, "#Include features\find-mouse.ahk", "main loads shake-to-find mouse")
+findMouseSource := FileRead(A_ScriptDir "\..\features\find-mouse.ahk", "UTF-8")
+AssertContains(findMouseSource, "GetCursorPos", "shake-to-find polls cursor position")
+AssertContains(findMouseSource, "SetTimer(this.StartCallback, -1)", "shake-to-find starts after the script is idle")
+AssertContains(findMouseSource, "RequestEnlarge", "shake-to-find defers sizing out of the poll")
+AssertContains(findMouseSource, "cursor-size.cs", "shake-to-find delegates sizing to a DPI-aware helper")
+AssertContains(findMouseSource, "cursor-size.ps1", "shake-to-find documents the retired PowerShell helper")
+AssertContains(findMouseSource, "ProcessNoWindow.Run", "shake-to-find launches the helper without a console")
+AssertContains(findMouseSource, "WSAStartup", "shake-to-find initializes Winsock before connecting")
+AssertNotContains(findMouseSource, "DllCall(`"SetSystemCursor`"", "shake-to-find does not resize cursors from the DPI-unaware host")
+AssertNotContains(findMouseSource, "RegWrite", "shake-to-find does not persist cursor settings")
+AssertEqual(false, FindMouse.Hook != 0, "test mode does not install the mouse hook")
+savedFindMouse := {
+    enabled: FindMouse.Enabled,
+    hasAnchor: FindMouse.HasAnchor,
+    lastX: FindMouse.LastX,
+    lastY: FindMouse.LastY,
+    travel: FindMouse.Travel,
+    direction: FindMouse.Direction,
+    streak: FindMouse.ReverseStreak,
+    lastReverseTick: FindMouse.LastReverseTick
+}
+try {
+    FindMouse.Enabled := false
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 1000), "first shake sample does not trigger")
+    AssertEqual(false, FindMouse.Observe(80, 2, 1040), "straight movement does not trigger")
+    AssertEqual(false, FindMouse.Observe(0, 3, 1080), "one reversal is below the threshold")
+    AssertEqual(false, FindMouse.Observe(80, 1, 1120), "two reversals stay below the threshold")
+    AssertEqual(true, FindMouse.Observe(0, 2, 1160), "three fast reversals trigger")
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 2000), "reset starts a new shake sample")
+    AssertEqual(false, FindMouse.Observe(20, 0, 2050), "short movement does not count as a reversal")
+    AssertEqual(false, FindMouse.Observe(0, 0, 2100), "a short leg does not become a reversal")
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 3000), "slow shake starts clean")
+    AssertEqual(false, FindMouse.Observe(80, 0, 3800), "slow movement does not count as a reversal")
+    AssertEqual(false, FindMouse.Observe(0, 0, 4600), "slow reversal does not trigger")
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 5000), "axis-crossing shake starts clean")
+    AssertEqual(false, FindMouse.Observe(80, 8, 5040), "small perpendicular drift stays on the same axis")
+    AssertEqual(false, FindMouse.Observe(0, 6, 5080), "perpendicular drift does not reset a real reversal")
+    AssertEqual(false, FindMouse.Observe(80, 4, 5120), "the return leg must also be long enough")
+    AssertEqual(true, FindMouse.Observe(0, 2, 5160), "same-axis reversals still trigger")
+} finally {
+    FindMouse.Enabled := savedFindMouse.enabled
+    FindMouse.HasAnchor := savedFindMouse.hasAnchor
+    FindMouse.LastX := savedFindMouse.lastX
+    FindMouse.LastY := savedFindMouse.lastY
+    FindMouse.Travel := savedFindMouse.travel
+    FindMouse.Direction := savedFindMouse.direction
+    FindMouse.ReverseStreak := savedFindMouse.streak
+    FindMouse.LastReverseTick := savedFindMouse.lastReverseTick
+}
 AssertContains(dotfilesSource, "FileSetAttrib `"+H`"", "dotfiles hide by setting Hidden")
 AssertContains(dotfilesSource, "FileSetAttrib `"-H`"", "dotfiles restore by clearing Hidden")
 AssertContains(dotfilesSource, "alreadyHidden", "dotfiles adopt already-hidden entries")

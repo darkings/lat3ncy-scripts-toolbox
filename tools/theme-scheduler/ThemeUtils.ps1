@@ -847,6 +847,127 @@ function Get-WallpaperImageFile
       Where-Object { $_.Extension -match '(?i)^\.(jpg|jpeg|png|bmp)$' })
 }
 
+function Get-WallpaperPool
+{
+  param($Config, [ValidateSet('light', 'dark', '')][string]$Mode = '')
+
+  $directory = [string]$Config.wallpaper.directory
+  if (-not $directory -or -not (Test-Path -LiteralPath $directory -PathType Container))
+  {
+    return @()
+  }
+
+  $images = @()
+  if ($Mode)
+  {
+    $subNames = if ($Mode -eq 'light') { @('light', 'day', 'sunrise') } else { @('dark', 'night', 'sunset') }
+    foreach ($subName in $subNames)
+    {
+      $subDirectory = Join-Path $directory $subName
+      if (Test-Path -LiteralPath $subDirectory -PathType Container)
+      {
+        $images = @(Get-WallpaperImageFile -Directory $subDirectory)
+        if ($images.Count -gt 0)
+        {
+          break
+        }
+      }
+    }
+  }
+
+  if ($images.Count -eq 0)
+  {
+    $images = @(Get-WallpaperImageFile -Directory $directory)
+  }
+
+  return @($images | Sort-Object FullName)
+}
+
+function ConvertTo-CanonicalPath
+{
+  param([string]$Path)
+
+  if ([string]::IsNullOrWhiteSpace($Path))
+  {
+    return ''
+  }
+
+  $trimmed = $Path.Trim().Trim('"')
+  try
+  {
+    $full = [System.IO.Path]::GetFullPath($trimmed)
+  }
+  catch
+  {
+    return $trimmed
+  }
+
+  if (Test-Path -LiteralPath $full)
+  {
+    try
+    {
+      $resolved = (Resolve-Path -LiteralPath $full).Path
+      if (-not [string]::IsNullOrWhiteSpace($resolved))
+      {
+        $full = $resolved
+      }
+    }
+    catch
+    {
+    }
+  }
+
+  return [System.IO.Path]::GetFullPath($full)
+}
+
+function Test-SameWallpaperPath
+{
+  param(
+    [string]$Left,
+    [string]$Right
+  )
+
+  $leftPath = ConvertTo-CanonicalPath $Left
+  $rightPath = ConvertTo-CanonicalPath $Right
+  if ([string]::IsNullOrWhiteSpace($leftPath) -or [string]::IsNullOrWhiteSpace($rightPath))
+  {
+    return $false
+  }
+
+  return [string]::Equals($leftPath, $rightPath, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-NextWallpaperImage
+{
+  param($Config, [string]$CurrentPath = '')
+
+  $pool = @(Get-WallpaperPool -Config $Config)
+  if ($pool.Count -eq 0)
+  {
+    return $null
+  }
+  if ($pool.Count -eq 1)
+  {
+    return $pool[0].FullName
+  }
+
+  $index = -1
+  if ($CurrentPath)
+  {
+    for ($i = 0; $i -lt $pool.Count; $i++)
+    {
+      if (Test-SameWallpaperPath $pool[$i].FullName $CurrentPath)
+      {
+        $index = $i
+        break
+      }
+    }
+  }
+
+  $next = if ($index -ge 0) { ($index + 1) % $pool.Count } else { 0 }
+  return $pool[$next].FullName
+}
+
 function Resolve-WallpaperImage
 {
   param($Config, [Parameter(Mandatory = $true)][ValidateSet('light', 'dark')][string]$Mode)

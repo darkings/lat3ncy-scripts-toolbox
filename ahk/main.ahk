@@ -99,6 +99,9 @@ IsToolboxTestMode() {
 ; 本机 pythonw 解析：朗读 / 翻译共用，由入口统一加载，避免两个 feature 各自 include
 #Include ..\shared\python.ahk
 
+; 无控制台启动子进程。摇动放大用它拉起 DPI 感知的换尺寸进程。
+#Include ..\shared\notify\run-nowindow.ahk
+
 ; ============================================================
 ; 功能实现层：只加载功能，不在模块内部注册快捷键
 ; ============================================================
@@ -147,6 +150,9 @@ IsToolboxTestMode() {
 
 ; 前台进程：结束或重启当前活动窗口对应的进程 [快捷键: Caps + Q / Caps + R]
 #Include features\foreground-process.ahk
+
+; 摇动定位指针：快速左右反向时临时放大箭头，停下后交回当前光标方案。无快捷键。
+#Include features\find-mouse.ahk
 
 ; 统一路由层必须在全部 feature 之后加载。
 #Include hotkey-router.ahk

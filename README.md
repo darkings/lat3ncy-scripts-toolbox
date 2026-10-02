@@ -1,404 +1,137 @@
 # lat3ncy-scripts-toolbox
 
-一组面向 Windows 的生产力脚本，包括模块化 AutoHotkey v2 快捷键和屏幕区域 OCR 工具。
+个人 Windows 工具集：AutoHotkey v2 快捷键 + 一组 PowerShell/Python 小工具（翻译、朗读、音频切换、RGB、OCR、主题调度）。
 
-## AutoHotkey
+各工具的细节写在 `tools/*/README.md`，这里只给总览和常用命令。
 
-安装 [AutoHotkey v2](https://www.autohotkey.com/)。安装程序建立 `.ahk` 文件关联后，可以直接双击 `ahk/main.ahk` 运行；也可以右键该文件并选择 AutoHotkey v2。
-
-如果要从命令行运行，或使用本仓库的测试 runner，`AutoHotkey.exe` 必须能通过 `PATH` 解析。先验证：
+## 快速开始
 
 ```powershell
+# 需要先装 AutoHotkey v2，并让命令行能找到引擎（自启脚本和测试都依赖它）
 Get-Command AutoHotkey.exe
-```
 
-命令有结果后，才可运行：
-
-```powershell
+# 启动工具箱
 AutoHotkey.exe .\ahk\main.ahk
 ```
 
-如果 `Get-Command` 没有结果，请把 AutoHotkey v2 的安装目录加入 `PATH`，或使用能提供 `AutoHotkey.exe` shim 的包管理器安装方式，然后重开终端验证。
-
-登录自启：启动文件夹里的快捷方式指向 `tools/startup/Start-Toolbox.ps1`（`Win+R` 输入 `shell:startup` 查看），由它解析 AutoHotkey v2 引擎（官方安装 → Scoop shim/UX → `current\v2` → Program Files）、带重试地启动 `ahk/main.ahk`、校验进程真的存活（包括识别 main.ahk 弹出的启动错误框），并把每次结果追加到 `%LOCALAPPDATA%\lat3ncy-toolbox\startup.log`（main.ahk 的启动失败原因与退出码也写在这里）；失败会弹系统 Toast，不会再静默。
+登录自启由启动文件夹里的快捷方式负责，它指向：
 
 ```powershell
-# 手动验证整条自启链路（不必重启）
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\startup\Start-Toolbox.ps1
-
-# 看启动/退出原因
+# 失败原因（含 AHK 启动错误）看这里
 Get-Content "$env:LOCALAPPDATA\lat3ncy-toolbox\startup.log" -Tail 20
 ```
 
-> 已知坑：profile 迁移后 Scoop 的 `apps\autohotkey\current` 可能变成**实目录**（正常应为 junction）。此时引擎正在运行会让 `scoop update autohotkey` 半删除该目录，下次开机就找不到引擎。修法：先停工具箱 AHK，再 `Remove-Item ...\current -Recurse -Force` 并用 `New-Item -ItemType Junction -Path ...\current -Target ...\<版本>` 指向版本目录。
-
-- CapsLock 短按切中/英、长按进大写；状态 HUD 默认走 `tools/ime-hud-winui/out/ImeHudWinUi.exe`（CN 中框 / EN A / CAPS 上箭头）。效果不理想时把 `CapsLockIme.UseImeHud` 设为 `false`，立刻回退 AHK 芯片。
-- `ahk/shortcuts.ahk` 只保存快捷键配置，`ahk/hotkey-router.ahk` 统一完成校验与注册，`ahk/features/` 只实现功能。
-- 修改按键只编辑 `ahk/shortcuts.ahk`；停用某项功能时，在 Router 中注释对应的注册项即可，feature 文件无需修改。
-- 如果两个已启用功能使用了相同快捷键，脚本会在启动时报错，避免其中一个功能被静默覆盖。
-- 快速左右摇鼠标会临时换成当前箭头资源的 128 帧，停下约 1.4 秒后按系统 DPI 恢复。钩子等脚本空闲后再装，放大在主线程里交给 DPI 感知的辅助进程，不改 `Arrow` 路径。这不是快捷键，停用时把 `FindMouse.Enabled` 设为 `false`。
-
-### 默认快捷键
-
-| 快捷键 | 功能 | Feature 文件 |
-| --- | --- | --- |
-| `CapsLock`（`*$CapsLock`） | 短按（≤ 250ms）切换微软拼音「中/英」并记住；切窗口后静默恢复。250–500ms 松开视为取消；长按（>= 500ms）进入大写，再按一次退出并恢复输入法。`PersistImeAcrossWindows` 可关 | `ahk/features/caps-lock-ime.ahk` |
-| `Caps + S`（`~CapsLock & s`） | 朗读选中的文字（智能中英文双语音色即时发音，再次按下即时打断） | `ahk/features/speak-selected-text.ahk` |
-| `Caps + F`（`~CapsLock & f`） | 划词翻译：有选区译选区，否则译剪贴板；中英互译，光标处显示译文 | `ahk/features/translate-selected-text.ahk` |
-| `Caps + G`（`~CapsLock & g`） | 使用 Google 搜索选中文字 | `ahk/features/search-selected-text.ahk` |
-| `Caps + O`（`~CapsLock & o`） | 打开选中的文件、目录或 URL | `ahk/features/open-selected-target.ahk` |
-| `Caps + E`（`~CapsLock & e`） | 在资源管理器中定位选中的文件或目录 | `ahk/features/locate-selected-target.ahk` |
-| `Caps + T`（`~CapsLock & t`） | 切换活动窗口置顶 / 取消置顶，并提示当前状态 | `ahk/features/always-on-top.ahk` |
-| `Caps + H`（`~CapsLock & h`） | 按 Z-order 从顶到底，每次最小化一个尚未最小化的可见窗口；桌面、任务栏、工具窗与工具箱自身不进入列表 | `ahk/features/hide-active-window.ahk` |
-| `Caps + .`（`~CapsLock & .`） | 显示或隐藏资源管理器中的隐藏文件 | `ahk/features/toggle-hidden-files.ahk` |
-| `Caps + ,`（`~CapsLock & ,`） | 隐藏或恢复当前资源管理器文件夹顶层的点文件（`.git`、`.env` 等） | `ahk/features/toggle-dotfiles.ahk` |
-| `Caps + X`（`~CapsLock & x`） | 显示或隐藏资源管理器中的文件扩展名 | `ahk/features/toggle-file-extensions.ahk` |
-| `Caps + Q`（`~CapsLock & q`） | 结束当前前台窗口对应进程；前台是资源管理器时直接调用 `Caps + R` | `ahk/features/foreground-process.ahk` |
-| `Caps + R`（`~CapsLock & r`） | 重启当前前台窗口对应进程；资源管理器走专用重启 | `ahk/features/foreground-process.ahk` |
-| `Ctrl + V`（`$^v`） | 智能粘贴：仅图片时介入保存为本地 PNG 文件；非图片内容原生无损透传 | `ahk/features/smart-paste/smart-paste.ahk` |
-| `Alt + 反引号`（`!sc029`） | 按当前 Z-order 快照循环切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
-| `Shift + Alt + 反引号`（`+!sc029`） | 沿快照反向切换同一应用窗口 | `ahk/features/switch-app-window.ahk` |
-| `Caps + D`（`~CapsLock & d`） | 切换播放器：`G27Q2` ↔ `AirPods`，自动连接 | `ahk/features/audio-switcher.ahk` + `tools/audio-switcher/audio-switcher.exe` |
-
-同应用窗口切换在第一次触发时保存窗口顺序，按住 `Alt` 连续按反引号即可完整循环；松开 `Alt` 后清除快照。最小化、不可见、工具型以及被系统隐藏的窗口不会进入候选列表。Zed 只有一个可见顶层窗口时，快捷键会通过 `F13` / `F14` 桥接到 Zed 的 `multi_workspace::NextProject` / `multi_workspace::PreviousProject`，循环切换同一窗口中的项目。
-
-### 划词翻译与腾讯云密钥配置
-
-`Caps + F` 默认优先使用腾讯云机器翻译 `TextTranslate`。首次使用前，需要在腾讯云控制台创建 API 密钥，并为该账号授予机器翻译（TMT）调用权限。只需要保存好以下两项：
-
-* `SecretId`
-* `SecretKey`（只在创建时显示，请安全保存）
-
-#### 方式一：使用 Windows 环境变量（推荐）
-
-在 PowerShell 中设置当前用户环境变量：
+跑测试：
 
 ```powershell
-[Environment]::SetEnvironmentVariable('TENCENTCLOUD_SECRET_ID', '你的 SecretId', 'User')
-[Environment]::SetEnvironmentVariable('TENCENTCLOUD_SECRET_KEY', '你的 SecretKey', 'User')
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ahk\tests\run-tests.ps1
 ```
 
-翻译进程每次启动时会读用户环境变量，因此设置后不必重启 `ahk/main.ahk`。程序也兼容 `TENCENT_SECRET_ID` / `TENCENT_SECRET_KEY`。环境变量优先于配置文件中的值。
+## 快捷键
 
-#### 方式二：写入本地配置文件
+改键只编辑 `ahk/shortcuts.ahk`；`ahk/hotkey-router.ahk` 负责校验和注册，`ahk/features/` 只实现功能。两个功能抢占同一快捷键会在启动时报错，不会静默覆盖。
 
-环境变量未设置时，可编辑 `tools/translate/config.toml`，在 `[tencent]` 段填写：
+| 快捷键 | 功能 |
+| --- | --- |
+| `CapsLock` | 短按切中/英（记住，切窗口后恢复）；250–500ms 松开取消；长按进大写 |
+| `Caps + S` | 朗读选中文字，再按一次打断 |
+| `Caps + F` | 划词翻译（无选区则译剪贴板），光标处弹译文面板 |
+| `Caps + G` | Google 搜索选中文字 |
+| `Caps + O` | 打开选中的文件、目录或 URL |
+| `Caps + E` | 在资源管理器中定位选中目标 |
+| `Caps + T` | 活动窗口置顶 / 取消置顶 |
+| `Caps + H` | 按 Z-order 逐个最小化可见窗口 |
+| `Caps + .` / `Caps + ,` | 切换隐藏文件 / 切换当前文件夹顶层点文件 |
+| `Caps + X` | 切换文件扩展名显示 |
+| `Caps + Q` / `Caps + R` | 结束 / 重启前台窗口的进程 |
+| `Caps + D` | 切换音频输出 `G27Q2 ↔ AirPods`（自动连接） |
+| `Ctrl + V` | 智能粘贴：剪贴板是图片时存成本地 PNG，其余原样透传 |
+| `Alt` + 反引号 / `Shift + Alt` + 反引号 | 同一应用窗口间正 / 反向循环（Zed 走项目切换） |
+| 无快捷键 | 快速左右摇鼠标 → 指针临时放大（1.4s 后恢复） |
 
-```toml
-[tencent]
-secret_id = "你的 SecretId"
-secret_key = "你的 SecretKey"
-region = "ap-guangzhou"
-endpoint = "tmt.tencentcloudapi.com"
-project_id = 0
-```
+## 工具
 
-配置文件只应保存在本机，不要把真实密钥提交到 Git、发到聊天中或写入截图。仓库中的配置模板保持空值即可。
+| 工具 | 说明 |
+| --- | --- |
+| `tools/translate/` | `Caps+F` 的翻译后端，腾讯云 TMT 为主，可回退 |
+| `tools/tts/` | `Caps+S` 语音朗读，Edge Neural + 本地音色，本地缓存 |
+| `tools/audio-switcher/` | `Caps+D` 音频切换（`--toggle` / `--ensure-headset` / `--list`） |
+| `tools/rgb/` | 桌面取色联动风扇与键盘灯，OpenRGB 走系统服务 |
+| `tools/ime-hud-winui/` | CapsLock 状态芯片与翻译面板（WinUI 3），改了必须重载 |
+| `tools/raycast-scripts/` | Raycast Script Commands，见下表 |
+| `tools/theme-scheduler/` | 按日出日落切深浅色 / 壁纸 / 鼠标方案 |
+| `tools/startup/` | 登录自启入口 |
+| `resources/cursors/` | 9 套鼠标配色，供 theme-scheduler 使用 |
 
-如果密钥缺失、无效或签名错误，程序不会回退到 Google/MyMemory，而是弹出系统 Toast「腾讯云密钥无效」；网络、限流、免费额度用尽等非鉴权错误仍可按引擎顺序回退。成功时只有译文显示在光标处的翻译气泡中。
-
-如需改回阿里云，把 `engine` 设为 `aliyun`，并配置 `ALIBABA_CLOUD_ACCESS_KEY_ID` / `ALIBABA_CLOUD_ACCESS_KEY_SECRET`。
-
-### Smart Paste 路由
-
-`Ctrl+V` 仅在剪贴板包含图片时可能介入；资源管理器虚拟位置也会介入并显示无法保存提示。下表按从上到下的顺序优先匹配：
-
-| 剪贴板内容 | 活动窗口 | 行为 |
-| --- | --- | --- |
-| 已复制的文件或目录（即使同时包含图片格式） | 任意 | 优先执行原生 `Ctrl+V` |
-| 非图片内容 | 任意 | 原生 `Ctrl+V` |
-| 图片 | 普通文件系统目录的资源管理器 | 保存为不会覆盖已有文件的唯一命名 PNG |
-| 图片 | 资源管理器虚拟位置 | 显示无法保存提示，不发送原生粘贴 |
-| 图片 | VS Code / Zed 文件树选中的单个已存在文件夹 | 保存为不会覆盖已有文件的唯一命名 PNG |
-| 图片 | VS Code / Zed 编辑器聚焦且当前打开文件存在（文件树探测失败后） | 保存为当前文件所在目录下不会覆盖已有文件的唯一命名 PNG |
-| 图片 | VS Code / Zed 选中文件、多选、编辑器无打开文件、路径探测超时或快捷键不一致 | 静默回退原生 `Ctrl+V` |
-| 图片 | 其他应用 | 原生 `Ctrl+V` |
-
-VS Code 目录探测使用其内置的 Copy Path 命令（默认 `Shift+Alt+C`）；Zed 目录探测使用项目面板的 Copy Path 命令（默认同为 `Shift+Alt+C`，仅项目面板聚焦时生效）。两者失败后都会兜底尝试编辑器上下文的 Copy Path（默认 `Ctrl+K P`），把图片保存到当前文件所在目录；Zed 还会进一步尝试键盘导航选中文件树首个条目（根目录）后再次探测，以覆盖面板无选中项的场景。所有探测都会在成功、超时或异常后恢复原剪贴板。如果自定义了对应编辑器的 Copy Path 绑定，需要同步修改 `Shortcuts.VsCodeCopyPath` / `Shortcuts.ZedCopyPath`。
-
-### 测试
-
-从仓库根目录运行唯一推荐的测试入口：
-
-```powershell
-powershell.exe -NoProfile -File .\ahk\tests\run-tests.ps1
-```
-
-测试脚本使用真实的 AutoHotkey v2 逐个加载功能模块，并检查 PowerShell 辅助脚本的 AST。独立加载 stub 会统一注入 `shared/python.ahk`，避免朗读/翻译因缺少 `ToolboxPython` 弹错误框。Windows PowerShell 5.1 要求该 runner 使用 CRLF。测试入口会自行处理结果，不需要直接读取某个固定的临时结果文件。
-
-## 统一通知
-
-AHK feature 统一调用 `Notify.State()`、`Notify.Info()`、`Notify.Success()` 或 `Notify.Error()`，不得自行创建通知 GUI 或直接调用 `ToolTip`。`state` / `popup` 由 `shared/notify/renderer.ahk` 绘制 Win11 Fluent 级自适应 HUD；`success` / `info` / `error` 走系统 Toast。**例外：** CapsLock 的中 / 英 / 大写状态默认走独立进程 `tools/ime-hud-winui/out/ImeHudWinUi.exe`（WinUI 3 Island，Acrylic.Default，圆角 `ROUNDSMALL`，点穿 NOACTIVATE），失败或 `UseImeHud=false` 时回退 `Notify.State()` 芯片。`Caps + F` 划词翻译也走同一 WinUI 进程的独立翻译面板。Raycast 生产通知一律 `Show-SystemToast`，不经过共享 HUD。
-
-- **输入锚点**：AHK 先查 Win32 caret，再调用 `anchor-locator.exe`（UIA / 窗口 / 目标显示器）。WinUI 收到坐标后只做 clamp，不再跑 UIA。路径由 `NotifyPaths.LocatorExe()` 解析，不依赖入口脚本目录。
-  - **L1（Win32 Caret）**：通过 `GetGUIThreadInfo` 捕获传统 Win32 控件光标。
-  - **L2（UIA TextPattern / TextPattern2）**：毫秒级精准捕获 Chromium 内核（Edge / Chrome）、Windows Terminal、WinUI3 记事本、VS Code 等现代文本输入光标。
-  - **L3（UIA FocusedElement）**：针对自绘搜索框与无选区输入框进行物理边界锚定。
-  - **Fallback（降级兜底）**：无焦点时智能挂载于活动窗口底部或屏幕工作区底部。
-  - **单次无缝呈现（Zero-Jump）**：在窗口创建前即刻完成光标探测与尺寸预解算，杜绝任何中间状态闪烁与跳跃。
-- **深浅色自适应视觉体系（Dark / Light Mode）**：
-  - **深色模式（Dark Mode）**：沉浸式 `#202022` 背景、`#F2F2F7` 纯白文字、`#38383A` 1px 微发光边框。
-  - **浅色模式（Light Mode）**：极简纯白 `#FFFFFF` 背景、`#18181B` 高对比度墨黑文字、`#E4E4E7` 1px 浅灰色立体边框。
-  - 硬件级亚像素抗锯齿大圆角（`DWMWA_WINDOW_CORNER_PREFERENCE`）与 1px 细描边（`DWMWA_BORDER_COLOR`）。
-- **调用链路**：
-  - AHK 调用链：CapsLock 的 `CN` / `EN` / `CAPS` 走 `ImeHudWinUi.exe`（WinUI 芯片），失败回退 `NotifyRenderer` 芯片；`Caps + F` 走同一进程的翻译面板；其它 `state` / `popup` 仍走 `Notify` → `NotifyRenderer`；`success` / `info` / `error` 走 `Notify` → `toast.ps1` 系统 Toast，找不到脚本或启动失败时回退 `ToolTip`。
-  - 共享资源（`toast.ps1`、`anchor-locator.exe`）通过 `shared/notify/paths.ahk` 按入口脚本目录解析，不写死本机绝对路径。
-  - 默认不写调试日志；仅启动参数 `--debug` 或环境变量 `LAT3NCY_DEBUG=1` 时写入 `%TEMP%\lat3ncy-toolbox-notify.log`。
-  - Raycast 调用链：script → `tools/raycast-scripts/_lib/notify.ps1` → `Show-SystemToast` → `shared/notify/toast.ps1`。Caps 中/英/大写与 Caps+F 翻译面板仍走 WinUI；其余生产通知一律系统 Toast。
-- **生命周期**：同一时间只保留一个 HUD，新通知自动覆盖旧通知；默认时长：`state` 550ms、`info` 750ms、`success` 900ms、`error` 1400ms。
-- `Notify.Mode` 支持 `full`、`errors` 和 `off`；默认是 `full`。
-
-## Screenshot OCR
-
-屏幕区域 OCR 支持 Windows 系统文本操作和 RapidOCR 两种引擎。仓库模板默认是 `system`（无需 Python）；**本机当前配置是 `rapidocr`**。如需 RapidOCR，先运行依赖安装脚本：
-
-```powershell
-python .\tools\raycast-scripts\ocr\install-deps.py
-```
-
-安装脚本会先检测操作系统与 Python 环境，再按平台选用解释器（Windows 优先 `python`，macOS/Linux 优先 `python3`），仅安装缺失的 RapidOCR 依赖并验证引擎可加载；重复运行会自动跳过已装依赖，`--check` 参数可只检测不安装。安装完成后会询问是否下载 PP-OCRv4 移动端模型，以及是否在 `config.toml` 中切换为 `mobile`。
-
-推荐通过 Raycast 命令 **Screenshot OCR**（`tools/raycast-scripts/screenshot-ocr.ps1`）触发。`system` 模式直接注入 `Win+Shift+T`，进入 Windows 文本操作的框选识别，不显示本脚本通知；当前本机为 `rapidocr`，会先打开系统截图框，再启动 `ocr/ocr.py --no-screenshot` 加载模型并识别，完成后显示系统 Toast。手动运行 `ocr.py` 时也会先出框再加载模型：
-
-```powershell
-pythonw.exe .\tools\raycast-scripts\ocr\ocr.py
-```
-
-RapidOCR 模式会轮询系统剪贴板中的图片（超时 45 秒，按 Esc 取消则直接退出），识别中英文后把文本写回剪贴板；Raycast 流程由 `screenshot-ocr.ps1` 以系统 Toast 显示结果，手动运行 `ocr.py` 时由脚本直接调用 `shared/notify/toast.ps1`。system 模式由 Windows 完成框选、识别和复制，不经过 Python。
-
-### OCR 模型配置
-
-`tools/raycast-scripts/ocr/config.toml` 的 `ocr` 字段切换识别引擎：
-
-- `system`：使用 Windows 系统文本操作（`Win+Shift+T`，Windows 11 23H2+），框选后由系统自动 OCR，无需 Python 依赖
-- `rapidocr`（本机当前）：使用 RapidOCR（先 `ms-screenclip:` 出框，再 `pythonw` + `ocr/ocr.py --no-screenshot`），识别精度更高但需先运行 `install-deps.py` 安装依赖
-
-同一个 `tools/raycast-scripts/ocr/config.toml`（TOML，支持 `#` 注释）中，`models` 下列出所有 RapidOCR 模型的完整配置（检测 `det` / 方向分类 `cls` / 识别 `rec` 三个模型路径），修改顶层 `model` 字段选择生效的模型，文件内注释有完整说明：
-
-- `default`（默认）：`""` 表示使用 RapidOCR 包内置的 PP-OCRv4 全精度模型，精度优先
-- `mobile`：使用 PP-OCRv4 移动端模型，识别更快、精度略降；运行 `python .\tools\raycast-scripts\ocr\install-deps.py` 后按提示选择下载（sha256 校验，已存在则跳过），下载完成后可一键把 `config.toml` 切换为 `mobile`
-
-路径缺失时自动回退对应内置模型（`cls` 缺失时回退的内置模型与本配置指向的是同一文件），不影响启动。
-
-## Raycast 脚本
-
-`tools/raycast-scripts/` 提供丰富的跨平台 Script Commands：
+Raycast 里添加 `tools/raycast-scripts` 目录即可用，可逐个绑 Hotkey：
 
 | 脚本 | 功能 |
 | --- | --- |
-| `restart-autohotkey.ps1` | 仅结束本工具箱的 `ahk/main.ahk` 进程，通过 PATH 中的 AutoHotkey v2 重新加载；`silent` 关闭 Raycast 窗口，成功/失败都走系统 Toast |
-| `toggle-rgb.ps1` | 切换技嘉风扇 + Hi75 灯光；只动 `rgb-disabled.flag`，不杀 Ambient、不停 OpenRGB。`silent` 关闭 Raycast 窗口，开关灯成功/失败都走系统 Toast |
-| `screenshot.ps1` | 用 `ms-screenclip:` 立刻打开截图框（失败才回退 `Win+Shift+S`），结果复制到剪贴板；若 Win11 自动保存截图已开启并写出文件，后台 Toast 完整路径 |
-| `screenshot-ocr.ps1` | 按 `ocr/config.toml` 选择引擎：`system` 注入 `Win+Shift+T`；本机当前 `rapidocr` 先打开截图框，再 `pythonw ocr.py --no-screenshot`。只处理文字，不报图片保存路径 |
-| `record-screen.ps1` | 注入 `Win+Shift+R` 直接打开截图工具（Snipping Tool）的屏幕录制框选；停止后若系统写出视频，后台 Toast `Videos\\Captures` 完整路径 |
-| `ocr/install-deps.py` | 安装 OCR 依赖（Pillow + RapidOCR + pyperclip），按提示下载移动端模型，已装则跳过 |
-| `codex-switch.ps1` | 一个命令完成状态、OpenAI、中转切换和保存登录。成功和失败都走系统 Toast；密钥留在本机 |
-| `next-wallpaper.ps1` | 从 `theme-scheduler` 壁纸目录按文件名取下一张，同时设置桌面和锁屏。不改深浅色，也不改 `config.toml` |
+| `restart-autohotkey.ps1` | 重启本工具箱的 `main.ahk` |
+| `reload-ime-hud.ps1` | 重编译锚点 + 重发布 HUD + 重载 AHK，改了 HUD 必跑 |
+| `diagnose-ime-hud-anchor.ps1` | 排查「提示不跟光标」 |
+| `screenshot.ps1` / `record-screen.ps1` | 截图 / 录屏框选 |
+| `screenshot-ocr.ps1` | 屏幕区域 OCR（`system` 或 RapidOCR） |
+| `toggle-rgb.ps1` | 开关风扇 + 键盘灯 |
+| `next-wallpaper.ps1` | 换成图池里的下一张壁纸（同时设锁屏） |
+| `codex-switch.ps1` | Codex 状态 / OpenAI / 中转切换 |
+| `force-dark-titlebar.ps1` | 强制或清除引擎窗口的深色标题栏 |
+| `fix-rdp-clipboard-prompt.ps1` | 修复 RDP 剪贴板提示 |
 
-在 Raycast 的 Script Commands 设置中添加 `tools/raycast-scripts` 目录即可使用，并可对每个命令单独绑定 Hotkey。
+## 需要配置的地方
 
-## Theme Scheduler
+几个 TOML，都在各自工具目录里，仓库里的模板留空：
 
-Windows 主题 / 深浅色模式 / 壁纸自动化调度系统。支持根据日出/日落时间动态对齐太阳作息，或按固定时间准时切换。
+- `tools/translate/config.toml`：`engine = "tencent"`。密钥优先读用户环境变量 `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY`，其次读配置文件。密钥缺失/无效会弹 Toast，不会静默回退。
+- `tools/theme-scheduler/config.toml`：`switch_type`、`schedule.trigger_mode`（`sun` / `fixed`）、壁纸目录、`[cursor]` 配色。
+- `tools/tts/config.toml` / `tools/audio-switcher/config.toml`：音色、设备关键字。
 
-锁屏同步：`wallpaper.sync_lock_screen = true` 时，每次切换后把锁屏背景设为同一张壁纸（未启用壁纸联动则同步当前桌面壁纸）。走官方 WinRT `LockScreen.SetImageFileAsync`，按用户生效、免管理员，不写 `PersonalizationCSP`，设置页不会变成「由组织管理」。实现见 `tools/theme-scheduler/Set-LockScreenFromWallpaper.ps1`，该脚本必须由 Windows PowerShell 5.1 执行（WinRT 互操作依赖 `System.Runtime.WindowsRuntime`），文件本身需为 UTF-8 BOM，也可单独手动运行。
-
-壁纸目录：`wallpaper.directory` 指向一个图池（本机为 `C:\Users\Jie\Pictures\Wallpaper`）。挑图优先级为「显式 `light_wallpaper` / `dark_wallpaper` → 目录下的 `light`/`day`、`dark`/`night` 子目录 → 目录内全部图片」。`pick = "daily"` 同一天固定一张并逐日轮换；`"each"` 日出/日落各推进一张（由日期直接推算，无需状态文件、可重复执行）；`"random"` 每次随机。
-
-锁屏脚本的两个实现要点（踩过的坑）：副本文件名每次唯一（`wallpaper-<时间戳>-<内容哈希>.<ext>`，默认保留最近 5 份），因为 Windows 的锁屏影像存储会按路径/内容去重，复用同名文件出现过「调用成功但锁屏没变」的静默失效；设置完成后用 `LockScreen.GetImageStream()` 读回并比对像素尺寸，不一致就以非 0 退出——否则这类失败无法察觉。
-
-### 统一配置文件（`tools/theme-scheduler/config.toml`）
-
-```toml
-[general]
-# 切换类型: "mode" (仅深浅色模式切换) | "theme" (完整主题包切换)
-# 本机当前生产配置是 mode：只切 Apps，不切系统壳。
-switch_type = "mode"
-show_notification = true # 是否弹出系统 Toast
-
-[schedule]
-trigger_mode = "sun" # "sun" (日出日落动态计算) | "fixed" (固定时间)
-fixed_light_time = "07:00" # 浅色切换时间
-fixed_dark_time = "19:00"  # 深色切换时间
-
-[mode_settings]
-# 仅 switch_type = "mode" 时生效。
-# switch_system = false：任务栏/托盘保持当前深浅色，不重启 Explorer。
-# switch_system = true 才会重启 Explorer 同步系统壳颜色。
-switch_apps = true
-switch_system = false
-
-[wallpaper]
-enabled = true # 是否在切换时联动更换桌面壁纸 (true / false)
-directory = "C:\\Users\\Jie\\Pictures\\Wallpaper" # 壁纸目录（图池）；也可在其下建 light/day、dark/night 子目录
-pick = "daily" # 同一模式下多张候选的挑法：daily (每天一张) | each (每次切换换一张) | random
-light_wallpaper = "C:\\path\\to\\Day.jpg" # 显式单张，优先级高于 directory；支持相对 directory 的文件名
-dark_wallpaper  = "C:\\path\\to\\Night.jpg"
-sync_lock_screen = true # 切换后把锁屏背景同步为同一张壁纸（未启用壁纸联动时同步当前桌面壁纸）
-
-[theme_settings]
-# 智能名称/路径寻址：支持 "light"、"dark" 或绝对路径
-light_theme_file = "light.theme"
-dark_theme_file  = "dark.theme"
-```
-
-### 运行方式
-
-由三个计划任务驱动（`schtasks /query /tn "Theme-*"` 查看）：
-
-| 任务 | 时间 | 作用 |
-| --- | --- | --- |
-| `Theme-Schedule-Update` | 每天 00:10 | 定位经纬度，计算当天日出/日落，更新下面两个任务的触发时间 |
-| `Theme-Light` | 日出或指定时间 | 切换浅色（模式 / 主题 / 壁纸）并弹系统 Toast；仅 mode + switch_system 时才会重启 Explorer |
-| `Theme-Dark` | 日落或指定时间 | 切换深色（模式 / 主题 / 壁纸）并弹系统 Toast；仅 mode + switch_system 时才会重启 Explorer |
-
-### 手动控制
+装依赖（按需）：
 
 ```powershell
-# 推荐：通过已注册的隐藏计划任务触发（无窗口、与自动调度一致）
-schtasks /run /tn "Theme-Schedule-Update" # 立即重新计算日出/日落并校准 Light/Dark 时间
-schtasks /run /tn "Theme-Light"           # 立即切浅色
-schtasks /run /tn "Theme-Dark"            # 立即切深色
-
-# 调试直调（前台有窗口，仅排错用，路径与执行策略已在 Install 脚本中固化为隐藏无窗口）
-# powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\theme-scheduler\Set-Theme-Light.ps1
+python .\tools\tts\install-deps.py                 # 朗读
+python .\tools\raycast-scripts\ocr\install-deps.py # RapidOCR
 ```
 
-### 计划任务注册
-
-> 旧版 `schtasks /create ... /tr "powershell ..."` 一个个执行已废弃：会丢失 `Hidden/AllowStartIfOnBatteries/WakeToRun/ExecutionTimeLimit` 等隐藏无窗口配置，且写死固定时间无法跟随 `sun` 动态日出日落。
-
-**统一脚本注册（幂等）：**
+主题调度的五个计划任务用脚本注册，不要手写 `schtasks /create`：
 
 ```powershell
-# 一键注册/更新 3 个任务（Theme-Light / Theme-Dark / Theme-Schedule-Update），自动按 config.toml 的 sun/fixed 校准时间
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\theme-scheduler\Install-ThemeScheduler.ps1
-
-# 查看
-schtasks /query /tn "Theme-*" /fo LIST
-Get-Content .\tools\theme-scheduler\theme-scheduler.log -Tail 20 -Wait
-
-# 移除
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\theme-scheduler\Uninstall-ThemeScheduler.ps1
+schtasks /run /tn "Theme-Light"   # 立即切浅色；同理 Theme-Dark
 ```
 
-## Text-to-Speech (TTS)
+> **注册脚本必须提权运行**：`Theme-Apply-Now` / `Theme-Apply-Cursors` 是提权创建的，非管理员重注册会对它们报 `Access is denied`（其余三个能过）。提权重跑一次即可全部更新。
+>
+> **任务是无窗口的，靠 `wscript.exe` 外壳实现**：任务计划程序不能直接跑 `powershell.exe`——它是控制台程序，以交互方式在用户会话里启动时会分配真实控制台，导致**睡眠唤醒/解锁时屏幕上蹦出一个终端窗口**；任务的 `-Hidden` 只作用于任务自身，管不到子进程。
+> `Get-ThemeHiddenAction` 会为每个脚本生成一个 VBS shim（`%LOCALAPPDATA%\lat3ncy-toolbox\theme-tasks\<脚本名>.vbs`），任务改为 `wscript.exe "<shim>"`；shim 里用 `WshShell.Run(cmd, 0, True)` 静默等待 PowerShell 跑完，任务状态仍准确。
+> **不要再用 `conhost.exe --headless` 当外壳**——`--headless` 不是"隐藏窗口"开关（它是 ConPTY/终端集成的标志），直接由计划任务启动时照样会出窗口；这个坑 2026-10-02 已修复并复验。
 
-选中文本按 `CapsLock+S`，按中英文语境智能切片并调用 Microsoft Edge Neural TTS 自动朗读。
-
-- **智能中英切片**：自动将中英混排文本（如 `今天使用 Windows 11 学习 Python 很方便。`）切片；默认 `engine=auto`，中文走 `Microsoft Yaoyao`，英文走 `Microsoft Zira`（本地 WinRT 优先，匹配不到再走 Edge Neural），数字与标点智能跟随上下文。
-- **无后台驻留**：非驻留架构（One-Shot Helper），平时 0 后台进程；触发朗读时临时调用 `pythonw.exe`（由 `shared/python.ahk` 解析，入口 `ahk/main.ahk` 统一加载），播放完毕自动退出。
-- **即时打断**：再次按下快捷键时，自动终止上一个播放进程与音频，立即开始新的朗读。
-- **SHA256 本地多维缓存**：按 `text + voice + rate + pitch + volume` 在 `%LOCALAPPDATA%\lat3ncy-toolbox\tts-cache\` 缓存音频，常用词语瞬发播放，支持 LRU 容量自动淘汰。
-- **离线兜底**：若网络异常或离线，自动降级至 Windows 本地 SAPI 朗读保底。
-- **耳机预热（可选）**：`tools/audio-switcher/config.toml` 设 `tts.auto_switch_before_play = true` 时，`Caps+S` 会在播前 `audio-switcher.exe --ensure-headset` 将 AirPods 拉为默认（默认等待 `connect_wait_ms=12000`），失败不阻塞，日志记 `tools/tts/tts.log`。
-
-### 依赖安装与配置
-
-首次使用前安装 `edge-tts` 依赖：
+RGB Ambient（首次需管理员装官方 OpenRGB 服务，之后日常不用管）：
 
 ```powershell
-python .\tools\tts\install-deps.py
-```
-
-在 `tools/tts/config.toml` 中自定义音色与参数：
-
-- `zh_voice`：中文音色（默认本地 `Microsoft Yaoyao`，也可改 `zh-CN-XiaoxiaoNeural` 等 Edge 音色）
-- `en_voice`：英文音色（默认本地 `Microsoft Zira`，也可改 `en-US-JennyNeural` 等 Edge 音色）
-- `rate` / `pitch` / `volume`：语速、音调与音量调节
-- `cache`：最大缓存容量与文件数限制；非法值会 warning 后夹紧，不让朗读进程崩溃
-
-## Audio Switcher
-
-`Caps+D` 一键切换 `G27Q2 ↔ AirPods`。未连接时自动连接，手机占用时自动抢占，无需手动点蓝牙面板。
-
-- 按 `tools/audio-switcher/config.toml` 识别首选设备，开盖即连
-- Caps+D 立即提示「正在检查音频设备」；Busy / 防抖不再静默丢键，失败后可立刻再按
-- 立体声未 ACTIVE 时按原因分类：`蓝牙已连但立体声未就绪` / `连接超时` / `耳机未取出或不在附近` / `设备节点不存在` / `耳机未激活`。只有 Enable/WSA/PNP 真正成功才等待 12s
-- 自动提权默认关闭；仅 `behavior.auto_elevate=true` 且错误详情明确是权限问题时，才会 `sudo` / `gsudo` 重试。普通立体声未就绪不提权
-- 回切扬声器不掉蓝牙
-
-```toml
-# tools/audio-switcher/config.toml
-[preferred]
-headset_keywords = ["AirPods"]
-headset_exclude = ["Hands-Free", "Hands Free", "iPhone"]
-speaker_keywords = ["G27Q2", "NVIDIA High Definition Audio"]
-speaker_exclude = ["Virtual"]
-[behavior]
-connect_wait_ms = 12000
-poll_ms = 200
-pnp_fallback = false  # Enable-PnpDevice 易超时，默认关闭
-auto_elevate = false  # 仅明确权限错误时才允许 AHK sudo 重试
-[tts]
-auto_switch_before_play = false  # true 时 Caps+S 朗读前自动 --ensure-headset 预热
-```
-
-```powershell
-# 手动
-.\tools\audio-switcher\audio-switcher.exe --toggle        # 互切
-.\tools\audio-switcher\audio-switcher.exe --ensure-headset  # 仅确保耳机为默认（TTS 预热用）
-.\tools\audio-switcher\audio-switcher.exe --list
-.\tools\audio-switcher\audio-switcher.exe --get
-.\tools\audio-switcher\audio-switcher.exe --debug-dump    # 只读诊断，写 %TEMP%\lat3ncy-audio-debug.log
-```
-
-详见 `tools/audio-switcher/config.toml` 与 `ahk/tests/run-tests.ahk` 契约 11 项。
-
-## RGB Ambient — 桌面实时取色联动
-
-`tools/rgb`：**技嘉 B550M DS3H 风扇（官方 OpenRGB 系统服务）+ Leobog Hi75（HID Col06）**。OpenRGB 由 Windows 服务常驻，之后只复用 `127.0.0.1:6742`，`ambient.py` 不启动它。项目目录不携带 `OpenRGB.exe`。
-
-- **抓屏**：`mss` 中心 320x180，`sample_step=8` 稀疏采样 + 饱和度 top 30%
-- **均色（当前生产，见 `tools/rgb/config.toml`）**：`ema_alpha=0.18` + 阈值 `6` + `lerp_alpha=0.35` + 亮度门限 `22`；过暗不推灯。早期压测曾用阈值 8 / 亮度 16；中间版本曾用阈值 14 / EMA 0.35 / 8Hz，都不是当前配置
-- **推灯**：OpenRGB `set_color(..., fast=True)` 只控 Gigabyte；Hi75 Direct `0x08`，两路失败独立重试
-- **频率（当前生产）**：活动 12Hz / 静止 6Hz；设备全挂也降频
-- **常驻**：系统服务 `OpenRGB`（LocalSystem / Session 0 / delayed-auto，依赖 PawnIO）提供 SDK `127.0.0.1:6742`；登录任务 `RGB-Ambient`（+15s 等 DWM），无窗口 `pythonw`，不提权
-- **换机**：`dist/hi75/hi75.exe` 被 gitignore，需先跑 `tools/rgb/build_hi75.ps1`；`lib/`、`lib_hid/`、`hi75_data/` 保留以便免 pip 运行
-
-```powershell
-# 一次性（管理员）：winget 官方 OpenRGB 系统服务 + PawnIO
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\rgb\install.ps1
-# 灯管正常后删除项目内便携包
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\rgb\install.ps1 -PruneBundled
-# 当前用户：登录常驻 ambient（无需管理员）
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\rgb\Install-Ambient.ps1
-# 日常：不要手动开 OpenRGB 窗口
-python tools/rgb/hi75.py --list
-python tools/rgb/ambient.py --time 10
-python tools/rgb/ambient.py --dry-run --time 5
-python tools/rgb/ambient.py --bench 20            # 合成帧压测：不抓屏、不连 SDK、不写灯
-python tools/rgb/ambient.py --bench 20 --bench-capture  # 真实抓屏；无交互桌面时 BitBlt 失败不等于硬件损坏
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\rgb\Start-Ambient.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\rgb\Stop-Ambient.ps1
-Get-Content .\tools\rgb\logs\ambient.out.log -Tail 20 -Wait
+python tools\rgb\ambient.py --dry-run --time 5
 ```
 
-详见 `tools/rgb/README.md`。Hi75 协议基于 `OpenRGB #4297`（`258A:010C` / `Col06` / `060a` 520B）。
+## 通知约定
+
+功能模块统一用 `Notify.State() / Info() / Success() / Error()`，不要自己造 GUI 或直接 `ToolTip`。状态类走 WinUI HUD（失败回退 AHK 芯片），成功/失败走系统 Toast。改了锚点或 HUD 代码后必须跑 `tools/raycast-scripts/reload-ime-hud.ps1`，否则常驻进程里跑的还是旧 exe。
 
 ## 仓库结构
 
 ```text
-lat3ncy-scripts-toolbox/
-├── ahk/
-│   ├── main.ahk              # AutoHotkey 唯一入口
-│   ├── shortcuts.ahk         # 集中快捷键配置
-│   ├── hotkey-router.ahk     # 统一校验、注册并路由到 feature
-│   ├── features/             # 独立功能模块
-│   └── tests/                # AHK 与 PowerShell 自动测试
-├── shared/
-│   ├── python.ahk            # 本机 pythonw 解析；由 ahk/main.ahk 统一加载，朗读/翻译共用
-│   └── notify/               # AHK 芯片/popup HUD、WinUI 客户端、系统 Toast
-├── tools/
-│   ├── ime-hud-winui/        # CapsLock 中/英/大写芯片 + Caps+F 翻译面板（AHK 检测，ImeHudWinUi.exe 显示）
-│   ├── audio-switcher/       # Caps+D 音频切换（G27Q2 ↔ AirPods 自动拉起，config.toml 可配置）
-│   ├── rgb/                  # RGB Ambient 桌面取色（mss + 官方 OpenRGB 系统服务 + Hi75 Col06）
-│   ├── raycast-scripts/      # Raycast 命令（ocr/ 识字；capture/ 截图与录屏落盘监视）
-│   ├── codex-switch/         # Codex OpenAI / 中转切换；密钥留在本机 LocalAppData
-│   ├── theme-scheduler/      # Windows 主题 / 深浅色自动切换（日出日落调度）
-│   └── tts/                  # Text-to-Speech 核心播放器、依赖安装与配置
-├── findings.md               # 研究与决策记录（含历史压测参数）
-├── progress.md               # 会话进度
-├── task_plan.md              # 阶段性任务计划
-└── README.md                 # 仓库总览；模块细节见 tools/*/README.md
+ahk/                 main.ahk 入口、shortcuts.ahk 快捷键、hotkey-router.ahk 路由、features/、tests/
+shared/              python.ahk（pythonw 解析）、notify/（HUD、Toast、锚点）
+tools/               各工具与 Raycast 命令（见上表）
+resources/           鼠标配色
+findings.md          研究与决策记录
+progress.md          会话进度
+task_plan.md         阶段任务计划
 ```
+
+## 已知坑
+
+- 命令行找不到 `AutoHotkey.exe` 时，自启脚本和测试都会失败；把安装目录加进 `PATH` 后重开终端。
+- Scoop 的 `apps\autohotkey\current` 正常应是 junction，变成实目录后 `scoop update` 会半删除它：先停 AHK，删掉 `current`，再用 `New-Item -ItemType Junction` 指回版本目录。
+- 锁屏壁纸脚本必须由 Windows PowerShell 5.1 执行（WinRT 互操作），文件要保持 UTF-8 BOM；`ahk/tests/run-tests.ps1` 需要 CRLF。

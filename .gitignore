@@ -52,3 +52,7 @@ __pycache__/
 /tools/codex-switch/openai/
 /tools/codex-switch/backups/
 
+# 本机专用 RDP 入口：只留本机，不进仓库。
+/tools/raycast-scripts/connect-nyx.ps1
+/resources/rdp/
+

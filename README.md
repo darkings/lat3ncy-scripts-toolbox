@@ -69,15 +69,19 @@ Raycast 里添加 `tools/raycast-scripts` 目录即可用，可逐个绑 Hotkey�
 | 脚本 | 功能 |
 | --- | --- |
 | `restart-autohotkey.ps1` | 重启本工具箱的 `main.ahk` |
-| `reload-ime-hud.ps1` | 重编译锚点 + 重发布 HUD + 重载 AHK，改了 HUD 必跑 |
-| `diagnose-ime-hud-anchor.ps1` | 排查「提示不跟光标」 |
 | `screenshot.ps1` / `record-screen.ps1` | 截图 / 录屏框选 |
 | `screenshot-ocr.ps1` | 屏幕区域 OCR（`system` 或 RapidOCR） |
 | `toggle-rgb.ps1` | 开关风扇 + 键盘灯 |
 | `next-wallpaper.ps1` | 换成图池里的下一张壁纸（同时设锁屏） |
 | `codex-switch.ps1` | Codex 状态 / OpenAI / 中转切换 |
-| `force-dark-titlebar.ps1` | 强制或清除引擎窗口的深色标题栏 |
-| `fix-rdp-clipboard-prompt.ps1` | 修复 RDP 剪贴板提示 |
+
+<!-- 以下 4 个脚本目前只存在于本机、还没提交，所以不写进上面的表里；
+     等它们提交后再补回：
+     reload-ime-hud.ps1（重编译锚点 + 重发布 HUD + 重载 AHK，改了 HUD 必跑）
+     diagnose-ime-hud-anchor.ps1（排查「提示不跟光标」）
+     force-dark-titlebar.ps1（强制或清除引擎窗口的深色标题栏）
+     fix-rdp-clipboard-prompt.ps1（修复 RDP 剪贴板提示）
+     同时 tools/raycast-scripts/_lib/notify.ps1 等调用方仍假设它们存在。 -->
 
 ## 需要配置的地方
 

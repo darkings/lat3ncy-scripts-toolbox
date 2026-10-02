@@ -112,7 +112,7 @@ python tools\rgb\ambient.py --dry-run --time 5
 
 ## 通知约定
 
-功能模块统一用 `Notify.State() / Info() / Success() / Error()`，不要自己造 GUI 或直接 `ToolTip`。状态类走 WinUI HUD（失败回退 AHK 芯片），成功/失败走系统 Toast。改了锚点或 HUD 代码后必须跑 `tools/raycast-scripts/reload-ime-hud.ps1`，否则常驻进程里跑的还是旧 exe。
+功能模块统一用 `Notify.State() / Info() / Success() / Error()`，不要自己造 GUI 或直接 `ToolTip`。状态类走 WinUI HUD（失败回退 AHK 芯片），成功/失败走系统 Toast。改了锚点或 HUD 代码后必须重编译锚点、重发布 HUD 再重载 AHK，否则常驻进程里跑的还是旧 exe。
 
 ## 仓库结构
 

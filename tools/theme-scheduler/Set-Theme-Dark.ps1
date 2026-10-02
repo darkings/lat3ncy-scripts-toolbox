@@ -24,7 +24,7 @@ else
   Set-WindowsColorMode -Mode 'dark' -Config $config
 }
 
-# 壁纸：显式路径优先，否则从 wallpaper.directory 挑（子目录 light/day 或整目录，按 wallpaper.pick 轮换）
+# 壁纸：显式路径优先，否则按文件名取当前壁纸的下一张，和 Raycast 下一张共用顺序。
 $wallpaperImage = Resolve-WallpaperImage -Config $config -Mode 'dark'
 if ($config.wallpaper.enabled -and $wallpaperImage)
 {

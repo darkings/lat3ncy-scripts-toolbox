@@ -7,6 +7,22 @@ class InputAnchor {
     static LastSource := ""
     static LastTargetHwnd := 0
 
+    ; 真实光标来源白名单。和 anchor-locator.exe、tools/ime-hud-winui/Protocol.cs
+    ; 三处必须保持一致：只有这些来源能当作“跟着光标”，其余都是退化锚点。
+    ; value-caret = 表单控件 ValuePattern 选区；text-caret = TextPattern 插入点。
+    static RealCaretSources := ["text-caret", "value-caret", "imm-caret", "win32-caret"]
+
+    static IsRealCaretSource(source) {
+        source := Trim(String(source))
+        if (source = "")
+            return false
+        for candidate in this.RealCaretSources {
+            if (source = candidate)
+                return true
+        }
+        return false
+    }
+
     static Get(&x, &y, targetHwnd := 0) {
         x := 0
         y := 0

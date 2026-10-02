@@ -50,14 +50,7 @@ if ($pool.Count -eq 0) {
   throw "No wallpaper images found: $directory"
 }
 
-$current = ''
-try {
-  $current = [string](Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name Wallpaper -ErrorAction Stop).Wallpaper
-} catch {
-  $current = ''
-}
-
-$next = Get-NextWallpaperImage -Config $config -CurrentPath $current
+$next = Get-NextWallpaperImage -Config $config -CurrentPath (Get-DesktopWallpaperPath)
 if (-not $next -or -not (Test-Path -LiteralPath $next -PathType Leaf)) {
   throw 'No next wallpaper was selected'
 }

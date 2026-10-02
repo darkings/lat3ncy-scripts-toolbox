@@ -55,7 +55,18 @@ CAPS  M5.55,9.25 L10,4.8 L14.45,9.25
       M6.45,15.0 H13.55
 ```
 
-定位：传入坐标 → IMM → Win32 caret → 窗口底部。出现在 caret 下方约 7 DIP，下方不够翻到上方。显示期间不跟手。
+定位：传入坐标 → IMM → Win32 caret → 窗口底部。出现在 caret 下方约 7 DIP，下方不够翻到上方。
+
+锚点来源随命令传进来，日志必须能区分真假光标：
+
+```text
+STATE|<state>|x|y|dpi|durationMs[|<targetHwnd>][|<anchorSource>]
+MOVE|<state>|x|y|dpi|durationMs[|<targetHwnd>][|<anchorSource>]
+```
+
+* `anchorSource` 是 `text-caret` / `imm-caret` / `win32-caret` 才算"跟着光标"，日志 `real=1`。
+* `focus-text` / `focus-bounds` / `target-window-bottom` / `target-monitor-fallback` / 缺省 `unknown` 都是退化来源，日志 `real=0`，并额外写一行 `anchor-degraded`。
+* `MOVE` 只重定位：不改状态、不改时长、不重启淡入淡出，用于芯片显示期间跟随输入。
 
 显示约 750ms（夹紧 650–900），90ms 淡入、110ms 淡出。连续 `STATE` 用 generation 挡住旧的淡出 Completed，避免把新芯片藏掉。
 
@@ -198,7 +209,7 @@ dotnet publish .\tools\ime-hud-winui\ImeHudWinUi.csproj `
 * 无参数 / `--resident`：常驻。HWND + Island 只创建一次，默认隐藏，吃 `WM_COPYDATA`
 * `--self-test`：不创建窗口，只校验协议和独立标题 / mutex
 * `--cycle 200`：连续 show/hide，核对焦点；通过后退出
-* 第二个进程：`STATE|CN` / `HIDE` / `PING` / `QUIT` 转给已有实例
+* 第二个进程：`STATE|CN` / `MOVE|...` / `HIDE` / `PING` / `QUIT` 转给已有实例
 * `--resident QUIT` 或 `--quit`：让已有实例退出
 * `--panel` / `PANEL|OPEN...`：打开独立翻译面板骨架。没有坐标时走 caret → 活动窗口 → 屏幕中心，不读当前鼠标冒充热键位置
 * `--panel-clipboard` / `PANEL|TEXT|clipboard`：打开面板并**明确**读剪贴板原文；`OPEN` 默认不读
@@ -211,7 +222,12 @@ dotnet publish .\tools\ime-hud-winui\ImeHudWinUi.csproj `
 
 日志：`%TEMP%\ImeHudWinUi.log`
 
-看 `place source=`、`island-backdrop-controller-ok=` 的 `recipe=Acrylic.Default input-active=True`、`stole-focus=`、`pass=1`、`hide-begin` / `hide-now generation=`。`island-site-chrome` 只是可选尝试日志，站点 `corner=0` 不算失败。发布目录必须有 `resources.pri`。
+看 `place source=`、`anchor=`、`real=`、`anchor-degraded`、`move source=`、`island-backdrop-controller-ok=` 的 `recipe=Acrylic.Default input-active=True`、`stole-focus=`、`pass=1`、`hide-begin` / `hide-now generation=`。`island-site-chrome` 只是可选尝试日志，站点 `corner=0` 不算失败。发布目录必须有 `resources.pri`。
+
+排查"提示不跟光标"：在 `%TEMP%\ImeHudWinUi.log` 里找最后一次 `place` 行。
+
+* `real=1` + `anchor=text-caret|win32-caret|imm-caret`：锚点是真光标。
+* `real=0`：这一条是退化锚点，紧跟的 `anchor-degraded` 行会给出 `anchor=`、`hint=` 和实际落点。Chromium 系应用在 UIA 拿不到内容树时就会落到这里（此时落点是窗口底部，不是光标）。
 
 ## 现场验证（2026-09-04）
 

@@ -44,11 +44,8 @@ enabled = true
 # 留空则只能使用下面的显式路径
 directory = "C:\\Users\\Jie\\Pictures\\Wallpaper"
 
-# 同一模式有多张候选时的挑选策略
-#   daily  = 每天一张（同一天的日出/日落/登录都用同一张，跨天换下一张，默认）
-#   each   = 每次切换换一张（日出 N、日落 N+1；同一时段内稳定，不需要状态文件）
-#   random = 每次随机
-pick = "daily"
+# 多张候选时，light/dark 和 Raycast 的下一张都按文件名升序取当前壁纸的下一张。
+# pick 已不再参与选图，保留只为兼容旧配置。
 
 # 显式指定单张壁纸（优先级高于 directory；可填绝对路径，或相对 directory 的文件名）
 light_wallpaper = ""

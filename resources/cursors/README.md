@@ -30,9 +30,3 @@ dark_scheme = "Cursor Concept 3 Dark"
 ```
 
 当前已开启。`Set-Theme-Light.ps1` / `Set-Theme-Dark.ps1` 会随颜色模式换对应方案。目录留空则用本文件夹下的 `light` / `dark`。要关掉就把 `enabled` 改回 `false`。
-
-## 许可
-
-允许个人设备使用和个人修改。不允许重新分发光标包文件，不得冒充作者。必须保留作者信息与 DeviantArt 链接：
-
-https://www.deviantart.com/jepricreations

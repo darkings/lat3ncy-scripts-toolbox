@@ -281,6 +281,51 @@ AssertEqual(true, HasMethod(ImeHud, "SendCopyData"), "ImeHud client sends WM_COP
 AssertEqual("STATE|CN|820|642|0|0", ImeHud.BuildStateCommand("CN", 820, 642, 0, 0), "STATE keeps caret hint")
 AssertEqual("STATE|EN|0|0|0|0", ImeHud.BuildStateCommand("EN", 0, 0, 0, 0), "STATE zero coords stay explicit")
 AssertEqual("STATE|CAPS|12|34|96|750", ImeHud.BuildStateCommand("CAPS", 12, 34, 96, 750), "STATE keeps dpi and duration")
+
+; --- 锚点来源 + 跟随循环：隔离 WinUI（DisableSend）后直接驱动真实客户端 ---
+AssertEqual(false, ImeHud.DisableSend, "production ImeHud always sends to WinUI")
+AssertEqual("unknown", ImeHud.NormalizeSource(""), "empty anchor source normalizes to unknown")
+AssertEqual("text-caret", ImeHud.NormalizeSource("text-caret"), "anchor source keeps safe characters")
+AssertEqual("win32caret", ImeHud.NormalizeSource("win32|caret"), "anchor source drops protocol separators")
+AssertEqual("STATE|CN|820|642|0|0", ImeHud.BuildStateCommand("CN", 820, 642, 0, 0), "STATE without source stays backward compatible")
+AssertEqual("STATE|CN|820|642|0|0||text-caret", ImeHud.BuildStateCommand("CN", 820, 642, 0, 0, 0, "text-caret"), "STATE keeps a source even without a target hwnd")
+AssertEqual("STATE|EN|10|20|0|0|4242|target-window-bottom", ImeHud.BuildStateCommand("EN", 10, 20, 0, 0, 4242, "target-window-bottom"), "STATE keeps degraded sources visible")
+
+AssertEqual(true, InputAnchor.IsRealCaretSource("text-caret"), "text-caret counts as a real caret")
+AssertEqual(true, InputAnchor.IsRealCaretSource("win32-caret"), "win32-caret counts as a real caret")
+AssertEqual(true, InputAnchor.IsRealCaretSource("imm-caret"), "imm-caret counts as a real caret")
+AssertEqual(false, InputAnchor.IsRealCaretSource("focus-bounds"), "focus-bounds is not a real caret")
+AssertEqual(false, InputAnchor.IsRealCaretSource("focus-text"), "focus-text is not a real caret")
+AssertEqual(false, InputAnchor.IsRealCaretSource("target-window-bottom"), "window-bottom is not a real caret")
+AssertEqual(false, InputAnchor.IsRealCaretSource(""), "empty source is not a real caret")
+
+followFile := A_Temp "\lat3ncy-follow-test-" A_TickCount ".txt"
+try FileDelete(followFile)
+try FileAppend(
+    "A|1500|900|22|text-caret`n"
+    . "A|1516|900|22|text-caret`n"
+    . "A|1532|900|22|focus-bounds`n"
+    . "E|timeout-followed`n",
+    followFile,
+    "UTF-8")
+ImeHud._followFile := followFile
+ImeHud._followOffset := 0
+ImeHud._followSeen := 0
+ImeHud._followUpgraded := false
+ImeHud._followPid := 999999
+ImeHud._followState := "CN"
+ImeHud._followTarget := 4242
+ImeHud.LastAnchorSource := "focus-bounds"
+ImeHud.DisableSend := true
+ImeHud.FollowTick()
+moveCommand := ImeHud.LastCommand
+AssertEqual("MOVE|CN|1516|900|0|0|4242|text-caret", moveCommand, "MOVE forwards the followed caret position")
+AssertEqual(2, ImeHud._followSeen, "follow ignores degraded follow lines")
+AssertEqual(true, ImeHud._followUpgraded, "follow records the upgrade from a degraded anchor to a real caret")
+AssertEqual(0, ImeHud._followPid, "follow stops on the end marker from the watcher")
+ImeHud.DisableSend := false
+ImeHud._followFile := ""
+
 AssertEqual(false, HasMethod(NotifyPaths, "ImeHudExe"), "path resolver no longer exposes ImeHud.exe")
 AssertEqual("Lat3ncyImeHudWinUi", TranslationPanel.WindowClass, "WinUI translation client uses independent class")
 AssertEqual("Lat3ncyImeHudWinUi", TranslationPanel.WindowTitle, "WinUI translation client uses independent title")
@@ -820,7 +865,21 @@ restartAhkSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\restart-a
 toggleRgbSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\toggle-rgb.ps1", "UTF-8")
 nextWallpaperSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\next-wallpaper.ps1", "UTF-8")
 AssertContains(restartAhkSource, "@raycast.mode silent", "restart AutoHotkey stays silent so Raycast closes")
-AssertContains(restartAhkSource, "Show-SystemToast -Title '✓ AutoHotkey 已重载'", "restart AutoHotkey success uses system toast")
+AssertContains(restartAhkSource, "Show-SystemToast -Title", "restart AutoHotkey success uses system toast")
+AssertContains(restartAhkSource, "IME HUD 已重载", "restart AutoHotkey reports the IME HUD reload too")
+; 常驻 HUD 跑的是旧 exe，不一起结束的话新协议永远不生效。
+AssertContains(restartAhkSource, "ImeHudWinUi.exe", "restart AutoHotkey also targets the resident IME HUD")
+AssertContains(restartAhkSource, "function Stop-ToolboxImeHud", "restart AutoHotkey stops the resident HUD")
+AssertContains(restartAhkSource, "Stop-ToolboxImeHud", "restart AutoHotkey actually calls the HUD stop")
+AssertContains(restartAhkSource, "请用管理员权限重跑本脚本", "restart AutoHotkey fails loudly when the HUD cannot be stopped")
+; Raycast 会把脚本的任何 stdout 当成结果弹自己的通知；生产脚本必须安静，
+; 只走系统 Toast（诊断脚本是 fullOutput，单独放行）。
+AssertNotContains(restartAhkSource, "Write-Host", "restart AutoHotkey writes nothing to stdout")
+AssertNotContains(restartAhkSource, "Write-Output", "restart AutoHotkey does not use Write-Output either")
+reloadImeHudSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\reload-ime-hud.ps1", "UTF-8")
+AssertNotContains(reloadImeHudSource, "Write-Host", "reload IME HUD writes nothing to stdout")
+AssertNotContains(reloadImeHudSource, "Write-Output", "reload IME HUD does not use Write-Output either")
+AssertContains(reloadImeHudSource, "Show-SystemToast", "reload IME HUD reports through the system toast only")
 AssertNotContains(restartAhkSource, "Show-ToolboxNotify", "restart AutoHotkey no longer uses shared HUD")
 AssertNotContains(restartAhkSource, "Write-Output `"✓ $successText`"", "restart AutoHotkey no longer falls back to stdout HUD")
 AssertContains(toggleRgbSource, "@raycast.mode silent", "toggle RGB stays silent so Raycast closes")
@@ -831,6 +890,7 @@ AssertNotContains(toggleRgbSource, "Show-ToolboxNotify", "toggle RGB no longer u
 AssertContains(nextWallpaperSource, "@raycast.mode silent", "next wallpaper stays silent so Raycast closes")
 AssertContains(nextWallpaperSource, "lat3ncy-next-wallpaper", "next wallpaper serializes concurrent calls")
 AssertContains(nextWallpaperSource, "Get-NextWallpaperImage", "next wallpaper advances the configured pool")
+AssertContains(nextWallpaperSource, "Get-DesktopWallpaperPath", "next wallpaper starts from the current desktop image")
 AssertContains(nextWallpaperSource, "Set-DesktopWallpaper", "next wallpaper sets the desktop image")
 AssertContains(nextWallpaperSource, "Sync-LockScreenWallpaper", "next wallpaper syncs the same image to the lock screen")
 AssertContains(nextWallpaperSource, "Show-SystemToast -Title 'Wallpaper and lock screen updated'", "next wallpaper success uses system toast")
@@ -873,6 +933,8 @@ AssertContains(themeUtilsSource, "$window.Refresh()", "theme refresh calls Shell
 AssertContains(themeUtilsSource, "function ConvertTo-CanonicalPath", "wallpaper selection canonicalizes paths")
 AssertContains(themeUtilsSource, "function Test-SameWallpaperPath", "wallpaper selection compares canonical paths")
 AssertContains(themeUtilsSource, "function Get-NextWallpaperImage", "theme can pick the next wallpaper from the pool")
+AssertContains(themeUtilsSource, "Get-NextWallpaperImage -Config $Config -CurrentPath (Get-DesktopWallpaperPath) -Mode $Mode", "light and dark advance the same ordered pool")
+AssertNotContains(themeUtilsSource, "DayOfYear % $count", "wallpaper selection no longer uses the date index")
 AssertContains(themeUtilsSource, "function Set-WindowsCursorScheme", "theme can switch cursor schemes with color mode")
 AssertContains(themeUtilsSource, "function Disable-AccessibilityCursorOverlay", "cursor scheme clears the Accessibility colored pointer overlay")
 AssertContains(themeUtilsSource, "CursorColor", "cursor overlay uses the Accessibility CursorColor value")
@@ -980,6 +1042,7 @@ notifySource := FileRead(A_ScriptDir "\..\..\shared\notify\notify.ahk", "UTF-8")
 pathsSource := FileRead(A_ScriptDir "\..\..\shared\notify\paths.ahk", "UTF-8")
 translationPanelSource := FileRead(A_ScriptDir "\..\..\shared\notify\translation-panel.ahk", "UTF-8")
 anchorSource := FileRead(A_ScriptDir "\..\..\shared\notify\anchor.ahk", "UTF-8")
+locatorSource := FileRead(A_ScriptDir "\..\..\shared\notify\AnchorLocator.cs", "UTF-8")
 hardcodedRepoRoot := "C:\Users\Jie\Projects\lat3ncy-scripts-toolbox"
 for sourcePair in [
     ["main.ahk", mainSource],
@@ -1003,10 +1066,53 @@ imeHudClientSource := FileRead(A_ScriptDir "\..\..\shared\notify\ime-hud.ahk", "
 AssertContains(imeHudClientSource, "class ImeHud", "IME HUD client exists")
 AssertContains(imeHudClientSource, "Lat3ncyImeHudWinUi", "IME HUD client talks to WinUI title")
 AssertContains(imeHudClientSource, "NotifyPaths.ImeHudWinUiExe()", "IME HUD client resolves WinUI exe")
+AssertContains(imeHudClientSource, "User32\FindWindowW", "IME HUD client finds the hidden resident window")
+; WinExist 会跳过隐藏窗口，但 Show() 取前台窗口时用它是对的：
+; 只约束 FindWindow 查找器本身不能走 WinExist。
+findWindowStart := InStr(imeHudClientSource, "static FindWindow(")
+AssertEqual(true, findWindowStart > 0, "IME HUD client has a FindWindow lookup")
+AssertNotContains(SubStr(imeHudClientSource, findWindowStart), "WinExist(", "IME HUD window lookup does not skip the hidden resident window")
 AssertContains(imeHudClientSource, "MessageTimeout := 2500", "IME HUD COPYDATA timeout covers WinUI ShowState")
 AssertContains(rendererSource, "#Include anchor.ahk", "renderer loads caret anchor for AHK chips")
 AssertContains(imeHudClientSource, "#Include anchor.ahk", "IME HUD client loads caret anchor")
-AssertContains(imeHudClientSource, "InputAnchor.Get(&x, &y, targetHwnd)", "IME HUD Show samples caret before sending STATE")
+AssertContains(imeHudClientSource, "InputAnchor.TryCaret(&x, &y, targetHwnd)", "IME HUD hot path tries Win32 caret first")
+AssertContains(imeHudClientSource, "ProcessNoWindow.RunWait(command, outputFile, this.LocatorTimeoutMs)", "IME HUD falls back to the locator with a bounded timeout")
+AssertContains(imeHudClientSource, "static ProbeLocator(", "IME HUD parses structured locator output")
+AssertContains(imeHudClientSource, "static LocateAnchor(", "IME HUD resolves an anchor with an explicit source")
+AssertContains(imeHudClientSource, "static LastAnchorSource", "IME HUD records the anchor source")
+AssertContains(imeHudClientSource, "static LastAnchorReal", "IME HUD records whether the anchor is a real caret")
+AssertContains(imeHudClientSource, "static FollowEnabled", "IME HUD follow can be switched off")
+AssertContains(imeHudClientSource, "static FollowAnchor(", "IME HUD can follow the caret while the chip is visible")
+AssertContains(imeHudClientSource, "static CaretHelperPath()", "IME HUD resolves the UIA caret helper")
+AssertContains(imeHudClientSource, "static StartCaretHelper(", "IME HUD can read the caret via the PowerShell helper")
+AssertContains(imeHudClientSource, "caret-uia.ps1", "IME HUD helper name stays caret-uia.ps1")
+AssertContains(imeHudClientSource, "ProcessNoWindow.Run(command, false, outputFile)", "caret helper launch stays non-blocking")
+AssertContains(imeHudClientSource, "CARET", "follow accepts the helper CARET lines")
+AssertContains(imeHudClientSource, "ProcessNoWindow.Run(command, false, outputFile)", "follow watcher does not block the AHK hot path")
+AssertNotContains(imeHudClientSource, "InputAnchor.Get(&x, &y, targetHwnd)", "IME HUD no longer silently degrades through InputAnchor.Get")
+AssertEqual("STATE|CN|820|642|0|0", ImeHud.BuildStateCommand("CN", 820, 642, 0, 0), "STATE without source stays backward compatible")
+AssertEqual("STATE|CN|820|642|0|0||text-caret", ImeHud.BuildStateCommand("CN", 820, 642, 0, 0, 0, "text-caret"), "STATE keeps a source even without a target hwnd")
+AssertEqual("STATE|CN|10|20|0|0|12345|text-caret", ImeHud.BuildStateCommand("CN", 10, 20, 0, 0, 12345, "text-caret"), "STATE carries the anchor source")
+AssertEqual("STATE|EN|10|20|0|0|12345|target-window-bottom", ImeHud.BuildStateCommand("EN", 10, 20, 0, 0, 12345, "target-window-bottom"), "STATE keeps degraded sources visible")
+AssertEqual("unknown", ImeHud.NormalizeSource(""), "empty anchor source is unknown")
+AssertEqual("text-caret", ImeHud.NormalizeSource("text-caret"), "anchor source keeps safe characters")
+AssertEqual("win32caret", ImeHud.NormalizeSource("win32|caret"), "anchor source drops protocol separators")
+AssertEqual(true, InputAnchor.IsRealCaretSource("text-caret"), "text-caret counts as a real caret")
+AssertEqual(true, InputAnchor.IsRealCaretSource("win32-caret"), "win32-caret counts as a real caret")
+AssertEqual(true, InputAnchor.IsRealCaretSource("imm-caret"), "imm-caret counts as a real caret")
+AssertEqual(false, InputAnchor.IsRealCaretSource("focus-bounds"), "focus-bounds is not a real caret")
+AssertEqual(false, InputAnchor.IsRealCaretSource("focus-text"), "focus-text is not a real caret")
+AssertEqual(false, InputAnchor.IsRealCaretSource("target-window-bottom"), "window-bottom is not a real caret")
+AssertEqual(false, InputAnchor.IsRealCaretSource(""), "empty source is not a real caret")
+for realSourceName in InputAnchor.RealCaretSources {
+    needle := '"' realSourceName '"'
+    if !InStr(locatorSource, needle) {
+        AssertEqual(true, false, realSourceName " must also be a real caret source in the locator")
+        break
+    }
+}
+AssertEqual(true, true, "locator real caret source list matches anchor.ahk")
+AssertContains(imeHudClientSource, "static Warm()", "IME HUD warms the resident WinUI process")
 AssertContains(imeHudClientSource, "static BuildStateCommand(", "IME HUD can format STATE without launching WinUI")
 AssertNotContains(imeHudClientSource, "x := 0, y := 0, durationMs := 0", "IME HUD Show no longer defaults caret to origin")
 AssertNotContains(imeHudClientSource, "NotifyPaths.ImeHudExe()", "IME HUD client does not launch ImeHud.exe")
@@ -1046,6 +1152,7 @@ AssertContains(capsLockSource, "PersistImeAcrossWindows", "Caps can persist IME 
 AssertContains(capsLockSource, "RememberImeState", "Caps records last explicit IME state")
 AssertContains(capsLockSource, "WatchForeground", "Caps restores IME after focus change")
 AssertContains(capsLockSource, "static UseImeHud := true", "Caps can roll back to AHK HUD with one switch")
+AssertContains(capsLockSource, "生产路径发送失败不再叠 AHK 芯片", "production ImeHud failure does not stack an AHK chip")
 AssertContains(capsLockSource, 'this.ShowImeHud("CN", targetHwnd)', "Caps shows CN through ImeHud")
 AssertContains(capsLockSource, 'this.ShowImeHud("EN", targetHwnd)', "Caps shows EN through ImeHud")
 AssertContains(capsLockSource, 'this.ShowImeHud("CAPS", targetHwnd)', "Caps shows CAPS through ImeHud")
@@ -1079,6 +1186,7 @@ AssertContains(rendererSource, "static CloseOrphans()", "renderer recovers orpha
 AssertContains(notifySource, "static ClampDuration(duration, fallback := 0)", "notify clamps zero and huge durations")
 AssertContains(notifySource, "static MaxDurationMs := 10000", "notify HUD hard cap is 10s")
 AssertContains(mainSource, "NotifyRenderer.CloseOrphans()", "main closes orphan HUD windows on startup")
+AssertContains(mainSource, "ImeHud.Warm()", "main warms WinUI HUD before the first CapsLock")
 AssertNotContains(rendererSource, 'hud.BackColor := isTextOnly ? theme.TypeBadgeBg["state"]', "chip no longer uses badge fill")
 AssertContains(notifySource, "class Notify", "shared notify API exists")
 AssertContains(notifySource, "ToolTip", "notify API owns ToolTip fallback")

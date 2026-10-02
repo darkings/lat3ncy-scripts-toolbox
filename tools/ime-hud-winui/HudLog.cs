@@ -28,6 +28,15 @@ internal static class HudLog
         }
     }
 
+    /// <summary>
+    /// 关键路径的结构化观测日志。当前实现和 Line 一样落盘，
+    /// 单独一个入口是为了以后能按开关降噪，不要在这里加过滤逻辑。
+    /// </summary>
+    public static void Info(string key, string detail)
+    {
+        Line(Sanitize(key) + " " + Sanitize(detail));
+    }
+
     static string Sanitize(string text)
     {
         if (string.IsNullOrEmpty(text))

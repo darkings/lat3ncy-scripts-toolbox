@@ -8,8 +8,13 @@ namespace Lat3ncyToolbox.ImeHudWinUi;
 /// IME 状态协议。窗口标题 / 类名 / mutex 只认本 Renderer。
 /// 只查找 Lat3ncyImeHudWinUi，不查找其他窗口。
 ///
-/// STATE|&lt;CN|EN|CAPS&gt;|&lt;x&gt;|&lt;y&gt;|&lt;dpi&gt;|&lt;durationMs&gt;[|&lt;targetHwnd&gt;]
+/// STATE|&lt;CN|EN|CAPS&gt;|&lt;x&gt;|&lt;y&gt;|&lt;dpi&gt;|&lt;durationMs&gt;[|&lt;targetHwnd&gt;][|&lt;anchorSource&gt;]
+/// MOVE|&lt;CN|EN|CAPS&gt;|&lt;x&gt;|&lt;y&gt;|&lt;dpi&gt;|&lt;durationMs&gt;[|&lt;targetHwnd&gt;][|&lt;anchorSource&gt;]
 /// HIDE / PING / QUIT
+///
+/// anchorSource 是 AHK 侧解析出来的锚点来源（text-caret / win32-caret /
+/// focus-bounds / target-window-bottom ...）。没有这一段就是 unknown，
+/// 不能当成“跟着光标”。
 /// </summary>
 internal static class Protocol
 {
@@ -26,6 +31,7 @@ internal static class Protocol
     {
         None,
         State,
+        Move,
         Hide,
         Ping,
         Quit
@@ -40,6 +46,16 @@ internal static class Protocol
         public int Dpi { get; init; }
         public int DurationMs { get; init; }
         public long TargetHwnd { get; init; }
+        public string AnchorSource { get; init; }
+    }
+
+    /// <summary>
+    /// 真实光标来源白名单，和 shared/notify/anchor.ahk、
+    /// shared/notify/AnchorLocator.cs 三处必须一致。
+    /// </summary>
+    public static bool IsRealCaretSource(string? source)
+    {
+        return source is "text-caret" or "value-caret" or "imm-caret" or "win32-caret";
     }
 
     public static Message Parse(string? text)
@@ -59,7 +75,7 @@ internal static class Protocol
             return new Message { Kind = Kind.Ping, State = "" };
         if (head == "QUIT")
             return new Message { Kind = Kind.Quit, State = "" };
-        if (head != "STATE" || parts.Length < 2)
+        if ((head != "STATE" && head != "MOVE") || parts.Length < 2)
             return default;
 
         string state = NormalizeState(parts[1]);
@@ -75,14 +91,34 @@ internal static class Protocol
         }
         return new Message
         {
-            Kind = Kind.State,
+            Kind = head == "MOVE" ? Kind.Move : Kind.State,
             State = state,
             X = ReadInt(parts, 2),
             Y = ReadInt(parts, 3),
             Dpi = ReadInt(parts, 4),
             DurationMs = ReadInt(parts, 5),
             TargetHwnd = targetHwnd,
+            AnchorSource = NormalizeSource(ReadText(parts, 7)),
         };
+    }
+
+    /// <summary>
+    /// 来源只允许安全字符，避免日志/协议被奇怪输入污染。
+    /// 空段返回 unknown。
+    /// </summary>
+    public static string NormalizeSource(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return "unknown";
+        string trimmed = token.Trim();
+        Span<char> buffer = trimmed.Length <= 32 ? stackalloc char[trimmed.Length] : new char[trimmed.Length];
+        int length = 0;
+        foreach (char ch in trimmed)
+        {
+            if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_')
+                buffer[length++] = ch;
+        }
+        return length == 0 ? "unknown" : new string(buffer[..length]);
     }
 
     public static string NormalizeState(string? token)
@@ -116,6 +152,11 @@ internal static class Protocol
         return int.TryParse(parts[index].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int value)
             ? value
             : 0;
+    }
+
+    static string ReadText(string[] parts, int index)
+    {
+        return index >= parts.Length ? "" : parts[index].Trim();
     }
 
     /// <summary>
@@ -164,6 +205,34 @@ internal static class Protocol
         if (Parse("STATE|CN|10|20|96|750|0").TargetHwnd != 0)
             return 19;
 
+        // 锚点来源：必须能区分“真光标”和“退化锚点”。
+        Message sourced = Parse("STATE|CN|10|20|96|750|12345|text-caret");
+        if (sourced.Kind != Kind.State || sourced.AnchorSource != "text-caret")
+            return 20;
+        if (!IsRealCaretSource(sourced.AnchorSource))
+            return 21;
+        Message degraded = Parse("STATE|CN|10|20|96|750|12345|target-window-bottom");
+        if (degraded.AnchorSource != "target-window-bottom" || IsRealCaretSource(degraded.AnchorSource))
+            return 22;
+        if (Parse("STATE|CN|10|20|96|750").AnchorSource != "unknown")
+            return 23;
+        if (Parse("STATE|CN|10|20|96|750|12345|").AnchorSource != "unknown")
+            return 24;
+        if (Parse("STATE|CN|10|20|96|750|12345|focus bounds").AnchorSource != "focusbounds")
+            return 25;
+        if (!IsRealCaretSource("win32-caret") || !IsRealCaretSource("imm-caret"))
+            return 26;
+        if (IsRealCaretSource("focus-bounds") || IsRealCaretSource("hint") || IsRealCaretSource(null))
+            return 27;
+
+        // MOVE 只重定位，不改状态 / 时长 / 目标窗口。
+        Message move = Parse("MOVE|EN|100|200|96|750|12345|text-caret");
+        if (move.Kind != Kind.Move || move.State != "EN" || move.X != 100 || move.Y != 200
+            || move.TargetHwnd != 12345 || move.AnchorSource != "text-caret")
+            return 28;
+        if (Parse("MOVE|BOGUS|1|2").Kind != Kind.None)
+            return 29;
+
         // 面板协议 / 定位是独立骨架，失败码从 101 / 201 起，不和芯片协议撞号。
         int panel = TranslationPanelProtocol.SelfTest();
         if (panel != 0)
@@ -205,10 +274,9 @@ internal static class Protocol
         if (existing == IntPtr.Zero)
             return false;
         if (string.IsNullOrWhiteSpace(command))
-            return true;
+            return false;
 
-        SendCopyData(existing, command);
-        return true;
+        return SendCopyData(existing, command);
     }
 
     /// <summary>
@@ -254,8 +322,11 @@ internal static class Protocol
         return found;
     }
 
-    public static void SendCopyData(IntPtr hwnd, string text)
+    public static bool SendCopyData(IntPtr hwnd, string text)
     {
+        if (hwnd == IntPtr.Zero || !Native.IsWindow(hwnd) || string.IsNullOrWhiteSpace(text))
+            return false;
+
         byte[] bytes = Encoding.Unicode.GetBytes(text + "\0");
         IntPtr buffer = Marshal.AllocHGlobal(bytes.Length);
         try
@@ -267,7 +338,19 @@ internal static class Protocol
                 cbData = bytes.Length,
                 lpData = buffer
             };
-            Native.SendMessage(hwnd, Native.WM_COPYDATA, IntPtr.Zero, ref cds);
+            IntPtr result = IntPtr.Zero;
+            IntPtr sent = Native.SendMessageTimeout(
+                hwnd,
+                Native.WM_COPYDATA,
+                IntPtr.Zero,
+                ref cds,
+                Native.SMTO_ABORTIFHUNG,
+                2500,
+                out result);
+            bool ok = sent != IntPtr.Zero && result != IntPtr.Zero;
+            if (!ok)
+                HudLog.Line("forward-failed hwnd=" + hwnd.ToInt64() + " sent=" + sent.ToInt64() + " result=" + result.ToInt64());
+            return ok;
         }
         finally
         {

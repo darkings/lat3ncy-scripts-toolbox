@@ -5,7 +5,7 @@
 # @raycast.mode silent
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
-# @raycast.description Restart the toolbox AutoHotkey main script
+# @raycast.description Restart the toolbox AutoHotkey main script and the resident IME HUD
 # @raycast.icon 🔄
 
 $ErrorActionPreference = 'Stop'
@@ -123,6 +123,41 @@ function Get-ToolboxAutoHotkeyProcess
       })
 }
 
+# 常驻 ImeHudWinUi.exe 也要一起结束，否则：
+#   1. 它里面跑的是旧 exe 的代码，新的 STATE/MOVE 协议永远进不去；
+#   2. 旧进程占着 HWND 和 mutex，新的 exe 只能干等。
+# main.ahk 启动时会 Warm() 预热，会自己冷启动新的 HUD，所以这里只管停。
+function Stop-ToolboxImeHud
+{
+  $hudProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -ieq 'ImeHudWinUi.exe' })
+  foreach ($hud in $hudProcesses)
+  {
+    try
+    {
+      Stop-Process -Id $hud.ProcessId -Force -ErrorAction Stop
+    }
+    catch
+    {
+      # 权限不足时不要静默：旧 HUD 还在跑，新协议不会生效。
+      # 但也不能往 stdout 写：Raycast 会把任何脚本输出当成结果弹自己的通知。
+      # 结论由下面的检查统一抛错，再走系统 Toast。
+    }
+  }
+  if ($hudProcesses.Count -gt 0)
+  {
+    Start-Sleep -Milliseconds 300
+  }
+  $left = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -ieq 'ImeHudWinUi.exe' })
+  if ($left.Count -gt 0)
+  {
+    throw ("ImeHudWinUi.exe 仍在运行（{0}），新协议不会生效。请用管理员权限重跑本脚本。" -f (($left.ProcessId) -join ', '))
+  }
+}
+
+Stop-ToolboxImeHud
+
 $toolboxProcesses = Get-ToolboxAutoHotkeyProcess
 
 foreach ($process in $toolboxProcesses)
@@ -164,4 +199,4 @@ if (-not $reloadedProcesses)
 
 $processIds = ($reloadedProcesses.ProcessId | Sort-Object -Unique) -join ', '
 # silent 会关 Raycast 窗口。成功也走系统 Toast，不再弹共享 HUD / stdout。
-Show-SystemToast -Title '✓ AutoHotkey 已重载' -Message ("PID: {0}" -f $processIds) | Out-Null
+Show-SystemToast -Title '✓ AutoHotkey + IME HUD 已重载' -Message ("AHK PID: {0}" -f $processIds) | Out-Null

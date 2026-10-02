@@ -261,8 +261,10 @@ class CapsLockIme {
         return newState
     }
 
-    ; 中 / 英 / 大写走 WinUI ImeHudWinUi.exe。
-    ; kind: "CN" | "EN" | "CAPS"。失败、测试入口或 UseImeHud=false 时回退 AHK 芯片。
+    ; 中 / 英 / 大写只走 WinUI ImeHudWinUi.exe。
+    ; kind: "CN" | "EN" | "CAPS"。
+    ; 生产路径发送失败不再叠 AHK 芯片，避免和 WinUI / 系统提示叠成 AA、中中。
+    ; UseImeHud=false 或测试入口才回退旧芯片。
     static ShowImeHud(kind, targetHwnd := 0) {
         if this.UseImeHud && this.IsImeHudEnabled() {
             try {
@@ -270,6 +272,7 @@ class CapsLockIme {
                     return true
             } catch {
             }
+            return false
         }
         switch kind {
             case "CN":

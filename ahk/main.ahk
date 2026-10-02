@@ -159,5 +159,7 @@ IsToolboxTestMode() {
 
 ; 启动时清掉丢失引用的自定义 HUD，避免旧弹窗一直钉在桌面上。
 try NotifyRenderer.CloseOrphans()
+; 预热 WinUI，避免第一次 CapsLock 冷启动 1–2 秒。测试入口 Warm() 自己会退出。
+try ImeHud.Warm()
 
 ToolboxStarting := false

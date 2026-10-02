@@ -45,6 +45,8 @@ internal static class Program
             + " command=" + (startupCommand ?? "")
             + " transparency=" + Native.TransparencyEnabled()
             + " high-contrast=" + Native.HighContrastEnabled());
+        // 部署标记：日志里没有这一行，说明跑的还是旧 exe（旧进程没被杀掉）。
+        HudLog.Info("build", "hud=anchor-source-1 protocol=state+move");
 
         // 不创建窗口，只校验协议常量和独立标题 / mutex。
         if (selfTest)
@@ -122,6 +124,7 @@ internal static class Program
         bool forwarded = Protocol.TryForwardToExisting(startupCommand);
         HudLog.Line("resident-mutex=existing forwarded=" + forwarded
             + " command=" + (startupCommand ?? ""));
+        // 空命令或转发失败都退出。调用方会再等 HWND；不要在这里抢 mutex。
         return false;
     }
 

@@ -1,5 +1,55 @@
 # 发现与决策
 
+## 2026-10-01：中英文切换提示不跟光标（锚点退化）
+
+### 现象
+CapsLock 切换中/英后，WinUI 芯片出现在**目标窗口底部中心**，不跟输入光标。
+
+### 证据（只读探针，真实桌面会话）
+| 调用 | 结果 |
+|---|---|
+| `GetGUIThreadInfo(0)`（生产 `InputAnchor.TryCaret`） | `focus=<Chrome窗口> caret=0 rc=(0,0,0,0)` → 失败 |
+| `anchor-locator.exe --hwnd <Chrome>` | `1536\|1496\|focus-bounds`（Focus/BoundingRectangle 只等于顶层窗口矩形） |
+| `InputAnchor.TryWindowBottom(root)` | `1536,1496`（`top + height*0.85`，与上一行完全一致） |
+| 历史 `ImeHudWinUi.log` | 只有 `place source=hint`；WinUI 对传入坐标一律标 `hint`，看不出真实来源 |
+
+UIA 侧：`AutomationElement.FocusedElement` 在 Chrome 窗口上返回 `ControlType.Window`/`Chrome_WidgetWin_1` 本身，树里没有 `TextPattern`，`FromPoint` 还返回 `Access to denied`。
+
+### 根因链
+1. Chromium/TSF 类窗口不向 `GetGUIThreadInfo` 暴露 Win32 caret → `TryCaret` 必失败。
+2. 当前工作区的 `ImeHud.Show` 热路径**主动删掉了 UIA locator**（注释："热路径不跑 UIA locator"），失败后直接落到 `TryWindowBottom`。
+3. `AnchorLocator.cs` 的兜底 `TryFocusedBounds` 把"整窗矩形"当锚点用，等价于窗口底部。
+4. 降级是静默的：调用方看不到来源，日志也无法区分。
+
+### 决策（已实现）
+| 决策 | 理由 |
+|---|---|
+| 锚点来源成为协议一等公民（`STATE/MOVE` 第 8 段 `anchorSource`） | 没有来源就无法判断"跟光标"还是"窗口底部" |
+| 真光标白名单只有 `text-caret` / `imm-caret` / `win32-caret` | `focus-text`/`focus-bounds`/`window-bottom` 都是退化，混用就是这次的 bug |
+| `focus-bounds` 不再当锚点用，只作为显式退化来源 | 它就是"提示钉在窗口底部"的来源 |
+| L1 只接受 TextPattern2 `GetCaretRange` / TextPattern `GetSelection` 的插入点矩形 | 整窗矩形必须被拒绝 |
+| 查询前对目标窗口做 `AccessibleObjectFromWindow(OBJID_CLIENT)` 预热 | Chromium 只在有客户端请求时才建内容树 |
+| 只对真光标来源启动 `--watch` 跟随（`MOVE` 只重定位） | 假装跟随退化坐标会掩盖问题 |
+| Locator 仍用 Windows 自带 `csc.exe`（C# 5）编译 | 该编译器不支持字符串内插 / `?.` / `init` / 目标类型 `new()`，改了会直接编译失败 |
+| AHK 测试文件必须带 UTF-8 BOM（临时脚本） | 无 BOM 的 UTF-8 + 中文注释在本次环境里会让脚本**静默不执行**，排查花了很久 |
+
+### 坑：PowerShell 5.1 读无 BOM 的 UTF-8 会解析失败
+同一份 `restart-autohotkey.ps1`：`pwsh`(7) `ParseFile` = 0 错误，`powershell.exe`(5.1) = 9 个错误（报在**无关行号**上）。原因是文件里有中文/`✓`，而 5.1 把无 BOM 文件当 ANSI(GBK) 解码，字节被拆坏后字符串没有终结符，错误位置完全指不到真因。
+
+规则：**非 ASCII 内容的 `.ps1` 必须带 UTF-8 BOM**（`Set-LockScreenFromWallpaper.ps1` 早就有 BOM 也是这个原因）；纯 ASCII 的脚本反过来不要加 BOM。改完必须用 5.1 复验：
+
+```powershell
+powershell -NoProfile -Command "\$e=\$null; [void][Management.Automation.Language.Parser]::ParseFile('path\to\x.ps1',[ref]\$null,[ref]\$e); \$e.Count"
+```
+
+同样地，临时 `.ahk` 测试脚本若无 BOM 且含中文注释，会**静默不执行**（既不报错也不写日志），排查时浪费了很久。
+
+### 未验证（需要真实桌面手动确认）
+本机 UIA 查询拿不到 Chrome 内容树，因此 Chromium 下预期仍会落到 `anchor-degraded`。判断方法：按一次 CapsLock，看 `%TEMP%\ImeHudWinUi.log`：
+
+* `real=1` 且 `anchor=text-caret` → 修好了，芯片跟光标。
+* `real=0` + `anchor-degraded anchor=focus-bounds` → UIA 在该应用里确实拿不到插入点，此时落点是窗口底部（已如实标记，不再伪装跟随）。
+
 ## 需求
 - 一键 `Caps+D` 在 `G27Q2 显示器音箱(NVIDIA HD Audio)` 与 `Jie’s AirPods 立体声` 间互切，未连时自动拉起 AirPods，已连时秒切，回切不掉线，失败分级提示（耳机未就绪/无设备/切换失败）
 - 可选：`Caps+S` 朗读选中文本(`tools/tts/tts_player.py`)前可预热 AirPods，保证首句走耳机

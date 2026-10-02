@@ -153,11 +153,14 @@ internal sealed class HudHost : IDisposable
         int hintDpi = 0,
         int durationMs = 0,
         long targetHwnd = 0,
+        string anchorSource = "unknown",
         bool animate = true)
     {
         _content.SetState(state);
+        // 每次显示前重读 AppsUseLightTheme，避免缓存停在浅色。
+        SyncThemeFromSystem("show");
         ApplyHostChrome();
-        PlaceAtCaret(hintX, hintY, hintDpi, targetHwnd, log: logFocus);
+        PlaceAtCaret(hintX, hintY, hintDpi, targetHwnd, log: logFocus, anchorSource: anchorSource);
 
         if (logFocus)
         {
@@ -263,9 +266,28 @@ internal sealed class HudHost : IDisposable
                     message.Dpi,
                     message.DurationMs,
                     message.TargetHwnd,
+                    anchorSource: message.AnchorSource,
                     animate: true);
                 break;
+            case Protocol.Kind.Move:
+                MoveTo(message);
+                break;
         }
+    }
+
+    /// <summary>
+    /// 跟随光标：只搬窗口位置，不改状态、不改时长、不动淡入淡出。
+    /// 没有淡入淡出，所以不会闪。
+    /// </summary>
+    void MoveTo(Protocol.Message message)
+    {
+        if (!_visible || _hiding || _closing)
+            return;
+        bool real = Protocol.IsRealCaretSource(message.AnchorSource);
+        PlaceAtCaret(message.X, message.Y, message.Dpi, message.TargetHwnd, log: false);
+        if (real)
+            HudLog.Line("move source=" + message.AnchorSource
+                + " x=" + message.X + " y=" + message.Y);
     }
 
     public void Dispose()
@@ -647,8 +669,10 @@ internal sealed class HudHost : IDisposable
 
     /// <summary>
     /// 芯片跟 caret：默认落在锚点下方，下方不够翻到上方。显示期间不持续跟踪。
+    /// anchorSource 是 AHK 的报告来源：real 表示真光标，其余是退化锚点。
+    /// 日志必须写清楚，否则线上看不出“已经从光标退化到窗口底部”。
     /// </summary>
-    void PlaceAtCaret(int hintX, int hintY, int hintDpi, long targetHwnd = 0, bool log = false)
+    void PlaceAtCaret(int hintX, int hintY, int hintDpi, long targetHwnd = 0, bool log = false, string anchorSource = "unknown")
     {
         Anchor.Result anchor = Anchor.Locate(hintX, hintY, targetHwnd);
         int dpi = hintDpi > 0 ? hintDpi : Native.GetDpiForPoint(anchor.X, anchor.Y);
@@ -700,11 +724,19 @@ internal sealed class HudHost : IDisposable
             Native.SWP_NOACTIVATE | Native.SWP_NOOWNERZORDER);
         if (log)
         {
+            bool realCaret = Protocol.IsRealCaretSource(anchorSource);
             HudLog.Line("place source=" + (string.IsNullOrEmpty(anchor.Source) ? "fallback" : anchor.Source)
+                + " anchor=" + (string.IsNullOrEmpty(anchorSource) ? "unknown" : anchorSource)
+                + " real=" + (realCaret ? 1 : 0)
                 + " target-hwnd=0x" + targetHwnd.ToString("X")
                 + " x=" + x + " y=" + y
                 + " dpi=" + dpi
                 + " size=" + width + "x" + height);
+            // 退化锚点必须显式告警：这正是“提示不跟光标”的现场。
+            if (!realCaret)
+                HudLog.Line("anchor-degraded anchor=" + anchorSource
+                    + " hint=" + hintX + "," + hintY
+                    + " placed=" + x + "," + y);
         }
         ResizeIsland();
     }
@@ -812,6 +844,13 @@ internal sealed class HudHost : IDisposable
     {
         string? text = Native.ReadCopyData(lParam);
         HudLog.Line("copydata=" + (text ?? ""));
+        // 部署自检：新协议一定带第 8 段来源；这里只观测，不参与决策。
+        Protocol.Message observed = Protocol.Parse(text);
+        HudLog.Info(
+            "hud-message",
+            "kind=" + observed.Kind
+            + " anchor=" + (string.IsNullOrEmpty(observed.AnchorSource) ? "unknown" : observed.AnchorSource)
+            + " real=" + (Protocol.IsRealCaretSource(observed.AnchorSource) ? 1 : 0));
         DispatchCommand(text);
     }
 

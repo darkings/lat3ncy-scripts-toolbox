@@ -1,5 +1,47 @@
 # 进度日志
 
+## 会话：2026-10-01：中英文切换通知不跟光标
+
+### 阶段 1：定位根因（complete）
+- 现场证据（`%TEMP%\ImeHudWinUi.log` + 只读探针）：
+  - `InputAnchor.TryCaret` 在 Chromium 窗口恒为 `caret=0 rc=(0,0,0,0)`；
+  - 工作区里 `shared/notify/ime-hud.ahk` 的热路径**没有** UIA locator，`TryCaret` 失败直接 `TryWindowBottom`；
+  - `anchor-locator.exe --hwnd <Chrome>` 也只返回 `focus-bounds`（= 窗口矩形 85% 处），和 `TryWindowBottom` 算出来的坐标完全一致；
+  - 结论：不是渲染问题，是锚点静默退化到「窗口底部中心」。
+- 修正一个一开始的误判：`GetGUIThreadInfo(0)` 返回的是**前台线程**信息，不是 bug。
+
+### 阶段 2：实现（complete）
+- `shared/notify/AnchorLocator.cs` 重写（仍用 Framework `csc.exe` 编译，只能 C# 5 语法）：
+  - 输出带来源：`OK|x|y|w|h|source|caretHeight`，旧 `x|y|source` 保留；
+  - 真光标白名单 `text-caret` / `imm-caret` / `win32-caret`，`focus-bounds` 等一律标退化；
+  - L1 TSF/UIA 文本光标只接受插入点矩形，并对目标窗口做 `AccessibleObjectFromWindow` 无障碍预热；
+  - `--watch` 跟随模式（`A|` / `L|` / `E|` 行协议）；`--self-test` 不碰 UIA。
+- `shared/notify/anchor.ahk`：新增 `InputAnchor.RealCaretSources` / `IsRealCaretSource()`。
+- `shared/notify/ime-hud.ahk`：`LocateAnchor()` + `ProbeLocator()` 结构化解析；`LastAnchorSource` / `LastAnchorReal` 观测字段；`FollowAnchor()`（只对真光标启动 `--watch`，读 stdout 文件推 `MOVE`）；`DisableSend` 仅测试用。
+- `tools/ime-hud-winui`：`Protocol` 支持 `MOVE` 与第 8 段 `anchorSource`（含 `IsRealCaretSource`）；`HudHost` 处理 `MOVE` 重定位、`place ... anchor= real=` 与 `anchor-degraded` 告警日志。
+
+### 阶段 3：验证（complete，含未覆盖项）
+- `anchor-locator.exe --self-test` → exit 0；`ImeHudWinUi.exe --self-test` → exit 0。
+- `ahk/tests/run-tests.ps1` 全绿（20 AHK 独立加载 + 31 PS AST + `PASS: core assertions`，含新增的来源/跟随契约）。
+- 临时端到端（`tmp-probe/e2e`，stub locator，未改生产文件）：`STATE|CN|1111|2222|0|0|<hwnd>|text-caret` 拼装正确、来源解析与退化标记正确。
+- **未能在本会话覆盖**：真实 Chromium 窗口里 UIA 能否给出 `text-caret`。探测显示本机 UIA 拿不到 Chrome 内容树（`FocusedElement` 只返回顶层窗口），所以会落到 `anchor-degraded`。需要用户在真实桌面按 CapsLock 后看日志确认。
+- 未执行：`git commit`；`tmp-probe/` 已删除。
+
+### 阶段 4：部署闭环（complete）
+- 用户重载后仍不跟光标；日志证明「**旧代码还在跑**」：`copydata=STATE|...` 仍是 7 段老格式、`build hud=anchor-source-1` 一次都没有、`%TEMP%\ImeHudClient.log` 不存在（新客户端必写）。
+- 沙箱无法代重启：`tasklist` Access denied、`schtasks`/Task Scheduler COM 0x80070003、`Get-CimInstance` 看不到用户 AHK/HUD、`FindWindowW` 在自己的 desktop 查不到该窗口（新 exe 转发时能查到 `hwnd=132906`）。最终确认必须由用户在自己的会话执行。
+- 按用户要求把「结束 HUD + 重载 AHK」**并进现有的** `restart-autohotkey.ps1`（Raycast 里那个 Restart AutoHotkey）：新增 `Stop-ToolboxImeHud`，停不掉就抛错并提示用管理员重跑；`reload-ime-hud.ps1` 只负责编译/发布后调用它，`diagnose-ime-hud-anchor.ps1 -Restart` 也委托给它，避免三处逻辑分叉。
+- 新增 `diagnose-ime-hud-anchor.ps1`（只读）：区分「HUD 旧进程 / AHK 旧客户端 / 锚点退化」，只看最近一次 HUD 会话（最后一个 `start pid=` 之后），避免旧日志假阳性。
+- AHK 客户端加部署标记：`Show()` 首次写 `client-build=anchor-source-1`，每次写 `anchor state=.. source=.. real=.. x=.. y=.. target=.. sent=..`。
+- 踩坑与修复：`restart-autohotkey.ps1` / `reload-ime-hud.ps1` 无 BOM 时 **5.1 解析失败（报在无关行号）**，已补 UTF-8 BOM；纯 ASCII 的 `diagnose-*.ps1` 保持无 BOM。
+- 测试：全套仍全绿（20 AHK 独立加载 + 33 PS AST + `PASS: core assertions`），两个 exe 自检 exit 0；新增断言覆盖「restart 脚本必须一起停 HUD」。
+
+### 阶段 5：待用户确认（blocked on real desktop）
+- 需要用户跑一次 `restart-autohotkey.ps1`（或 Raycast 的 Restart AutoHotkey），按一次 CapsLock，再把 `diagnose-ime-hud-anchor.ps1` 的输出发回。
+- 若结果是 `real=0 / focus-bounds`：说明该应用不向 UIA 暴露插入点，下一步试 Chromium `--force-renderer-accessibility`，或改从 renderer 客户区 `IAccessible` 读插入点。
+
+---
+
 ## 会话：2026-08-24
 
 ### 阶段 1：需求与发现

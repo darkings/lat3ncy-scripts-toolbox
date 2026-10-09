@@ -33,7 +33,7 @@ if ($config.wallpaper.enabled -and $wallpaperImage)
 
 # 锁屏跟随：换过壁纸就用同一张，否则同步当前桌面壁纸（wallpaper.sync_lock_screen 控制）
 $lockScreenImage = if ($config.wallpaper.enabled -and $wallpaperImage) { $wallpaperImage } else { '' }
-Sync-LockScreenWallpaper -Config $config -ImagePath $lockScreenImage | Out-Null
+
 
 # 颜色切完再换指针；缺文件或关闭 cursor.enabled 时静默跳过。
 Set-WindowsCursorScheme -Mode 'light' -Config $config | Out-Null
@@ -42,3 +42,6 @@ if ($config.general.show_notification)
 {
   Invoke-ThemeNotify -Type 'info' -Icon '☀️' -Text '已切换为浅色模式'
 }
+
+# 锁屏同步放最后：WinRT 调用不阻塞体感
+Sync-LockScreenWallpaper -Config $config -ImagePath $lockScreenImage | Out-Null

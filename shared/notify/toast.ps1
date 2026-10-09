@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Title = "Lat3ncy Toolbox",
     [string]$Message = ""
 )

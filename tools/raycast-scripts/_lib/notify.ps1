@@ -1,4 +1,4 @@
-# Lat3ncy Notify - Raycast Adapter
+﻿# Lat3ncy Notify - Raycast Adapter
 # Raycast 生产通知只走系统 Toast；旧 HUD CLI / Show-ToolboxNotify 已删除。
 try {
   [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -101,14 +101,23 @@ function Show-SystemToast
       return $false
     }
 
-    # 长 EncodedCommand 在当前环境会被拒绝启动。参数写入 UTF-8 临时脚本，命令行只保留短 -File 路径。
+    # 若当前已经在 Windows PowerShell 5.1，直接调用 toast.ps1（省去 300ms 子进程开销，且避免命令行参数代码页乱码）
+    if ($PSVersionTable.PSVersion.Major -eq 5)
+    {
+      try {
+        & $toastScript -Title $Title -Message $Message
+        return $true
+      } catch {}
+    }
+
+    # 跨版本或子进程兜底：参数写入带 BOM 的 UTF-8 临时脚本，防止 powershell.exe 按 ANSI(GBK) 读取
     $runnerPath = Join-Path ([IO.Path]::GetTempPath()) ("lat3ncy-toast-{0}.ps1" -f [guid]::NewGuid().ToString('n'))
     $runner = @(
       'param([string]$ToastScript, [string]$Title, [string]$Message)',
       '& $ToastScript -Title $Title -Message $Message'
     ) -join [Environment]::NewLine
-    $utf8 = New-Object System.Text.UTF8Encoding $false
-    [IO.File]::WriteAllText($runnerPath, $runner, $utf8)
+    $utf8Bom = New-Object System.Text.UTF8Encoding $true
+    [IO.File]::WriteAllText($runnerPath, $runner, $utf8Bom)
 
     try {
       return Start-ToolboxNotifyProcess -FilePath 'powershell.exe' -Arguments @(

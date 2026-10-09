@@ -1,7 +1,15 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 function Get-ThemeConfig
 {
+  # 进程内记忆化：每个脚本进程都会调用一次，实测解析约 75ms。
+  # 目前每个进程只读到一次，所以收益很小；但 Apply-ThemeNow 这类会间接再读，
+  # 而且缓存后调用方可以放心多次取配置。
+  if ($script:ThemeConfigCache)
+  {
+    return $script:ThemeConfigCache
+  }
+
   $configFile = Join-Path $PSScriptRoot 'config.toml'
   $config = @{
     general = @{
@@ -108,6 +116,7 @@ function Get-ThemeConfig
     }
   }
 
+  $script:ThemeConfigCache = $config
   return $config
 }
 
@@ -213,7 +222,10 @@ function Get-ExistingThemeTaskTime
 
 function Get-ThemeScheduleTimes
 {
-  param($Config = $null)
+  param(
+    $Config = $null,
+    [switch]$ForceRefresh
+  )
 
   if (-not $Config)
   {
@@ -233,10 +245,30 @@ function Get-ThemeScheduleTimes
     }
   }
 
+  $today = (Get-Date).Date
+
+  # 1) 同一天就复用：若今天已经校准过 Theme-Light / Theme-Dark，直接复用已注册时间，绝不跑网络。
+  # 彻底解决日志里 source=ip 占绝大多数、每次解锁/切换都在开局吃 1.5 秒 HTTP 的问题。
+  if (-not $ForceRefresh)
+  {
+    $existingRise = Get-ExistingThemeTaskTime -TaskName 'Theme-Light'
+    $existingSet = Get-ExistingThemeTaskTime -TaskName 'Theme-Dark'
+    if ($existingRise -and $existingSet -and ($existingRise.Date -eq $today) -and ($existingSet.Date -eq $today))
+    {
+      return [pscustomobject]@{
+        RiseTime = $existingRise
+        SetTime = $existingSet
+        TriggerMode = 'sun'
+        Source = 'existing-task'
+      }
+    }
+  }
+
+  # 2) 任务时间不是今天（例如 00:10 首次更新当天、或无任务、或 ForceRefresh），走网络经纬度计算
   $coords = Get-ThemeCoordinates -Config $Config
   if ($coords)
   {
-    $sun = Get-ThemeSunTimes -Lat $coords.Lat -Lon $coords.Lon
+    $sun = Get-ThemeSunTimes -Lat $coords.Lat -Lon $coords.Lon -Date (Get-Date)
     if ($null -ne $sun)
     {
       return [pscustomobject]@{
@@ -248,22 +280,28 @@ function Get-ThemeScheduleTimes
     }
   }
 
-  # 1) 复用已注册的 Theme-Light / Theme-Dark 时间  2) 再退到 config 里的固定备用时间
-  $existingRise = Get-ExistingThemeTaskTime -TaskName 'Theme-Light'
-  $existingSet = Get-ExistingThemeTaskTime -TaskName 'Theme-Dark'
+  # 3) 网络失败：退回到已有任务的时间（投影到今天），日出日落每天仅差约 1 分钟，远比写死 07:00/19:00 准
+  if (-not $existingRise -or -not $existingSet)
+  {
+    $existingRise = Get-ExistingThemeTaskTime -TaskName 'Theme-Light'
+    $existingSet = Get-ExistingThemeTaskTime -TaskName 'Theme-Dark'
+  }
   if ($existingRise -and $existingSet)
   {
     return [pscustomobject]@{
-      RiseTime = $existingRise
-      SetTime = $existingSet
+      RiseTime = $today.Add($existingRise.TimeOfDay)
+      SetTime = $today.Add($existingSet.TimeOfDay)
       TriggerMode = 'sun'
-      Source = 'existing-task'
+      Source = 'existing-task-projected'
     }
   }
 
+  # 4) 最终兜底：使用 config 里的固定备用时间（投影到今天）
+  $fLight = [datetime]::Parse($fallbackLight)
+  $fDark = [datetime]::Parse($fallbackDark)
   return [pscustomobject]@{
-    RiseTime = [datetime]::Parse($fallbackLight)
-    SetTime = [datetime]::Parse($fallbackDark)
+    RiseTime = $today.Add($fLight.TimeOfDay)
+    SetTime = $today.Add($fDark.TimeOfDay)
     TriggerMode = 'sun'
     Source = 'fallback'
   }
@@ -523,7 +561,7 @@ function Sync-ThemeFileCursors
   if (-not $themePath -or -not (Test-Path -LiteralPath $themePath -PathType Leaf))
   {
     Write-ThemeLog 'Cursor theme file skip: CurrentTheme missing'
-    return
+    return $false
   }
 
   # 第一次改 CurrentTheme 前留一份备份，避免写坏 UTF-16 .theme。
@@ -630,6 +668,14 @@ function Sync-ThemeFileCursors
     $text += $newline
   }
 
+  # 内容没变就不要重写：整份 .theme 重写既慢，又会在解锁/唤醒瞬间和并发的
+  # Theme-Apply-Cursors 抢同一把文件锁（日志里 6 次「正由另一进程使用」都出在这里）。
+  $original = if ($isUnicode) { $unicode.GetString($bytes, 2, $bytes.Length - 2) } else { [Text.Encoding]::UTF8.GetString($bytes) }
+  if ($text -ceq $original)
+  {
+    return $false
+  }
+
   if ($isUnicode)
   {
     [IO.File]::WriteAllBytes($themePath, ($unicode.GetPreamble() + $unicode.GetBytes($text)))
@@ -639,6 +685,114 @@ function Sync-ThemeFileCursors
     [IO.File]::WriteAllText($themePath, $text, (New-Object Text.UTF8Encoding $false))
   }
   Write-ThemeLog ("Cursor theme file synced: {0}" -f $themePath)
+  return $true
+}
+
+function Test-ThemeFileCursorPaths
+{
+  param(
+    [Parameter(Mandatory = $true)]$Roles,
+    [Parameter(Mandatory = $true)]$Paths,
+    [Parameter(Mandatory = $true)][string]$SchemeName
+  )
+
+  # 只读检查 .theme 的 [Control Panel\Cursors] 段是否已经等于目标值。
+  # 读不了、或段里缺项都算「不确定」，返回 $false 让调用方走完整路径，绝不猜。
+  $themesKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes'
+  $themePath = (Get-ItemProperty -LiteralPath $themesKey -Name CurrentTheme -ErrorAction SilentlyContinue).CurrentTheme
+  if (-not $themePath -or -not (Test-Path -LiteralPath $themePath -PathType Leaf))
+  {
+    return $false
+  }
+
+  try
+  {
+    $bytes = [IO.File]::ReadAllBytes($themePath)
+    $isUnicode = ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE)
+    $text = if ($isUnicode) { [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2) } else { [Text.Encoding]::UTF8.GetString($bytes) }
+  }
+  catch
+  {
+    return $false
+  }
+
+  $inSection = $false
+  $found = @{}
+  foreach ($line in [regex]::Split($text, '\r\n|\n|\r'))
+  {
+    if ($line -match '^\[(.+)\]\s*$')
+    {
+      $inSection = ($matches[1] -eq 'Control Panel\Cursors')
+      continue
+    }
+    if ($inSection -and $line -match '^([^=]+)=(.+)$')
+    {
+      $found[$matches[1].Trim()] = $matches[2].Trim()
+    }
+  }
+
+  foreach ($role in $Roles)
+  {
+    if (-not $found.ContainsKey($role.Name))
+    {
+      return $false
+    }
+    $want = ([string]$Paths[$role.Name]).TrimEnd('\')
+    $have = ([string]$found[$role.Name]).TrimEnd('\')
+    if (-not [string]::Equals($want, $have, [StringComparison]::OrdinalIgnoreCase))
+    {
+      return $false
+    }
+  }
+
+  if (-not $found.ContainsKey('SchemeName') -or $found['SchemeName'] -ne $SchemeName)
+  {
+    return $false
+  }
+  return $true
+}
+
+function Test-CursorSchemeApplied
+{
+  param(
+    [Parameter(Mandatory = $true)]$Roles,
+    [Parameter(Mandatory = $true)]$Paths,
+    [Parameter(Mandatory = $true)][string]$SchemeName
+  )
+
+  # 注册表里 17 个角色已指向目标文件、且 .theme 也一致 -> 本次套用是白做的。
+  # 颜色那条走「值相同就跳过」的幂等检查，指针这条同理：实测 47% 的套用发生在
+  # 上一次套用后 3 秒内（解锁/切回控制台连发），这些全是可以省掉的。
+  $key = 'HKCU:\Control Panel\Cursors'
+  try
+  {
+    $props = Get-ItemProperty -LiteralPath $key -ErrorAction Stop
+  }
+  catch
+  {
+    return $false
+  }
+
+  if ($null -eq $props.'Scheme Source' -or [int]$props.'Scheme Source' -ne 1)
+  {
+    return $false
+  }
+
+  foreach ($role in $Roles)
+  {
+    if (-not $props.PSObject.Properties.Name.Contains($role.Name))
+    {
+      return $false
+    }
+    $want = ([string]$Paths[$role.Name]).TrimEnd('\')
+    $have = ([string]$props.($role.Name)).TrimEnd('\')
+    if (-not [string]::Equals($want, $have, [StringComparison]::OrdinalIgnoreCase))
+    {
+      return $false
+    }
+  }
+
+  return (Test-ThemeFileCursorPaths -Roles $Roles -Paths $Paths -SchemeName $SchemeName)
 }
 
 function Disable-AccessibilityCursorOverlay
@@ -747,70 +901,79 @@ function Set-WindowsCursorScheme
     $paths.SizeAll, $paths.UpArrow, $paths.Hand, $paths.Person, $paths.Pin
   ) -join ','
 
-  $key = 'HKCU:\Control Panel\Cursors'
-  $schemesKey = 'HKCU:\Control Panel\Cursors\Schemes'
-  if (-not (Test-Path -LiteralPath $schemesKey))
-  {
-    New-Item -Path $schemesKey -Force | Out-Null
-  }
-
-  Set-ItemProperty -LiteralPath $schemesKey -Name $schemeName -Value $schemeValue -Type String
-  # REG_SZ 方案名；鼠标属性读的是这个默认值。
-  Set-ItemProperty -LiteralPath $key -Name '(default)' -Value $schemeName -Type String
-  Set-ItemProperty -LiteralPath $key -Name 'Scheme Source' -Value 1 -Type DWord
-
-  # 不写 CursorBaseSize / CursorSize，也不调用 SetSystemCursor。
-  # powershell.exe 不感知 DPI。它用 SetSystemCursor 塞 64px 句柄时，
-  # 200% 缩放的系统会再放大成 128；登录/主题重载又按注册表加载 64，于是一会儿大一会儿小。
-  # 持久化只写注册表路径和 .theme。当前会话用 SPI_SETCURSORS 让系统自己按 DPI 选尺寸。
-  foreach ($role in $roles)
-  {
-    # REG_EXPAND_SZ：和 Install.inf / 鼠标属性写入类型一致。
-    Set-ItemProperty -LiteralPath $key -Name $role.Name -Value $paths[$role.Name] -Type ExpandString
-  }
-
-  # 辅助功能彩色指针会盖住整套方案。只清颜色，不写 CursorSize。
-  $overlayCleared = $false
-  try
-  {
-    $overlayCleared = Disable-AccessibilityCursorOverlay
-  }
-  catch
-  {
-    Write-ThemeLog ("Cursor overlay clear failed: {0}" -f $_.Exception.Message)
-  }
-
-  try
-  {
-    Sync-ThemeFileCursors -Roles $roles -Paths $paths -SchemeName $schemeName
-  }
-  catch
-  {
-    Write-ThemeLog ("Cursor theme file sync failed: {0}" -f $_.Exception.Message)
-  }
-
-  $setCount = $roles.Count
-  $live = 'registry'
   if (-not ('SystemParametersInfoCursor' -as [type]))
   {
     $spiCode = "using System; using System.Runtime.InteropServices; public static class SystemParametersInfoCursor { [DllImport(`"user32.dll`", SetLastError=true)] public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, System.IntPtr pvParam, uint fWinIni); }"
     Add-Type -TypeDefinition $spiCode -ErrorAction Stop
   }
+
   try
   {
+    # 幂等短路：注册表 17 个角色 + Schemes 方案 + .theme 段都已等于目标值时，绝不再重复写注册表与磁盘。
+    # 只需重发一次 SPI_SETCURSORS，盖掉系统在锁屏后按 .theme 重载的那一拍默认指针。
+    if (Test-CursorSchemeApplied -Roles $roles -Paths $paths -SchemeName $schemeName)
+    {
+      [SystemParametersInfoCursor]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 0x0003) | Out-Null
+      Write-ThemeLog ("Cursor switch skipped (already applied): mode={0} scheme={1} live=rebroadcast dir={2}" -f $Mode, $schemeName, $dir)
+      return $true
+    }
+
+    $key = 'HKCU:\Control Panel\Cursors'
+    $schemesKey = 'HKCU:\Control Panel\Cursors\Schemes'
+    if (-not (Test-Path -LiteralPath $schemesKey))
+    {
+      New-Item -Path $schemesKey -Force | Out-Null
+    }
+
+    Set-ItemProperty -LiteralPath $schemesKey -Name $schemeName -Value $schemeValue -Type String
+    # REG_SZ 方案名；鼠标属性读的是这个默认值。
+    Set-ItemProperty -LiteralPath $key -Name '(default)' -Value $schemeName -Type String
+    Set-ItemProperty -LiteralPath $key -Name 'Scheme Source' -Value 1 -Type DWord
+
+    # 不写 CursorBaseSize / CursorSize，也不调用 SetSystemCursor。
+    # powershell.exe 不感知 DPI。它用 SetSystemCursor 塞 64px 句柄时，
+    # 200% 缩放的系统会再放大成 128；登录/主题重载又按注册表加载 64，于是一会儿大一会儿小。
+    # 持久化只写注册表路径和 .theme。当前会话用 SPI_SETCURSORS 让系统自己按 DPI 选尺寸。
+    foreach ($role in $roles)
+    {
+      # REG_EXPAND_SZ：和 Install.inf / 鼠标属性写入类型一致。
+      Set-ItemProperty -LiteralPath $key -Name $role.Name -Value $paths[$role.Name] -Type ExpandString
+    }
+
+    # 辅助功能彩色指针会盖住整套方案。只清颜色，不写 CursorSize。
+    $overlayCleared = $false
+    try
+    {
+      $overlayCleared = Disable-AccessibilityCursorOverlay
+    }
+    catch
+    {
+      Write-ThemeLog ("Cursor overlay clear failed: {0}" -f $_.Exception.Message)
+    }
+
+    try
+    {
+      Sync-ThemeFileCursors -Roles $roles -Paths $paths -SchemeName $schemeName | Out-Null
+    }
+    catch
+    {
+      Write-ThemeLog ("Cursor theme file sync failed: {0}" -f $_.Exception.Message)
+    }
+
+    $setCount = $roles.Count
     # SPI_SETCURSORS = 0x0057. 让系统按注册表和当前 DPI 自己选尺寸。
     [SystemParametersInfoCursor]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 0x0003) | Out-Null
     $live = 'reloaded'
+
+    Write-ThemeLog ("Cursor switch done: mode={0} scheme={1} set={2}/{3} live={4} overlay={5} dir={6}" -f `
+        $Mode, $schemeName, $setCount, $roles.Count, $live, $overlayCleared, $dir)
+    return $true
   }
   catch
   {
-    Write-ThemeLog ("Cursor SPI_SETCURSORS failed: {0}" -f $_.Exception.Message)
-    $live = 'reload-fail'
+    Write-ThemeLog ("Cursor switch failed: {0}" -f $_.Exception.Message)
+    return $false
   }
-
-  Write-ThemeLog ("Cursor switch done: mode={0} scheme={1} set={2}/{3} live={4} overlay={5} dir={6}" -f `
-      $Mode, $schemeName, $setCount, $roles.Count, $live, $overlayCleared, $dir)
-  return $true
 }
 
 function Set-DesktopWallpaper
@@ -820,6 +983,14 @@ function Set-DesktopWallpaper
   if (-not $ImagePath -or -not (Test-Path -LiteralPath $ImagePath -PathType Leaf))
   {
     return $false
+  }
+
+  # 幂等短路：当前桌面壁纸已经是这张图就别再设一次。
+  # SPI_SETDESKWALLPAPER 带 SPIF_SENDCHANGE，会让整个桌面重绘并广播一次设置变更。
+  if (Test-SameWallpaperPath -Left $ImagePath -Right (Get-DesktopWallpaperPath))
+  {
+    Write-ThemeLog ("Desktop wallpaper unchanged, skipped: {0}" -f $ImagePath)
+    return $true
   }
 
   $code = "using System;`nusing System.Runtime.InteropServices;`npublic class WallpaperNative {`n  [DllImport(`"user32.dll`", CharSet = CharSet.Auto)]`n  public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);`n  public static void SetWallpaper(string path) {`n    SystemParametersInfo(20, 0, path, 3);`n  }`n}"
@@ -857,6 +1028,14 @@ function Get-WallpaperPool
     return @()
   }
 
+  # 进程内缓存：同一次切换里 Resolve-WallpaperImage 会被调用 1~2 次，
+  # 每次都重新枚举目录 + 逐项规范化路径（实测 31~103ms）。目录内容在一次运行内不会变。
+  $cacheKey = '{0}|{1}' -f $directory, $Mode
+  if ($script:WallpaperPoolCache -and $script:WallpaperPoolCache.ContainsKey($cacheKey))
+  {
+    return $script:WallpaperPoolCache[$cacheKey]
+  }
+
   $images = @()
   if ($Mode)
   {
@@ -880,7 +1059,13 @@ function Get-WallpaperPool
     $images = @(Get-WallpaperImageFile -Directory $directory)
   }
 
-  return @($images | Sort-Object FullName)
+  $sorted = @($images | Sort-Object FullName)
+  if (-not $script:WallpaperPoolCache)
+  {
+    $script:WallpaperPoolCache = @{}
+  }
+  $script:WallpaperPoolCache[$cacheKey] = $sorted
+  return $sorted
 }
 
 function ConvertTo-CanonicalPath
@@ -1065,12 +1250,22 @@ function Sync-LockScreenWallpaper
     $source = $ImagePath
   }
 
+  # 子进程里有两处 Wait(-1)（WinRT GetFileFromPathAsync / SetImageFileAsync），
+  # 锁屏态下可能长时间不返回。这里给它一个上限，超时就杀掉并如实记日志，
+  # 不能让整个切换流程被锁屏同步拖着。
+  $timeoutMs = 20000
   try
   {
-    & $winPs @arguments | Out-Null
-    if ($LASTEXITCODE -ne 0)
+    $proc = Start-Process -FilePath $winPs -ArgumentList $arguments -PassThru -WindowStyle Hidden
+    if (-not $proc.WaitForExit($timeoutMs))
     {
-      throw ("exit code {0}" -f $LASTEXITCODE)
+      try { $proc.Kill() } catch { }
+      Write-ThemeLog ("LockScreen sync timeout after {0}s, child killed" -f ($timeoutMs / 1000))
+      return $false
+    }
+    if ($proc.ExitCode -ne 0)
+    {
+      throw ("exit code {0}" -f $proc.ExitCode)
     }
     Write-ThemeLog ("LockScreen synced from {0}" -f $source)
     return $true
@@ -1112,10 +1307,10 @@ function Get-ThemeHiddenAction
   $vbs = @(
     "' Lat3ncy Toolbox - generated by Get-ThemeHiddenAction. Do not edit; re-run Install-ThemeScheduler.ps1."
     'Option Explicit'
-    'Dim sh'
+    'Dim sh, exitCode'
     'Set sh = CreateObject("WScript.Shell")'
-    ('sh.Run "{0}", 0, True' -f $escaped)
-    'WScript.Quit 0'
+    ('exitCode = sh.Run("{0}", 0, True)' -f $escaped)
+    'WScript.Quit exitCode'
   ) -join "`r`n"
   [System.IO.File]::WriteAllText($shimPath, $vbs + "`r`n", [System.Text.Encoding]::ASCII)
 
@@ -1361,9 +1556,10 @@ public static class ThemeRefreshNative {
     if (className != "CabinetWClass" && className != "ExploreWClass") return true;
 
     IntPtr result;
-    SendMessageTimeoutStr(hWnd, WM_SETTINGCHANGE, IntPtr.Zero, "ImmersiveColorSet", SMTO_ABORTIFHUNG, 2000, out result);
-    SendMessageTimeoutPtr(hWnd, WM_THEMECHANGED, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 2000, out result);
-    SendMessageTimeoutPtr(hWnd, WM_DWMCOLORIZATIONCOLORCHANGED, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 2000, out result);
+    // 每个资源管理器窗口 3 条消息；超时收到 1500ms 与广播侧一致（原来各 2000ms，单窗口最坏 6 秒）。
+    SendMessageTimeoutStr(hWnd, WM_SETTINGCHANGE, IntPtr.Zero, "ImmersiveColorSet", SMTO_ABORTIFHUNG, 1500, out result);
+    SendMessageTimeoutPtr(hWnd, WM_THEMECHANGED, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 1500, out result);
+    SendMessageTimeoutPtr(hWnd, WM_DWMCOLORIZATIONCOLORCHANGED, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 1500, out result);
 
     SetExplorerFrameColors(hWnd, _explorerDark != 0);
     RedrawWindow(hWnd, IntPtr.Zero, IntPtr.Zero,
@@ -1407,10 +1603,13 @@ function Send-ThemeBroadcast
   $result = [IntPtr]::Zero
   $flags = [ThemeRefreshNative]::SMTO_ABORTIFHUNG
 
-  # 广播给所有顶层窗口，再点名任务栏和溢出区，提高托盘宿主收到 ImmersiveColorSet 的概率
-  [ThemeRefreshNative]::SendMessageTimeoutStr($broadcast, [ThemeRefreshNative]::WM_SETTINGCHANGE, [IntPtr]::Zero, $SettingName, $flags, 5000, [ref]$result) | Out-Null
-  [ThemeRefreshNative]::SendMessageTimeoutPtr($broadcast, [ThemeRefreshNative]::WM_THEMECHANGED, [IntPtr]::Zero, [IntPtr]::Zero, $flags, 2000, [ref]$result) | Out-Null
-  [ThemeRefreshNative]::SendMessageTimeoutPtr($broadcast, [ThemeRefreshNative]::WM_DWMCOLORIZATIONCOLORCHANGED, [IntPtr]::Zero, [IntPtr]::Zero, $flags, 2000, [ref]$result) | Out-Null
+  # 广播给所有顶层窗口，再点名任务栏和溢出区，提高托盘宿主收到 ImmersiveColorSet 的概率。
+  # 超时收紧到 1500/1000ms：SendMessageTimeout 是同步的，任一顶层窗口「忙但未挂起」就吃满
+  # 整个超时，原来 5000+2000+2000 的单次上限 13 秒、还被调用两次（日志里见过 560 秒卡顿）。
+  # 正常 Explorer/DWM 是毫秒级响应，1.5 秒足够；真正挂起的窗口本来也不该等。
+  [ThemeRefreshNative]::SendMessageTimeoutStr($broadcast, [ThemeRefreshNative]::WM_SETTINGCHANGE, [IntPtr]::Zero, $SettingName, $flags, 1500, [ref]$result) | Out-Null
+  [ThemeRefreshNative]::SendMessageTimeoutPtr($broadcast, [ThemeRefreshNative]::WM_THEMECHANGED, [IntPtr]::Zero, [IntPtr]::Zero, $flags, 1000, [ref]$result) | Out-Null
+  [ThemeRefreshNative]::SendMessageTimeoutPtr($broadcast, [ThemeRefreshNative]::WM_DWMCOLORIZATIONCOLORCHANGED, [IntPtr]::Zero, [IntPtr]::Zero, $flags, 1000, [ref]$result) | Out-Null
 
   foreach ($className in @('Shell_TrayWnd', 'NotifyIconOverflowWindow', 'Progman'))
   {
@@ -1419,8 +1618,8 @@ function Send-ThemeBroadcast
     {
       continue
     }
-    [ThemeRefreshNative]::SendMessageTimeoutStr($hwnd, [ThemeRefreshNative]::WM_SETTINGCHANGE, [IntPtr]::Zero, $SettingName, $flags, 2000, [ref]$result) | Out-Null
-    [ThemeRefreshNative]::SendMessageTimeoutPtr($hwnd, [ThemeRefreshNative]::WM_THEMECHANGED, [IntPtr]::Zero, [IntPtr]::Zero, $flags, 2000, [ref]$result) | Out-Null
+    [ThemeRefreshNative]::SendMessageTimeoutStr($hwnd, [ThemeRefreshNative]::WM_SETTINGCHANGE, [IntPtr]::Zero, $SettingName, $flags, 1000, [ref]$result) | Out-Null
+    [ThemeRefreshNative]::SendMessageTimeoutPtr($hwnd, [ThemeRefreshNative]::WM_THEMECHANGED, [IntPtr]::Zero, [IntPtr]::Zero, $flags, 1000, [ref]$result) | Out-Null
   }
 }
 
@@ -1559,8 +1758,9 @@ function Invoke-ThemeShellRefresh
 
     try
     {
-      Send-ThemeBroadcast -SettingName 'ImmersiveColorSet'
-      Start-Sleep -Milliseconds 100
+      # 只广播一次。原来连发两次（中间 sleep 100ms）是想等第一次广播里忙的窗口腾出手，
+      # 但 Send-ThemeBroadcast 内部本来就对 Shell_TrayWnd / NotifyIconOverflowWindow / Progman
+      # 逐窗口点名重发，第二次全量广播只是在为「某个窗口忙」付第二遍最坏 4.5 秒的账。
       Send-ThemeBroadcast -SettingName 'ImmersiveColorSet'
       $notes += 'broadcast=ok'
     }
@@ -1663,6 +1863,18 @@ function Set-WindowsColorMode
       $Mode, $Config.mode_settings.switch_apps, $Config.mode_settings.switch_system, `
       $before.AppsUseLightTheme, $before.SystemUsesLightTheme, $before.CurrentTheme)
 
+  # 幂等短路：App/System 值本来就等于目标（常见于解锁后重复触发、或登录时已经对齐），
+  # 连注册表都不用写，更不用跑整套 uxtheme 策略刷新 + 两次全窗口广播 + Shell COM 刷新。
+  # 实测这套刷新中位 3 秒、p90 12 秒，里面绝大多数是白做的。
+  $appsAlready = (-not $Config.mode_settings.switch_apps) -or ([int]$before.AppsUseLightTheme -eq $lightValue)
+  $sysAlready = (-not $Config.mode_settings.switch_system) -or ([int]$before.SystemUsesLightTheme -eq $lightValue)
+  if ($appsAlready -and $sysAlready)
+  {
+    Write-ThemeLog ('Mode switch skipped (already {0}): apps={1} system={2} theme={3}' -f `
+        $Mode, $before.AppsUseLightTheme, $before.SystemUsesLightTheme, $before.CurrentTheme)
+    return $false
+  }
+
   if ($Config.mode_settings.switch_apps)
   {
     Set-ItemProperty -LiteralPath $key -Name AppsUseLightTheme -Value $lightValue -Type DWord
@@ -1678,6 +1890,7 @@ function Set-WindowsColorMode
   $after = Get-ThemePersonalizeState
   Write-ThemeLog ('Mode switch done: apps={0} system={1} theme={2}' -f `
       $after.AppsUseLightTheme, $after.SystemUsesLightTheme, $after.CurrentTheme)
+  return $true
 }
 
 function Invoke-ThemeNotify

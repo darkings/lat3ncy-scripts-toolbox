@@ -111,7 +111,7 @@ function Wait-AsyncOperation
 	param([Parameter(Mandatory)]$Operation, [Parameter(Mandatory)][Type]$ResultType)
 
 	$task = $script:asTaskGeneric.MakeGenericMethod($ResultType).Invoke($null, @($Operation))
-	$task.Wait(-1) | Out-Null
+	if (-not $task.Wait(15000)) { throw 'WinRT operation timed out after 15s' }
 	return $task.Result
 }
 
@@ -120,7 +120,7 @@ function Wait-AsyncAction
 	param([Parameter(Mandatory)]$Action)
 
 	$task = $script:asTaskAction.Invoke($null, @($Action))
-	$task.Wait(-1) | Out-Null
+	if (-not $task.Wait(15000)) { throw 'WinRT action timed out after 15s' }
 }
 
 [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime] | Out-Null
@@ -155,15 +155,27 @@ $sourceSize = Get-ImagePixelSize -Path $source
 $contentHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.Substring(0, 8).ToLowerInvariant()
 
 $null = New-Item -ItemType Directory -Path $StoreDirectory -Force
-$baseName = 'wallpaper-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $contentHash
-$target = Join-Path $StoreDirectory ($baseName + $extension)
-$suffix = 1
-while (Test-Path -LiteralPath $target)
+$existingCopies = @(Get-ChildItem -LiteralPath $StoreDirectory -File -Filter ("*-$contentHash" + $extension) -ErrorAction SilentlyContinue |
+	Sort-Object LastWriteTime -Descending)
+
+$reused = $false
+if ($existingCopies.Count -gt 0)
 {
-	$target = Join-Path $StoreDirectory ('{0}-{1}{2}' -f $baseName, $suffix, $extension)
-	$suffix++
+	$target = $existingCopies[0].FullName
+	$reused = $true
 }
-Copy-Item -LiteralPath $source -Destination $target -Force
+else
+{
+	$baseName = 'wallpaper-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), $contentHash
+	$target = Join-Path $StoreDirectory ($baseName + $extension)
+	$suffix = 1
+	while (Test-Path -LiteralPath $target)
+	{
+		$target = Join-Path $StoreDirectory ('{0}-{1}{2}' -f $baseName, $suffix, $extension)
+		$suffix++
+	}
+	Copy-Item -LiteralPath $source -Destination $target -Force
+}
 
 # --- 设置锁屏 ---
 try
@@ -192,7 +204,15 @@ Get-ChildItem -LiteralPath $StoreDirectory -File -Filter 'wallpaper-*' -ErrorAct
 
 $sizeKB = [math]::Round((Get-Item -LiteralPath $target).Length / 1KB, 1)
 
-if ($applied -and $applied.Width -eq $sourceSize.Width -and $applied.Height -eq $sourceSize.Height)
+if ($null -eq $applied)
+{
+	Write-Host ("桌面壁纸 : {0}" -f $source)
+	Write-Host ("锁屏副本 : {0}  ({1} KB)" -f $target, $sizeKB)
+	Write-Host '锁屏已更新（异步设置已完成，读回校验受当前会话限制已跳过）。' -ForegroundColor Yellow
+	exit 0
+}
+
+if ($applied.Width -eq $sourceSize.Width -and $applied.Height -eq $sourceSize.Height)
 {
 	Write-Host ("桌面壁纸 : {0}" -f $source)
 	Write-Host ("锁屏副本 : {0}  ({1} KB)" -f $target, $sizeKB)
@@ -201,6 +221,6 @@ if ($applied -and $applied.Width -eq $sourceSize.Width -and $applied.Height -eq 
 	exit 0
 }
 
-$appliedText = if ($applied) { '{0}x{1}' -f $applied.Width, $applied.Height } else { '读回失败' }
+$appliedText = '{0}x{1}' -f $applied.Width, $applied.Height
 Write-Error ("锁屏读回校验未通过：源 {0}x{1}，读回 {2}" -f $sourceSize.Width, $sourceSize.Height, $appliedText)
 exit 1

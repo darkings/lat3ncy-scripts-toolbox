@@ -25,7 +25,7 @@ function Write-Log
   Add-Content -LiteralPath $LogFile -Value $line -ErrorAction SilentlyContinue
 }
 
-$schedule = Get-ThemeScheduleTimes -Config $config
+$schedule = Get-ThemeScheduleTimes -Config $config -ForceRefresh
 $riseTime = $schedule.RiseTime
 $setTime = $schedule.SetTime
 Write-Log ('Schedule mode: {0} source={1} ({2}, {3})' -f $schedule.TriggerMode, $schedule.Source, $riseTime.ToString('HH:mm'), $setTime.ToString('HH:mm'))
@@ -61,7 +61,11 @@ catch
 try
 {
   $updateScript = Join-Path $PSScriptRoot 'Update-ThemeSchedule.ps1'
-  Repair-ThemeScheduledTaskWindow -TaskName $UpdateTask -ScriptPath $updateScript
+  $existingUpdate = Get-ScheduledTask -TaskName $UpdateTask -ErrorAction SilentlyContinue
+  if (-not $existingUpdate)
+  {
+    Repair-ThemeScheduledTaskWindow -TaskName $UpdateTask -ScriptPath $updateScript
+  }
   Write-Log 'Theme-Schedule-Update: OK'
 }
 catch
@@ -73,9 +77,13 @@ try
 {
   if (Test-Path -LiteralPath $applyScript -PathType Leaf)
   {
-    $applyTrigger = Get-ThemeLogonTrigger
-    Repair-ThemeScheduledTaskWindow -TaskName $ApplyTask -ScriptPath $applyScript -Trigger $applyTrigger
-    Write-Log 'Theme-Apply-Now: OK'
+    $existingApply = Get-ScheduledTask -TaskName $ApplyTask -ErrorAction SilentlyContinue
+    if (-not $existingApply)
+    {
+      $applyTrigger = Get-ThemeLogonTrigger
+      Repair-ThemeScheduledTaskWindow -TaskName $ApplyTask -ScriptPath $applyScript -Trigger $applyTrigger
+      Write-Log 'Theme-Apply-Now: OK'
+    }
   }
 }
 catch
@@ -87,9 +95,13 @@ try
 {
   if (Test-Path -LiteralPath $cursorScript -PathType Leaf)
   {
-    $cursorTriggers = Get-ThemeCursorUnlockTriggers
-    Ensure-ThemeScheduledTask -TaskName $CursorTask -ScriptPath $cursorScript -Trigger $cursorTriggers
-    Write-Log 'Theme-Apply-Cursors: OK'
+    $existingCursor = Get-ScheduledTask -TaskName $CursorTask -ErrorAction SilentlyContinue
+    if (-not $existingCursor)
+    {
+      $cursorTriggers = Get-ThemeCursorUnlockTriggers
+      Ensure-ThemeScheduledTask -TaskName $CursorTask -ScriptPath $cursorScript -Trigger $cursorTriggers
+      Write-Log 'Theme-Apply-Cursors: OK'
+    }
   }
 }
 catch

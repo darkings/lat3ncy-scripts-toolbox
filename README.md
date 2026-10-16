@@ -73,14 +73,16 @@ Raycast 里添加 `tools/raycast-scripts` 目录即可用，可逐个绑 Hotkey�
 | `screenshot-ocr.ps1` | 屏幕区域 OCR（`system` 或 RapidOCR） |
 | `toggle-rgb.ps1` | 开关风扇 + 键盘灯 |
 | `next-wallpaper.ps1` | 换成图池里的下一张壁纸（同时设锁屏） |
-| `codex-switch.ps1` | Codex 状态 / OpenAI / 中转切换 |
+
+> Codex 开关**已迁出本仓库**，改成独立 Raycast 扩展：
+> `C:\Users\Jie\Projects\codex-switch-raycast`（单入口，可在扩展里增删中转）。
 
 ## 需要配置的地方
 
 几个 TOML，都在各自工具目录里，仓库里的模板留空：
 
 - `tools/translate/config.toml`：`engine = "tencent"`。密钥优先读用户环境变量 `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY`，其次读配置文件。密钥缺失/无效会弹 Toast，不会静默回退。
-- `tools/theme-scheduler/config.toml`：`switch_type`、`schedule.trigger_mode`（`sun` / `fixed`）、壁纸目录、`[cursor]` 配色。
+- `tools/theme-scheduler/config.toml`：`switch_type`、`schedule.trigger_mode`（`sun` / `fixed`）、壁纸目录、`[cursor]` 配色、`[keyboard_backlight]` ThinkPad 键盘灯联动。
 - `tools/tts/config.toml` / `tools/audio-switcher/config.toml`：音色、设备关键字。
 
 装依赖（按需）：

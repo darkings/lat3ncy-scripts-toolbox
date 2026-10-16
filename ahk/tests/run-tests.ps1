@@ -166,6 +166,7 @@ try
     (Join-Path $featureRoot 'audio-switcher.ahk'),
     (Join-Path $featureRoot 'switch-app-window.ahk'),
     (Join-Path $featureRoot 'find-mouse.ahk'),
+    (Join-Path $featureRoot 'thinkpad-backlight.ahk'),
     (Join-Path $notifyRoot 'run-nowindow.ahk'),
     (Join-Path $notifyRoot 'ime-hud.ahk'),
     (Join-Path $notifyRoot 'translation-panel.ahk'),
@@ -193,11 +194,10 @@ try
     (Join-Path $raycastRoot 'diagnose-ime-hud-anchor.ps1'),
     (Join-Path $raycastRoot 'toggle-rgb.ps1'),
     (Join-Path $raycastRoot 'next-wallpaper.ps1'),
+    (Join-Path $raycastRoot 'force-dark-titlebar.ps1'),
     (Join-Path $notifyRoot 'build-anchor-locator.ps1'),
     (Join-Path $notifyRoot 'caret-uia.ps1'),
     (Join-Path (Join-Path $featureRoot 'find-mouse') 'build-cursor-size.ps1'),
-    (Join-Path $raycastRoot '_lib\codex-switch.ps1'),
-    (Join-Path $raycastRoot 'codex-switch.ps1'),
     (Join-Path $themeRoot 'ThemeUtils.ps1'),
     (Join-Path $themeRoot 'Update-ThemeSchedule.ps1'),
     (Join-Path $themeRoot 'Install-ThemeScheduler.ps1'),
@@ -230,6 +230,13 @@ try
   if (Test-Path -LiteralPath $legacyNotifyDev)
   {
     throw "legacy shared/notify/dev still exists; old HUD visual tests are gone"
+  }
+  # codex-switch 现在是 Raycast 扩展（C:\Users\Jie\Projects\codex-switch-raycast），
+  # 不再是 Script Command；这里守住，避免旧脚本被重新加回来。
+  $legacyCodexSwitch = Join-Path $raycastRoot 'codex-switch.ps1'
+  if (Test-Path -LiteralPath $legacyCodexSwitch)
+  {
+    throw "legacy tools/raycast-scripts/codex-switch.ps1 still exists; use the codex-switch-raycast extension instead"
   }
 
   $imeHudWinUiExe = Join-Path (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'ime-hud-winui') 'out') 'ImeHudWinUi.exe'

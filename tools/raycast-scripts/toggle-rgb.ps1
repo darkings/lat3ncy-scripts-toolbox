@@ -93,8 +93,7 @@ function Invoke-LightsOffOnce {
 
 function Show-RgbResult {
   param([Parameter(Mandatory = $true)][string]$Text)
-  # 开关灯结果走系统 Toast，不再弹共享 HUD。
-  Show-SystemToast -Title "💡 $Text" -Message '' | Out-Null
+  # 开关灯结果静默执行，夜间避免刺眼 Toast
 }
 
 if (-not (Test-Path -LiteralPath $stateDir)) {

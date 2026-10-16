@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 
 # @raycast.schemaVersion 1
 # @raycast.title Next Wallpaper
@@ -63,7 +63,7 @@ if (-not (Sync-LockScreenWallpaper -Config $config -ImagePath $next)) {
   throw "Desktop changed, but lock screen failed: $([IO.Path]::GetFileName($next))"
 }
 
-Show-SystemToast -Title 'Wallpaper and lock screen updated' -Message ([IO.Path]::GetFileName($next)) | Out-Null
+# 壁纸和锁屏已更换，静默退出不弹 Toast
 exit 0
 }
 finally

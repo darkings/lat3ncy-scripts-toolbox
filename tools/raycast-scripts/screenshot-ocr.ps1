@@ -128,7 +128,7 @@ if ($mode -eq 'rapidocr')
     }
   } else
   {
-    Show-SystemToast -Title '○ OCR 已取消' -Message '未检测到截图，请重新框选' | Out-Null
+    # 放弃或未截图时静默退出，不弹 Toast
   }
   Remove-Item -LiteralPath $resultFile -ErrorAction SilentlyContinue
   exit 0

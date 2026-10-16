@@ -115,12 +115,18 @@ function Resolve-AutoHotkeyV2Executable
 
 function Get-ToolboxAutoHotkeyProcess
 {
-  @(Get-CimInstance Win32_Process |
-      Where-Object {
-        $_.Name -like 'AutoHotkey*.exe' -and
-        $_.CommandLine -and
-        ($_.CommandLine -match $escapedMainScript -or $_.CommandLine -match $toolboxPathPattern)
-      })
+  try {
+    $cimProcs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
+        Where-Object {
+          $_.Name -like 'AutoHotkey*.exe' -and
+          $_.CommandLine -and
+          ($_.CommandLine -match $escapedMainScript -or $_.CommandLine -match $toolboxPathPattern)
+        })
+    if ($cimProcs.Count -gt 0) { return $cimProcs }
+  } catch {}
+
+  # Fallback: 使用原生 Get-Process（免 WMI / CIM 权限限制）
+  return @(Get-Process -Name 'AutoHotkey*' -ErrorAction SilentlyContinue)
 }
 
 # 常驻 ImeHudWinUi.exe 也要一起结束，否则：
@@ -129,13 +135,12 @@ function Get-ToolboxAutoHotkeyProcess
 # main.ahk 启动时会 Warm() 预热，会自己冷启动新的 HUD，所以这里只管停。
 function Stop-ToolboxImeHud
 {
-  $hudProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-      Where-Object { $_.Name -ieq 'ImeHudWinUi.exe' })
+  $hudProcesses = @(Get-Process -Name 'ImeHudWinUi' -ErrorAction SilentlyContinue)
   foreach ($hud in $hudProcesses)
   {
     try
     {
-      Stop-Process -Id $hud.ProcessId -Force -ErrorAction Stop
+      Stop-Process -Id $hud.Id -Force -ErrorAction SilentlyContinue
     }
     catch
     {
@@ -148,11 +153,12 @@ function Stop-ToolboxImeHud
   {
     Start-Sleep -Milliseconds 300
   }
-  $left = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-      Where-Object { $_.Name -ieq 'ImeHudWinUi.exe' })
+  # 已退出但句柄未放空的僵尸条目杀不掉也不需要杀：HasExited 一律视为已清除。
+  $left = @(Get-Process -Name 'ImeHudWinUi' -ErrorAction SilentlyContinue |
+    Where-Object { -not $_.HasExited })
   if ($left.Count -gt 0)
   {
-    throw ("ImeHudWinUi.exe 仍在运行（{0}），新协议不会生效。请用管理员权限重跑本脚本。" -f (($left.ProcessId) -join ', '))
+    throw ("ImeHudWinUi.exe 仍在运行（{0}），新协议不会生效。请用管理员权限重跑本脚本。" -f (($left.Id) -join ', '))
   }
 }
 
@@ -162,7 +168,8 @@ $toolboxProcesses = Get-ToolboxAutoHotkeyProcess
 
 foreach ($process in $toolboxProcesses)
 {
-  Stop-Process -Id $process.ProcessId -Force
+  $targetPid = if ($process.ProcessId) { $process.ProcessId } else { $process.Id }
+  Stop-Process -Id $targetPid -Force -ErrorAction SilentlyContinue
 }
 
 if ($toolboxProcesses)
@@ -179,14 +186,26 @@ if (-not $autoHotkey)
 $workingDirectory = Split-Path $resolvedMainScript -Parent
 $commandLine = '"{0}" "{1}"' -f $autoHotkey, $resolvedMainScript
 
-$createResult = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-  CommandLine = $commandLine
-  CurrentDirectory = $workingDirectory
+$started = $false
+try
+{
+  $createResult = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+    CommandLine = $commandLine
+    CurrentDirectory = $workingDirectory
+  } -ErrorAction Stop
+
+  if ($createResult.ReturnValue -eq 0)
+  {
+    $started = $true
+  }
+}
+catch
+{
 }
 
-if ($createResult.ReturnValue -ne 0)
+if (-not $started)
 {
-  throw ("Failed to launch AutoHotkey process. Return code: {0}" -f $createResult.ReturnValue)
+  Start-Process -FilePath $autoHotkey -ArgumentList @($resolvedMainScript) -WorkingDirectory $workingDirectory -ErrorAction Stop
 }
 
 Start-Sleep -Milliseconds 600
@@ -197,6 +216,7 @@ if (-not $reloadedProcesses)
   throw 'AutoHotkey main.ahk process was not detected after launch'
 }
 
-$processIds = ($reloadedProcesses.ProcessId | Sort-Object -Unique) -join ', '
+$pids = foreach ($p in $reloadedProcesses) { if ($p.ProcessId) { $p.ProcessId } else { $p.Id } }
+$processIds = ($pids | Sort-Object -Unique) -join ', '
 # silent 会关 Raycast 窗口。成功也走系统 Toast，不再弹共享 HUD / stdout。
 Show-SystemToast -Title '✓ AutoHotkey + IME HUD 已重载' -Message ("AHK PID: {0}" -f $processIds) | Out-Null

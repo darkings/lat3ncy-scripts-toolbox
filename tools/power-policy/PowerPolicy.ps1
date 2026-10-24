@@ -99,6 +99,11 @@ $COFFEE_DIR   = Join-Path $env:LOCALAPPDATA 'coffee'
 $COFFEE_STATE = Join-Path $COFFEE_DIR 'state.json'
 $COFFEE_STOP  = Join-Path $COFFEE_DIR 'stop.flag'
 
+# 日志节流与轮转用的状态
+$script:LogWriteCount  = 0
+$script:LastLoggedSig  = $null
+$script:LastLoggedAt   = $null
+
 function Write-Log([string]$msg) {
     $line = "{0}  {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
     Write-Host $line
@@ -108,6 +113,16 @@ function Write-Log([string]$msg) {
             $null = New-Item -ItemType Directory -Path $logDir -Force
         }
         Add-Content -Path $LogPath -Value $line -Encoding utf8
+
+        # 日志轮转：常驻工具会长期写，不轮转会无限增长
+        # （迁移前的旧日志涨到了 19 MB）。每 200 次写入检查一次，超 3000 行保留最后 2000 行。
+        $script:LogWriteCount++
+        if ($script:LogWriteCount % 200 -eq 0) {
+            $all = @(Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue)
+            if ($all.Count -gt 3000) {
+                $all[-2000..-1] | Set-Content -LiteralPath $LogPath -Encoding utf8
+            }
+        }
     } catch {}
 }
 
@@ -832,7 +847,19 @@ function Invoke-LidPolicy {
     if (-not $lidOpen -and $null -ne $closedMin) {
         $graceText = " | 已合盖 $([math]::Round($closedMin,1)) 分钟（$([math]::Round($DcHibernateSeconds/60,0)) 分钟后转 S4）"
     }
-    Write-Log "盖子=$lidText | $acText | Caffeine=$cafText -> LIDACTION=$lidActionText$graceText"
+
+    # 状态日志节流：只在状态变化时写，此外每 30 分钟打一行心跳。
+    # 5 秒轮询若每轮都写，一天约 17k 行（≈1 MB），迁移前的旧日志因此涨到 19 MB。
+    $sig = "$lidText|$acText|$cafText|$lidActionText"
+    $now = Get-Date
+    $needLog = ($sig -ne $script:LastLoggedSig) -or
+               ($null -eq $script:LastLoggedAt) -or
+               (($now - $script:LastLoggedAt).TotalMinutes -ge 30)
+    if ($needLog) {
+        $script:LastLoggedSig = $sig
+        $script:LastLoggedAt  = $now
+        Write-Log "盖子=$lidText | $acText | Caffeine=$cafText -> LIDACTION=$lidActionText$graceText"
+    }
 
     if ($DryRun) {
         Write-Log '  (DryRun) 不实际变更'

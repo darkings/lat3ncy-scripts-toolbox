@@ -84,7 +84,11 @@ Raycast 的 Coffee 扩展在 worker 启动时写 `state.json`（含 `pid`），�
 %LOCALAPPDATA%\lat3ncy-toolbox\power-policy.log
 ```
 
-每 5 秒一行状态；`[LIDACTION] 已切换为 ...` 只在真正的切换瞬间出现一次。
+写入策略：
+
+- **状态行节流**：只在「盖子 / 供电 / Caffeine / LIDACTION」任一变化时写一行，另外每 30 分钟打一行心跳。5 秒轮询不会刷屏（迁移前的旧实现每轮都写，日志涨到 19 MB）。
+- **轮转**：每 200 次写入检查一次，超过 3000 行只保留最后 2000 行。
+- `[LIDACTION] 已切换为 ...` 只在真正的切换瞬间出现一次。
 
 ## 已知坑（都实际踩过）
 

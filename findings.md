@@ -127,3 +127,86 @@ powershell -NoProfile -Command "\$e=\$null; [void][Management.Automation.Languag
 - `tools/audio-switcher/AudioSwitcher.cs`、`ahk/features/audio-switcher.ahk`、`ahk/features/speak-selected-text.ahk`、`tools/tts/tts_player.py`、`shared/notify/toast.ps1`、`tools/raycast-scripts/_lib/notify.ps1`
 - `tools/rgb/ambient.py`、`hi75.py`、`hi75_data/*.bin`、`lib/{mss,openrgb,dxcam,comtypes}`、`lib_hid/hid.pyd`、`config.toml`；OpenRGB 由系统服务提供，不入库
 - 测试契约 `ahk/tests/run-tests.ahk:483` 11 项、`ahk/tests/run-tests.ps1`（含 RGB/Theme AST）+ `ambient --bench / --dry-run`
+
+## 研究：腾讯移动应用引擎 (Androws) 标题栏自适应深浅模式
+
+### 现象与根因
+- 腾讯移动应用引擎（`Androws.exe` / `AndrowsStore.exe`）窗口标题栏在 Windows 开启深色模式后始终保持纯白/浅灰（`#F0F2F7`）。
+- **根因链**：
+  1. 标题栏并非 Windows 原生非客户区，而是 Qt 5 在客户区最上层自绘的控件（`QWidget#titlebar`），内置 QSS 将背景硬编码为白色，且无深色模式资源。
+  2. 程序清单强制 `requireAdministrator`，存在 Windows UIPI 权限隔离，外部常规程序调用 `DwmSetWindowAttribute` 被系统拒绝（`0x80070006`）。
+  3. DWM 美化工具（Mica For Everyone 等）仅作用于底层非客户区，被上层 Qt 白色控件完全遮挡。
+  4. 外部透明浮层（Overlay）在 3D 渲染交换链上方会导致高频 Z-fighting 频闪，无法用于生产。
+- **决策**：
+  - 工具箱不保留侵入式浮层；`tools/raycast-scripts/force-dark-titlebar.ps1` 保留参数净化与 `-Silent` 健壮性修复。
+  - 需要单窗口、原生深浅跟随与比例保持的用户推荐使用独立模拟器方案（如 MuMu 12 单应用独立窗口模式）或 Scrcpy 极客封装。
+
+
+## 2026-10-21：摇动找鼠标留下的脏光标 + 能被永久挂死的 AHK 线程
+
+### 现象与证据
+- `%LOCALAPPDATA%\lat3ncy-toolbox\startup.log`：10:58–11:23 之间 watchdog 连续 6 次重启 `main.ahk`，且**没有任何一条 `main.ahk 退出` 记录** → 全是硬杀（`tools/startup/Start-Toolbox.ps1:204` 的 `Stop-Process -Force`），`OnExit` 不会执行。
+- 放大走 `ahk\features\find-mouse\cursor-size.cs` 的 `SetSystemCursor`，**全局**替换 6 个系统光标；还原只有一条路：`FindMouse.OnExit → Stop → SendSizer("rest")`，外加 1400ms 的还原计时器。硬杀 = 没人还原，光标停在放大态，直到下次正常启动/换方案。
+- `SendSizer` 的 `connect/send/recv` 全是阻塞调用且无超时（`find-mouse.ahk`）。助手一旦挂住，AHK 主线程永久堵在 `recv` 上——热键全失效，外部只看到"AHK 没启动"。
+- 助手自身是单线程、单连接、没有 Accept/Read 超时：一个**半开连接**（连上不发数据）就能把它堵死，后续所有请求排队。
+- 坑：从受限令牌的子进程里 `Process.GetProcessById(活的父进程)` 会抛 `ArgumentException: 进程当前未运行`（本机实测，即使父进程确实活着）。**"查 PID 判父进程存活"在这台机器上会静默失效**，不能作为唯一机制。
+
+### 修复
+| 文件 | 改动 |
+|---|---|
+| `cursor-size.cs` | **父进程守护换成命名互斥体**：AHK 以拥有者身份持有，助手 `OpenMutex` + `WaitForSingleObject`；互斥体被放弃（AHK 被强杀/崩溃）即还原并退出，实测 122ms。`rest` 逐条还原失败时回退 `SPI_SETCURSORS` 整表重载；`stop` 也先还原。助手捕获单客户端 IO 异常 + 收发超时（250ms/2s），半开连接不再带走整个助手；端口被占时安静退出（码 3）。 |
+| `find-mouse.ahk` | `SO_RCVTIMEO/SO_SNDTIMEO = 600ms`，`recv` 超时返回 `timeout`；把自身 PID + 互斥体名交给助手；启动时回收上一轮留下的孤儿助手（rest → stop → 等端口释放）；`csc` 编译加 15s 超时。 |
+| `run-tests.ahk` | 新增契约断言：互斥体、socket 超时、孤儿回收、`SPI_SETCURSORS` 回退、`ReceiveTimeout`。 |
+
+### 验证
+- `ahk\tests\run-tests.ps1` 全绿（含 `PASS: core assertions`）。
+- 端到端（`default-workspace\fix\verify3.ps1`）：独立进程建互斥体 → 助手启动并应答 `rest` → **`Stop-Process -Force` 持有者后助手 115–122ms 退出并释放端口**；名字指向不存在的持有者时助手立刻退出。
+- 半开连接下第二次 `rest` 仍在 ~160ms 内应答。
+- 未验证（需手动）：真实摇动放大后 1.4s 的视觉还原——摇一次，确认光标恢复原尺寸。
+
+### 结论
+"鼠标点击后移不动"本身是 Windows 侧的问题（窗口模态拖拽循环 `SetCapture+ClipCursor`、左键 down 未配平、输入设备掉线），**不是**这个放大功能的直接后果；但上面两条是真实缺陷，会分别留下"光标变大不还原"和"热键全失效（看起来像 AHK 没启动）"。
+
+## 2026-10-21（续）：摇动找鼠标「甩很久才放大 / 有时怎么甩都不放大」
+
+### 根因
+`FindMouse.Observe` 是**逐样本**判轴：每个 16ms 采样都要求 `|dx| ≥ 2|dy|` 或反之。真实甩动带一点弧度（单样本 5px/3px，比值 1.67）就整段被丢掉——位移丢了但 `LastX/LastY` 已经前进，于是这条腿永远凑不够 `MinDistance`；斜着甩/画圈则**任何样本都不满足 2:1**，一次都不会触发。再叠加 `ReverseCount=3`（要甩满 4 条腿），手感就是"要甩很久"。
+
+### 修复
+| 项 | 旧 | 新 | 理由 |
+|---|---|---|---|
+| 判轴 | 逐样本 2:1 | **按整条腿的净位移**定轴（`AxisMinPx=8` 后锁定） | 带弧度/略斜的甩动不再丢位移 |
+| 反向判据 | 同轴反向 + 每腿 ≥40px | 相对**本腿最远点**往回走 ≥ `MinDistance` | 语义更准，也更容易满足 |
+| `ReverseCount` | 3（4 条腿） | **2**（3 条腿） | 一次半来回就够 |
+| `MinDistance` | 40 | 24 | 正常甩动 30–80px 就够 |
+| `LegMaxMs` | 450 | 320 | "慢腿=日常瞄准修正"这条要收紧才不误触 |
+| `IdleResetMs` | 450 | 400 | 同上 |
+| 诊断 | 无 | 状态文件新增 7 个计数器 | 见下 |
+
+### 现场计数器（`%TEMP%\lat3ncy-find-mouse-status.txt`，每秒刷新）
+- `ButtonBlocks` 涨 → 有按键状态卡住（和"点击后移不动"同源），整个检测被 `ResetMotion` 每帧清掉；
+- `SlowLegs` 涨 → 甩得太慢（每腿 >320ms）；
+- `ShortLegs` 涨 → 幅度不够（<24px）；
+- `Reversals` 涨但 `Triggers` 不涨 → 节奏/间隔问题；
+- `LastSizerResult` 不是 `ok` → 助手链路问题（`unavailable`/`timeout`/`connect`）。
+
+### 验证
+`ahk\tests\run-tests.ps1` 全绿；新增用例覆盖：带垂直漂移的甩动必须触发、慢腿不触发、10px 抖动不触发、停顿清零、跨屏清零、竖直甩动同样触发。已重载工具箱（PID 7804），状态文件确认新字段生效。
+
+## 2026-10-21（三）：调过头了——"随意一晃就放大"
+
+### 根因
+上一版把 `ReverseCount` 压到 2、`MinDistance` 压到 24，只要出现两次快速反向就放大。而日常用鼠标几乎必然产生"过头再修正"这种单次反向；连着两次（比如移到按钮旁再挪一下）就满足了。**缺的不是阈值，是"原地摇"与"顺手抖一下"的区分。**
+
+### 修复：净位移 / 累计腿长
+新增 `MaxNetRatio = 0.6`：连击结束时算 `net = |当前点 - 连击起点|`、`travel = Σ各腿行程`。
+- 真摇动绕着自己起点来回：三次等幅反向 → net ≈ L、travel ≈ 3L → **比值 ≈ 0.33**；
+- 移到 400px 外再抖两下：net ≈ 370、travel ≈ 460 → **比值 ≈ 0.80** → 拒绝并清空连击。
+
+配套：`ReverseCount` 3（四腿≈两个来回，轴判定修好后真摇一次能攒够）、`MinDistance` 30、`MaxIntervalMs` 400、`IdleResetMs` 380。
+
+### 诊断
+状态文件新增 `NetRejects`（被净位移判据否掉次数）、`StreakTravel`（当前连击累计行程）。
+
+### 验证
+`run-tests.ps1` 全绿；新增用例「移到 400px 外再抖两下不得放大」与「两个来回的真摇动必须放大」同时通过。

@@ -22,6 +22,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\startup\Start-Toolbo
 Get-Content "$env:LOCALAPPDATA\lat3ncy-toolbox\startup.log" -Tail 20
 ```
 
+**看护任务（防 AHK 消失）**：`Lat3ncyToolbox-Watchdog` 在登录时以及之后每 5 分钟检查一次 `ahk/main.ahk`，不在就调用 `Start-Toolbox.ps1` 拉起。启动方式是 `wscript.exe //B tools\startup\Watchdog-Launch.vbs`（VBS 里写死路径，任务参数没有嵌套引号），不分配控制台。
+
+```powershell
+# 注册/更新（需要管理员；任务注册在普通权限下会被拒）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\startup\Install-ToolboxWatchdog.ps1
+# 查看
+schtasks /query /tn "Lat3ncyToolbox-Watchdog" /fo LIST
+Get-Content "$env:LOCALAPPDATA\lat3ncy-toolbox\startup.log" -Tail 20
+```
+
+启动文件夹的快捷方式也必须指向仓库自有的 `tools\startup\Toolbox-Launch.vbs`（不要再引用仓库外的 VBS，也不要往快捷方式里塞嵌套引号）。
+
 跑测试：
 
 ```powershell
@@ -114,6 +126,8 @@ python tools\rgb\ambient.py --dry-run --time 5
 
 ## 通知约定
 
+- **HUD 卡死自愈**：`ImeHudWinUi.exe` 在锁屏/切显示器后可能死锁（窗口还在、消息循环不响应 → 中英文切换没有提示）。客户端发送前检测 `IsHungAppWindow`，超时后结束卡死进程并冷启动重试，并每 20 秒巡检一次。HUD 日志按 `out\ImeHudWinUi.log` → `%LOCALAPPDATA%\lat3ncy-toolbox\` → `%TEMP%` 依次尝试写；受限令牌下只有 exe 同目录可写。AHK 侧日志在 `%TEMP%\ImeHudClient.log`（`hud-hung` / `hud-restart` / `send-failed`）。
+- **首次显示延迟（2026-10-24 实测）**：稳态 `CapsLock → 芯片` **16–31ms**。已修掉两个慢路径：① 光标助手原来 15 分钟过期，之后第一次按键要等它重启并建无障碍树（实测 **859ms**）→ 改为 12 小时寿命 + 20 秒巡检保活；② 无光标时助手一轮发布间隔超过新鲜窗口，导致每次都被判成“没有答案”，白等 350ms 再白调 500ms locator → 助手改 `-Attempts 1`、新鲜窗口 700ms，且新鲜的 `NOCARET` 直接跳过等待与 locator。HUD 冷启动也改成“等能应答再发”（600ms × 3 次重试，而非 2.5s × 2）。唯一残留慢路径：AHK 刚启动不到 1 秒就按键，要等助手首次建树（约 1s）。
 功能模块统一用 `Notify.State() / Info() / Success() / Error()`，不要自己造 GUI 或直接 `ToolTip`。状态类走 WinUI HUD（失败回退 AHK 芯片），成功/失败走系统 Toast。改了锚点或 HUD 代码后必须重编译锚点、重发布 HUD 再重载 AHK，否则常驻进程里跑的还是旧 exe。
 
 ## 仓库结构

@@ -210,3 +210,78 @@ powershell -NoProfile -Command "\$e=\$null; [void][Management.Automation.Languag
 
 ### 验证
 `run-tests.ps1` 全绿；新增用例「移到 400px 外再抖两下不得放大」与「两个来回的真摇动必须放大」同时通过。
+
+## 2026-10-24：合盖睡眠策略——从"自己调睡眠 API"退回"只改电源设置"
+
+设备：ThinkPad T14p Gen 3，只有 S0 Modern Standby 与 S4，**没有 S3**（固件 + Device Guard）。术语沿用本机约定：**睡眠 = S4**（恢复见 BIOS logo），**休眠 = S0**（开盖即亮）。
+
+需求最终形态：合盖就进 S0；插电永不转 S4，电池 60 分钟转 S4；**Caffeine 开着则完全不睡**；其它任何程序都不能阻止睡眠。
+
+### 决定性依据：Caffeine 挡不住合盖
+
+Microsoft 对 `SetThreadExecutionState` 的说明：
+
+> It cannot prevent sleep caused by the user pressing the power button or closing the lid. This function only affects automatic sleep triggered by an idle timeout.
+
+Raycast Coffee、PowerToys Awake、Insomnia 用的都是这个 API，**所以"设了 Caffeine 就不睡"必须由外部改写电源设置来实现**，不存在原生方案。能改的只有 `LIDACTION`（子组 `SUB_BUTTONS`，GUID `5ca83367-6e45-459f-a27b-476b1d01c936`）。
+
+另外 `PowerSetRequest` 文档提到：电池供电的 Modern Standby 上，`SystemRequired` 请求会在睡眠超时到达后 5 分钟被系统切断。
+
+### 实测：谁关的屏，决定能不能睡着
+
+解析 `powercfg /sleepstudy` 的 `ScenarioInstances`（一个月的会话），按 `EnterReason` 统计 Type=1 会话的睡眠转化率：
+
+| EnterReason | 转化率 |
+|---|---|
+| `Video Idle Timeout` | 2/61 = **3%** |
+| `SC_MONITORPOWER` | 28/85 = 32% |
+| `PDC Task Client: Maintenance Scheduler` | 12/15 = 80% |
+| `Lid`（Windows 原生合盖） | 5/6 = **83%** |
+| `Power Button` / `Restricted Standby Budget Exceeded` | 100% |
+
+结论：**别自己关屏，让 Windows 走原生合盖路径**。脚本只维护 `LIDACTION`：Caffeine 开 → 0（不操作）；关 → 1（睡眠）。
+
+未入睡的会话在 sleepstudy 里的特征是 `TopBlockers = "No CS Phase" 99%`（PDC 从未进入 CS 相位），表现为"屏幕关着但 CPU 全速跑"。实测 34 分钟掉 6%（≈7.8 W）。
+
+### 三个把机器搞坏的坑
+
+**1. `SetSuspendState(force=TRUE)` 会被固件回落成 S4**
+
+本机无 S3，强制挂起等于休眠。证据链：`Kernel-Power 42 Reason=4 TargetState=5`（5 = S4）、`Kernel-Boot 27 引导类型=0x2`（走了完整固件 POST）、`hiberfil.sys` 被写入。表现就是合盖即休眠，开盖必见 BIOS logo。
+
+→ 现在**不调用任何睡眠 API**。
+
+**2. 类型编译带副作用：注释写"可接受"，实际致命**
+
+旧代码用 `if (-not ('LidPolicy.Display' -as [type])) { Set-DisplayOff }` 来顺带编译 C# 类型，注释是"副作用为一次关屏，可接受"。但 `Set-DisplayOff` 会真的发 `SC_MONITORPOWER`。而合盖事件任务每次都是**全新进程**，类型永远未编译 → **每次合盖都发一次关屏**，把 Caffeine 开着的情况也睡掉（当天 17:59 合盖后睡 56.7 分钟，60 分钟到点转 S4，开盖见到 logo）。
+
+→ 拆出 `Initialize-DisplayType`，编译与动作彻底分离。
+
+**3. 频繁 `Restart-Service -Force` 把 Lenovo 服务搞死**
+
+`LenovoSmartStandby` 每次从睡眠恢复都会把 `HIBERNATEIDLE` 改回去，旧防漂移逻辑每次都重启服务纠正。10-24 一天重启 7 次后服务变成 `Stopped` 起不来，于是 `Lenovo-Power-SmartStandby/Operational` 不再记录 `Lid has been closed/opened`。
+
+脚本靠该日志判断盖子状态，**数据源一断就永久误判**：当天日志出现 14459 条"盖子=打开"对 33 条"盖子=关闭"，中午之后完全失真。而 `LIDACTION` 只由 Caffeine 决定、与盖子状态无关，所以**实际睡眠行为仍然正确，坏的只是可观测性**——这种"静默降级"最难发现。
+
+→ 两条修复：① 只在注册表参数真变时才重启服务，纯数值漂移用 `powercfg` 覆盖；② 防漂移检查增加服务健康检查，停了就 `Start-Service`。
+
+### 另一个必须治的：日志无限膨胀
+
+每 5 秒无条件写一行 → 一天约 17k 行 ≈ 1 MB，迁移前旧日志已涨到 **18.6 MB**。
+
+→ 状态行只在「盖子/供电/Caffeine/LIDACTION」变化时写，另加 30 分钟心跳；每 200 次写入检查一次，超 3000 行保留最后 2000 行。实测 45 秒 9 次轮询只产生 5 行。
+
+### 迁移与看护统一
+
+工具从临时工作区（`deepseek-harness\default-workspace`，随时可能被清理）迁入 `tools/power-policy/`，任务参数随之指向仓库路径。
+
+看护按要求收敛为**一个任务看护两个对象**：`Lat3ncyToolbox-Watchdog` 同时检查 `ahk/main.ahk` 与 `PowerPolicy.ps1 -Run` 常驻进程，逻辑都在 `tools/startup/Ensure-ToolboxRunning.ps1`。
+
+迁移中验证到的两个事实：
+- **非提权进程可以启动 `RunLevel=Highest` 的计划任务**（本机实测），所以看护任务保持 `Limited`、电源任务保持 `Highest` 即可，不必抬高看护任务（抬高会连 AHK 一起提权，破坏 UI 自动化）。
+- `wscript.exe` 静默外壳的命令行里也含 `PowerPolicy.ps1 -Run` 字样，用 CIM 统计实例数时要把 `wscript` 与 `pwsh` 分开算；非提权时又读不到提权进程的 `CommandLine`，会误显示 0 个。**判断"常驻是否在跑"应以日志是否在增长为准**。
+
+### 未验证
+
+- 迁移后的端到端行为（拔电合盖 → 睡 → 开盖瞬亮；插电合盖 70 分钟 → 不转 S4）需要实机跑一次确认。
+- `LenovoSmartStandby` 服务停摆的**诱因**未定位（`Service Control Manager` 日志里没有对应记录），目前是"减少扰动 + 出错自愈"，不是根治。

@@ -274,7 +274,10 @@ AssertEqual(true, HasMethod(CapsLockIme, "IsImeHudEnabled"), "Caps can gate ImeH
 AssertEqual(false, CapsLockIme.IsImeHudEnabled(), "test mode does not launch ImeHud")
 AssertEqual("Lat3ncyImeHudWinUi", ImeHud.WindowClass, "ImeHud production class is WinUI")
 AssertEqual("Lat3ncyImeHudWinUi", ImeHud.WindowTitle, "ImeHud production title is WinUI")
-AssertEqual(2500, ImeHud.MessageTimeout, "ImeHud COPYDATA timeout covers WinUI ShowState")
+AssertEqual(600, ImeHud.MessageTimeout, "ImeHud COPYDATA timeout stays short so a cold HUD retries fast")
+AssertEqual(3, ImeHud.SendAttempts, "ImeHud retries short COPYDATA timeouts before killing the HUD")
+AssertEqual(350, ImeHud.FirstWaitMs, "ImeHud does not block long when the caret helper has no answer yet")
+AssertEqual(43200000, ImeHud.CaretServerMs, "caret helper stays resident for a whole session")
 AssertEqual(true, HasMethod(ImeHud, "Show"), "ImeHud client can show a state")
 AssertEqual(true, HasMethod(ImeHud, "BuildStateCommand"), "ImeHud can format STATE without launching WinUI")
 AssertEqual(true, HasMethod(ImeHud, "SendCopyData"), "ImeHud client sends WM_COPYDATA")
@@ -883,7 +886,7 @@ AssertContains(reloadImeHudSource, "Show-SystemToast", "reload IME HUD reports t
 AssertNotContains(restartAhkSource, "Show-ToolboxNotify", "restart AutoHotkey no longer uses shared HUD")
 AssertNotContains(restartAhkSource, "Write-Output `"✓ $successText`"", "restart AutoHotkey no longer falls back to stdout HUD")
 AssertContains(toggleRgbSource, "@raycast.mode silent", "toggle RGB stays silent so Raycast closes")
-AssertContains(toggleRgbSource, "Show-SystemToast -Title `"💡 $Text`"", "toggle RGB success uses system toast")
+AssertNotContains(toggleRgbSource, 'Show-SystemToast -Title "💡 $Text"', "toggle RGB success stays silent")
 AssertContains(toggleRgbSource, "RGB 灯光已关闭", "toggle RGB reports lights off")
 AssertContains(toggleRgbSource, "RGB 灯光已开启", "toggle RGB reports lights on")
 AssertNotContains(toggleRgbSource, "Show-ToolboxNotify", "toggle RGB no longer uses shared HUD")
@@ -893,7 +896,7 @@ AssertContains(nextWallpaperSource, "Get-NextWallpaperImage", "next wallpaper ad
 AssertContains(nextWallpaperSource, "Get-DesktopWallpaperPath", "next wallpaper starts from the current desktop image")
 AssertContains(nextWallpaperSource, "Set-DesktopWallpaper", "next wallpaper sets the desktop image")
 AssertContains(nextWallpaperSource, "Sync-LockScreenWallpaper", "next wallpaper syncs the same image to the lock screen")
-AssertContains(nextWallpaperSource, "Show-SystemToast -Title 'Wallpaper and lock screen updated'", "next wallpaper success uses system toast")
+AssertNotContains(nextWallpaperSource, "Show-SystemToast -Title 'Wallpaper and lock screen updated'", "next wallpaper success stays silent")
 AssertContains(screenshotOcrSource, "Show-SystemToast -Title '✓ OCR 文本已复制'", "screenshot OCR success uses system toast")
 AssertNotContains(screenshotOcrSource, "Show-ToolboxNotify", "screenshot OCR no longer uses shared HUD")
 AssertNotContains(ocrPySource, "Show-ToolboxNotify", "ocr.py comments no longer mention shared HUD adapter")
@@ -963,6 +966,12 @@ AssertEqual(true, DirExist(A_ScriptDir "\..\..\resources\cursors\dark") != "", "
 AssertEqual(true, FileExist(A_ScriptDir "\..\..\resources\cursors\Agreement.txt") != "", "cursor pack keeps the author license")
 AssertEqual(true, FileExist(A_ScriptDir "\..\..\resources\cursors\light\arrow.cur") != "", "light cursor pack includes arrow.cur")
 AssertEqual(true, FileExist(A_ScriptDir "\..\..\resources\cursors\dark\arrow.cur") != "", "dark cursor pack includes arrow.cur")
+AssertContains(themeConfigSource, "[keyboard_backlight]", "theme config exposes keyboard_backlight section")
+AssertContains(themeUtilsSource, "function Set-ThinkPadKeyboardBacklight", "theme utils defines keyboard backlight setter")
+AssertContains(themeUtilsSource, "function Test-ThinkPadCapability", "theme utils defines ThinkPad capability test")
+AssertContains(themeLightSource, "Set-ThinkPadKeyboardBacklight -Mode 'light'", "light theme sets light backlight")
+AssertContains(themeDarkSource, "Set-ThinkPadKeyboardBacklight -Mode 'dark'", "dark theme sets dark backlight")
+AssertContains(themeApplySource, "Set-ThinkPadKeyboardBacklight -Mode `$desired", "theme apply aligns backlight on logon")
 AssertContains(themeUpdateSource, "Repair-ThemeScheduledTaskWindow", "theme schedule updater keeps hidden actions")
 AssertContains(foregroundSource, "return this.Restart(_hotkeyName)", "explorer Caps+Q reuses Caps+R entry")
 AssertContains(foregroundSource, "this.RestartExplorer()", "explorer restart still has dedicated path")
@@ -1072,7 +1081,7 @@ AssertContains(imeHudClientSource, "User32\FindWindowW", "IME HUD client finds t
 findWindowStart := InStr(imeHudClientSource, "static FindWindow(")
 AssertEqual(true, findWindowStart > 0, "IME HUD client has a FindWindow lookup")
 AssertNotContains(SubStr(imeHudClientSource, findWindowStart), "WinExist(", "IME HUD window lookup does not skip the hidden resident window")
-AssertContains(imeHudClientSource, "MessageTimeout := 2500", "IME HUD COPYDATA timeout covers WinUI ShowState")
+AssertContains(imeHudClientSource, "MessageTimeout := 600", "IME HUD COPYDATA timeout stays short")
 AssertContains(rendererSource, "#Include anchor.ahk", "renderer loads caret anchor for AHK chips")
 AssertContains(imeHudClientSource, "#Include anchor.ahk", "IME HUD client loads caret anchor")
 AssertContains(imeHudClientSource, "InputAnchor.TryCaret(&x, &y, targetHwnd)", "IME HUD hot path tries Win32 caret first")
@@ -1224,6 +1233,13 @@ fileExtSource := FileRead(A_ScriptDir "\..\features\toggle-file-extensions.ahk",
 dotfilesSource := FileRead(A_ScriptDir "\..\features\toggle-dotfiles.ahk", "UTF-8")
 AssertContains(mainSource, "#Include features\toggle-dotfiles.ahk", "main loads toggle-dotfiles")
 AssertContains(mainSource, "#Include features\find-mouse.ahk", "main loads shake-to-find mouse")
+AssertContains(mainSource, "#Include features\thinkpad-backlight.ahk", "main loads thinkpad-backlight")
+thinkpadBacklightSource := FileRead(A_ScriptDir "\..\features\thinkpad-backlight.ahk", "UTF-8")
+AssertContains(thinkpadBacklightSource, "class ThinkPadBacklight", "defines ThinkPadBacklight class")
+AssertContains(thinkpadBacklightSource, "IsThinkPad", "checks ThinkPad hardware")
+AssertContains(thinkpadBacklightSource, "GetLastInputInfo", "uses GetLastInputInfo for session input tracking")
+AssertContains(thinkpadBacklightSource, "GetCursorPos", "uses GetCursorPos to filter pure mouse movement")
+AssertEqual(false, ThinkPadBacklight.IsActive, "test mode does not start backlight timer")
 findMouseSource := FileRead(A_ScriptDir "\..\features\find-mouse.ahk", "UTF-8")
 AssertContains(findMouseSource, "GetCursorPos", "shake-to-find polls cursor position")
 AssertContains(findMouseSource, "SetTimer(this.StartCallback, -1)", "shake-to-find starts after the script is idle")
@@ -1234,48 +1250,173 @@ AssertContains(findMouseSource, "ProcessNoWindow.Run", "shake-to-find launches t
 AssertContains(findMouseSource, "WSAStartup", "shake-to-find initializes Winsock before connecting")
 AssertNotContains(findMouseSource, "DllCall(`"SetSystemCursor`"", "shake-to-find does not resize cursors from the DPI-unaware host")
 AssertNotContains(findMouseSource, "RegWrite", "shake-to-find does not persist cursor settings")
+AssertContains(findMouseSource, "LegMaxMs", "shake-to-find limits how long one leg may take")
+AssertContains(findMouseSource, "IdleResetMs", "shake-to-find drops stale travel after a pause")
+AssertContains(findMouseSource, "MaxSpanPx", "shake-to-find caps the arena of one streak")
+AssertContains(findMouseSource, "GetAsyncKeyState", "shake-to-find suppresses detection while a mouse button is held")
+AssertContains(findMouseSource, "static IsMouseButtonDown", "shake-to-find checks button state outside the sample loop")
+AssertContains(findMouseSource, "ApplySocketTimeout", "shake-to-find bounds helper socket waits")
+AssertContains(findMouseSource, "ReapOrphanSizer", "shake-to-find reclaims an orphaned helper")
+AssertContains(findMouseSource, "GetCurrentProcessId", "shake-to-find hands its pid to the helper")
+AssertContains(findMouseSource, "EnsureParentMutex", "shake-to-find owns a parent liveness mutex")
+AssertContains(findMouseSource, "CreateMutexW", "shake-to-find creates the mutex as its owner")
+cursorSizeSource := FileRead(A_ScriptDir "\..\features\find-mouse\cursor-size.cs", "UTF-8")
+AssertContains(cursorSizeSource, "GetProcessById", "cursor helper watches its parent process")
+AssertContains(cursorSizeSource, "StartTime", "cursor helper detects a recycled parent pid")
+AssertContains(cursorSizeSource, "SPI_SETCURSORS", "cursor helper reloads the scheme when a restore fails")
+AssertContains(cursorSizeSource, "ReceiveTimeout", "cursor helper survives a dead client")
+AssertContains(cursorSizeSource, "OpenMutex", "cursor helper watches the parent mutex")
+AssertEqual(3, FindMouse.ReverseCount, "shake-to-find needs three reversals")
+AssertEqual(30, FindMouse.MinDistance, "shake-to-find needs a real leg length")
+AssertEqual(320, FindMouse.LegMaxMs, "shake-to-find requires a fast leg")
+AssertEqual(500, FindMouse.IdleResetMs, "shake-to-find treats a pause as the end of a gesture")
+AssertEqual(400, FindMouse.MaxIntervalMs, "shake-to-find allows a natural shake cadence")
+AssertEqual(600, FindMouse.MaxSpanPx, "shake-to-find rejects cross-screen travel")
+AssertEqual(8, FindMouse.AxisMinPx, "shake-to-find classifies the axis from the whole leg")
+AssertEqual(0.75, FindMouse.MaxNetRatio, "shake-to-find tolerates drifting toward the target")
 AssertEqual(false, FindMouse.Hook != 0, "test mode does not install the mouse hook")
 savedFindMouse := {
     enabled: FindMouse.Enabled,
     hasAnchor: FindMouse.HasAnchor,
     lastX: FindMouse.LastX,
     lastY: FindMouse.LastY,
-    travel: FindMouse.Travel,
-    direction: FindMouse.Direction,
+    lastMoveTick: FindMouse.LastMoveTick,
+    legAxis: FindMouse.LegAxis,
+    legSign: FindMouse.LegSign,
+    legStartX: FindMouse.LegStartX,
+    legStartY: FindMouse.LegStartY,
+    legStartTick: FindMouse.LegStartTick,
+    legTravel: FindMouse.LegTravel,
+    legPeakX: FindMouse.LegPeakX,
+    legPeakY: FindMouse.LegPeakY,
     streak: FindMouse.ReverseStreak,
-    lastReverseTick: FindMouse.LastReverseTick
+    lastReverseTick: FindMouse.LastReverseTick,
+    streakStartX: FindMouse.StreakStartX,
+    streakStartY: FindMouse.StreakStartY,
+    streakTravel: FindMouse.StreakTravel,
+    streakMinX: FindMouse.StreakMinX,
+    streakMinY: FindMouse.StreakMinY,
+    streakMaxX: FindMouse.StreakMaxX,
+    streakMaxY: FindMouse.StreakMaxY
 }
 try {
     FindMouse.Enabled := false
+
+    ; 真摇动：带垂直漂移的水平甩动，两个来回必须触发。
     FindMouse.ResetMotion()
-    AssertEqual(false, FindMouse.Observe(0, 0, 1000), "first shake sample does not trigger")
-    AssertEqual(false, FindMouse.Observe(80, 2, 1040), "straight movement does not trigger")
-    AssertEqual(false, FindMouse.Observe(0, 3, 1080), "one reversal is below the threshold")
-    AssertEqual(false, FindMouse.Observe(80, 1, 1120), "two reversals stay below the threshold")
-    AssertEqual(true, FindMouse.Observe(0, 2, 1160), "three fast reversals trigger")
+    AssertEqual(false, FindMouse.Observe(0, 0, 1000), "shake starts a fresh sample")
+    AssertEqual(false, FindMouse.Observe(40, 5, 1040), "first leg opens with a diagonal drift")
+    AssertEqual(false, FindMouse.Observe(0, 9, 1080), "the first reversal counts")
+    AssertEqual(false, FindMouse.Observe(40, 13, 1120), "the second leg opens")
+    AssertEqual(false, FindMouse.Observe(0, 17, 1160), "the second reversal counts")
+    AssertEqual(2, FindMouse.ReverseStreak, "two reversals are still below the threshold")
+    AssertEqual(false, FindMouse.Observe(40, 21, 1200), "the third leg opens")
+    AssertEqual(true, FindMouse.Observe(0, 25, 1240), "a deliberate two-cycle shake enlarges the pointer")
+    AssertEqual(0, FindMouse.ReverseStreak, "the trigger resets the streak for the next gesture")
+
+    ; 随意一晃：先移到 400px 外，再在旁边抖两下。净位移远大于总行程，不能触发。
     FindMouse.ResetMotion()
-    AssertEqual(false, FindMouse.Observe(0, 0, 2000), "reset starts a new shake sample")
-    AssertEqual(false, FindMouse.Observe(20, 0, 2050), "short movement does not count as a reversal")
-    AssertEqual(false, FindMouse.Observe(0, 0, 2100), "a short leg does not become a reversal")
+    AssertEqual(false, FindMouse.Observe(0, 0, 2000), "travel sample starts clean")
+    AssertEqual(false, FindMouse.Observe(400, 0, 2040), "a cross-window move opens a long leg")
+    AssertEqual(false, FindMouse.Observe(370, 0, 2080), "the first correction counts")
+    AssertEqual(false, FindMouse.Observe(400, 0, 2120), "the second correction leg opens")
+    AssertEqual(false, FindMouse.Observe(370, 0, 2160), "the second correction counts")
+    AssertEqual(false, FindMouse.Observe(400, 0, 2200), "the third correction leg opens")
+    AssertEqual(false, FindMouse.Observe(370, 0, 2240), "a move plus jitter must not enlarge")
+    AssertEqual(0, FindMouse.ReverseStreak, "the net-displacement guard clears the streak")
+
+    ; 慢速来回是日常瞄准修正，不是甩动。
     FindMouse.ResetMotion()
-    AssertEqual(false, FindMouse.Observe(0, 0, 3000), "slow shake starts clean")
-    AssertEqual(false, FindMouse.Observe(80, 0, 3800), "slow movement does not count as a reversal")
-    AssertEqual(false, FindMouse.Observe(0, 0, 4600), "slow reversal does not trigger")
+    AssertEqual(false, FindMouse.Observe(0, 0, 3000), "slow sample starts clean")
+    AssertEqual(false, FindMouse.Observe(40, 0, 3050), "slow leg opens")
+    AssertEqual(false, FindMouse.Observe(-10, 0, 3700), "a slow leg does not reverse")
+    AssertEqual(0, FindMouse.ReverseStreak, "a slow leg leaves the streak empty")
+
+    ; 幅度不够的抖动不算。
     FindMouse.ResetMotion()
-    AssertEqual(false, FindMouse.Observe(0, 0, 5000), "axis-crossing shake starts clean")
-    AssertEqual(false, FindMouse.Observe(80, 8, 5040), "small perpendicular drift stays on the same axis")
-    AssertEqual(false, FindMouse.Observe(0, 6, 5080), "perpendicular drift does not reset a real reversal")
-    AssertEqual(false, FindMouse.Observe(80, 4, 5120), "the return leg must also be long enough")
-    AssertEqual(true, FindMouse.Observe(0, 2, 5160), "same-axis reversals still trigger")
+    AssertEqual(false, FindMouse.Observe(0, 0, 4000), "nudge sample starts clean")
+    AssertEqual(false, FindMouse.Observe(10, 0, 4050), "a 10px leg is too short")
+    AssertEqual(false, FindMouse.Observe(0, 0, 4100), "a 10px return is too short")
+    AssertEqual(0, FindMouse.ReverseStreak, "short nudges never build a streak")
+
+    ; 中途停顿会清掉已攒的连击。
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 5000), "pause sample starts clean")
+    AssertEqual(false, FindMouse.Observe(40, 0, 5040), "a first fast leg opens")
+    AssertEqual(false, FindMouse.Observe(0, 0, 5700), "a pause drops the accumulated travel")
+    AssertEqual(0, FindMouse.ReverseStreak, "stale travel cannot build a streak")
+
+    ; 跨屏平移不是找指针。
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 6000), "wide sample starts clean")
+    AssertEqual(false, FindMouse.Observe(300, 0, 6040), "a long sweep opens a leg")
+    AssertEqual(false, FindMouse.Observe(0, 0, 6080), "a sweep back reverses once")
+    AssertEqual(false, FindMouse.Observe(700, 0, 6120), "cross-screen travel abandons the streak")
+    AssertEqual(0, FindMouse.ReverseStreak, "a streak cannot span the whole desktop")
+
+    ; 竖直甩动同样有效：轴不是写死的。
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 7000), "vertical sample starts clean")
+    AssertEqual(false, FindMouse.Observe(3, 40, 7040), "vertical leg opens")
+    AssertEqual(false, FindMouse.Observe(6, -5, 7080), "vertical reversal one")
+    AssertEqual(false, FindMouse.Observe(9, 38, 7120), "vertical leg two opens")
+    AssertEqual(false, FindMouse.Observe(12, -6, 7160), "vertical reversal two")
+    AssertEqual(false, FindMouse.Observe(15, 38, 7200), "vertical leg three opens")
+    AssertEqual(true, FindMouse.Observe(18, -6, 7240), "a vertical shake also triggers")
+
+    ; 直线快摇：峰值在两次采样之间被跳过，回程首点已离峰值 20px，
+    ; 60px 腿的回摆按峰值算只剩 60+20，按 0.6 折算 30px 门槛仍可满足。
+    ; 峰值补偿缺失时（按足额 30px 判），这里只回摆 30px 起步会被吞掉一次反向。
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 8000), "fast straight sample starts clean")
+    AssertEqual(false, FindMouse.Observe(60, 0, 8032), "a fast leg opens without the far peak being sampled")
+    AssertEqual(false, FindMouse.Observe(10, 2, 8064), "the return leg counts despite the skipped peak")
+    AssertEqual(1, FindMouse.ReverseStreak, "peak overshoot does not swallow the first reversal")
+    AssertEqual(false, FindMouse.Observe(70, 0, 8096), "the second leg opens")
+    AssertEqual(false, FindMouse.Observe(20, 2, 8128), "the second reversal counts")
+    AssertEqual(2, FindMouse.ReverseStreak, "two reversals survive fast straight shaking")
+    AssertEqual(false, FindMouse.Observe(80, 0, 8160), "the third leg opens")
+    AssertEqual(true, FindMouse.Observe(30, 2, 8192), "a fast straight shake triggers")
+
+    ; 摇动前正常移动过 550px，不该把包围盒预算吃光。旧实现里边界从上次采样
+    ; 起算，0..620 直接超窗清空连击；现在只量本次摇动的 400..620。
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 9000), "pre-travel sample starts clean")
+    AssertEqual(false, FindMouse.Observe(300, 0, 9040), "ordinary move toward the target")
+    AssertEqual(false, FindMouse.Observe(550, 0, 9080), "the move ends where the shake begins")
+    AssertEqual(false, FindMouse.Observe(520, 0, 9120), "the shake opens at the target")
+    AssertEqual(false, FindMouse.Observe(450, 0, 9160), "the shake swings past the target")
+    AssertEqual(false, FindMouse.Observe(400, 0, 9200), "the shake reaches its left end")
+    AssertEqual(false, FindMouse.Observe(430, 0, 9240), "first reversal after a long pre-move")
+    AssertEqual(false, FindMouse.Observe(500, 0, 9280), "the swing returns right")
+    AssertEqual(false, FindMouse.Observe(560, 0, 9320), "the swing keeps going right")
+    AssertEqual(false, FindMouse.Observe(620, 0, 9360), "the shake reaches its right end")
+    AssertEqual(true, FindMouse.Observe(590, 0, 9400), "a shake after ordinary travel still enlarges")
 } finally {
     FindMouse.Enabled := savedFindMouse.enabled
     FindMouse.HasAnchor := savedFindMouse.hasAnchor
     FindMouse.LastX := savedFindMouse.lastX
     FindMouse.LastY := savedFindMouse.lastY
-    FindMouse.Travel := savedFindMouse.travel
-    FindMouse.Direction := savedFindMouse.direction
+    FindMouse.LastMoveTick := savedFindMouse.lastMoveTick
+    FindMouse.LegAxis := savedFindMouse.legAxis
+    FindMouse.LegSign := savedFindMouse.legSign
+    FindMouse.LegStartX := savedFindMouse.legStartX
+    FindMouse.LegStartY := savedFindMouse.legStartY
+    FindMouse.LegStartTick := savedFindMouse.legStartTick
+    FindMouse.LegTravel := savedFindMouse.legTravel
+    FindMouse.LegPeakX := savedFindMouse.legPeakX
+    FindMouse.LegPeakY := savedFindMouse.legPeakY
     FindMouse.ReverseStreak := savedFindMouse.streak
     FindMouse.LastReverseTick := savedFindMouse.lastReverseTick
+    FindMouse.StreakStartX := savedFindMouse.streakStartX
+    FindMouse.StreakStartY := savedFindMouse.streakStartY
+    FindMouse.StreakTravel := savedFindMouse.streakTravel
+    FindMouse.StreakMinX := savedFindMouse.streakMinX
+    FindMouse.StreakMinY := savedFindMouse.streakMinY
+    FindMouse.StreakMaxX := savedFindMouse.streakMaxX
+    FindMouse.StreakMaxY := savedFindMouse.streakMaxY
+FindMouse.StreakMaxY := savedFindMouse.streakMaxY
+FindMouse.LastMoveTick := savedFindMouse.lastMoveTick
 }
 AssertContains(dotfilesSource, "FileSetAttrib `"+H`"", "dotfiles hide by setting Hidden")
 AssertContains(dotfilesSource, "FileSetAttrib `"-H`"", "dotfiles restore by clearing Hidden")
@@ -1307,7 +1448,7 @@ AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "Paste")', "smart pa
 AssertContains(smartPasteSource, "#Include ..\..\..\shared\notify\run-nowindow.ahk", "smart paste loads no-window helper")
 AssertContains(smartPasteSource, "ProcessNoWindow.RunWait(command)", "smart paste waits without allocating a console")
 AssertNotContains(smartPasteSource, 'RunWait(command, , "Hide")', "smart paste no longer uses RunWait Hide")
-AssertContains(smartPasteSource, 'Notify.Success("✓"', "smart paste uses shared success notification")
+AssertContains(smartPasteSource, 'Notify.State("✓"', "smart paste uses lightweight state notification")
 startupConfigurePosition := InStr(routerSource, "SmartPaste.Configure(")
 startupEnsurePosition := InStr(routerSource, "SmartPaste.EnsureHelperAvailable()")
 startupRegisterPosition := InStr(routerSource, "Shortcuts.SmartPaste")

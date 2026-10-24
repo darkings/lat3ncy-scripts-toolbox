@@ -75,20 +75,20 @@ class ToggleDotfiles {
             if action.hide {
                 result := this.HideDotfiles(dir)
                 if (result.hidden = 0 && result.managed = 0) {
-                    Notify.Info("·", "没有点文件")
+                    Notify.State("·", "没有点文件")
                     return
                 }
                 this.RefreshExplorerWindows()
                 if (result.hidden > 0)
-                    Notify.Success("✓", "已隐藏 " result.hidden " 个点文件")
+                    Notify.State("✓", "已隐藏 " result.hidden " 个点文件")
                 else
-                    Notify.Success("✓", "已纳入 " result.managed " 个点文件")
+                    Notify.State("✓", "已纳入 " result.managed " 个点文件")
                 return
             }
 
             count := this.RestoreDotfiles(dir)
             this.RefreshExplorerWindows()
-            Notify.Success("✓", "已恢复 " count " 个点文件")
+            Notify.State("✓", "已恢复 " count " 个点文件")
         } catch as exc {
             Notify.Error("×", "切换点文件失败: " exc.Message)
         }

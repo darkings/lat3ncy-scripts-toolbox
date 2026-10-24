@@ -17,8 +17,12 @@ class ImeHud {
     static WindowTitle := "Lat3ncyImeHudWinUi"
     static ProcessName := "ImeHudWinUi.exe"
     static CopyDataId := 1
-    static MessageTimeout := 2500
+    static MessageTimeout := 600
     static LaunchWaitMs := 2500
+    ; 单次 SendMessageTimeout 失败不立刻杀进程：HUD 刚冷启动时窗口已建但消息循环
+    ; 还没开始泵，这时超时是暂时的。短超时 + 多试几次比 2.5s 一次要快得多。
+    static SendAttempts := 3
+    static SendRetryDelayMs := 80
     ; 文本光标探测预算。偏小会让 Chromium 直接落到退化来源，偏大会拖慢芯片出现。
     static LocatorTimeoutMs := 500
     ; true 时芯片显示期间跟随光标（额外起一个短命 anchor-locator --watch）。
@@ -52,14 +56,17 @@ class ImeHud {
         ; 常驻助手优先：Chromium 系只有它能拿到真插入点，而且读文件没有冷启动延迟。
         this.EnsureCaretServer()
         served := this.ReadCaretServer()
-        if !served.Ok {
-            ; 首次按键时助手可能还在建树：等它一下，别直接落到窗口底部。
+        if !served.Known {
+            ; 助手还没写过（开机/重启后第一次）：短暂等一行，通常 <=180ms 就有。
             served := this.WaitCaretServer()
         }
         if served.Ok {
             anchor := { X: served.X, Y: served.Y, Source: served.Source, DurationMs: 0 }
         } else {
-            anchor := this.LocateAnchor(targetHwnd)
+            ; 助手明确回答"当前没有插入点"（Known 且非 Ok）时跳过 locator：
+            ; 调外部定位器要 500ms，而这个场景它也给不出光标。
+            ; 只有"完全没有答案"时才值得去问。
+            anchor := this.LocateAnchor(targetHwnd, served.Known)
         }
         this.LastAnchorSource := anchor.Source
         this.LastAnchorReal := InputAnchor.IsRealCaretSource(anchor.Source)
@@ -97,7 +104,9 @@ class ImeHud {
 
     ; 锚点解析。先进程内 Win32 caret，拿不到再交给 locator。
     ; locator 返回 ERR / 超时 / 文件缺失时退回窗口底部，并把来源标成退化来源。
-    static LocateAnchor(targetHwnd) {
+    ; skipLocator=true 时不调外部定位器（省 500ms）：
+    ; 调用方已知当前焦点没有插入点，定位器在这个场景也给不出光标。
+    static LocateAnchor(targetHwnd, skipLocator := false) {
         x := 0
         y := 0
         source := ""
@@ -108,12 +117,13 @@ class ImeHud {
             return { X: x, Y: y, Source: source, DurationMs: 0 }
         }
 
-        probe := this.ProbeLocator(targetHwnd)
-        if probe.Found {
-            if probe.RealCaret
+        probe := { Found: false, RealCaret: false, X: 0, Y: 0, Source: "", Reason: "skipped-locator" }
+        if !skipLocator {
+            probe := this.ProbeLocator(targetHwnd)
+            if probe.Found {
+                ; locator 给出真光标就用；退化锚点也接受，但来源如实标记。
                 return { X: probe.X, Y: probe.Y, Source: probe.Source, DurationMs: 0 }
-            ; locator 只给出退化锚点：保留它，但明确标记非真实光标。
-            return { X: probe.X, Y: probe.Y, Source: probe.Source, DurationMs: 0 }
+            }
         }
 
         rootHwnd := InputAnchor.GetRootHwnd(targetHwnd)
@@ -283,8 +293,13 @@ class ImeHud {
     ; 在普通 .NET exe / AHK 里只看到两个 Pane）；
     ; 而且每次都新起 PowerShell 太慢（冷启动 ~0.8s，芯片 750ms 就隐藏了，
     ; MOVE 到达时已经不可见）。所以起一个常驻助手，按键时直接读它写的文件。
-    static CaretServerMs := 900000
-    static CaretFreshMs := 400
+    ; 助手进程寿命。原来是 15 分钟：过期后第一次按键要等它重启 + 建无障碍树
+    ; （实测 859ms）。改成 12 小时后，一个登录会话里几乎不会再冷启动；
+    ; 即使它意外退出，HealthTick 每 20 秒会把它拉回来。
+    static CaretServerMs := 43200000
+    ; 新鲜窗口必须大于助手的发布间隔。助手在"当前无光标"时一轮要几十~几百毫秒，
+    ; 窗口定太小会一直被判定为"没有答案"，于是每次按键都白等 + 白调 locator。
+    static CaretFreshMs := 700
 
     static CaretHelperPath() {
         return NotifyPaths.Resolve("caret-uia.ps1")
@@ -311,7 +326,7 @@ class ImeHud {
         stdoutFile := A_Temp "\lat3ncy-uia-serve-stdout-" DllCall("GetCurrentProcessId") ".txt"
         try FileDelete(stdoutFile)
         command := Format(
-            'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}" -Serve -Hwnd 0 -OutPath "{2}" -ServeMs {3} -IntervalMs {4}',
+            'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}" -Serve -Hwnd 0 -OutPath "{2}" -ServeMs {3} -IntervalMs {4} -Attempts 1 -DelayMs 60',
             helper,
             outputFile,
             this.CaretServerMs,
@@ -335,7 +350,8 @@ class ImeHud {
 
     ; 读常驻助手写的文件。返回 {Ok, X, Y, Source, AgeMs}。
     static ReadCaretServer() {
-        result := { Ok: false, X: 0, Y: 0, Source: "", AgeMs: 999999 }
+        ; Known = 助手在新鲜窗口内给过明确答案（有光标 或 明确没有光标）。
+        result := { Ok: false, Known: false, X: 0, Y: 0, Source: "", AgeMs: 999999 }
         file := this._caretServerFile != "" ? this._caretServerFile : this.CaretServerFile()
         if !FileExist(file)
             return result
@@ -346,21 +362,30 @@ class ImeHud {
         } catch {
             return result
         }
-        ; 行格式：T|<ahk-tick>|CARET|x|y|h|source
+        ; 行格式：T|<ahk-tick>|CARET|x|y|h|source  或  T|<ahk-tick>|NOCARET|reason
         ; 用 AHK 自己的 A_TickCount 判新鲜度，避免 unix 时间换算。
-        if !RegExMatch(text, "T\|(\d+)\|CARET\|(-?\d+)\|(-?\d+)\|(-?\d+)\|([A-Za-z0-9_-]+)", &match)
+        if RegExMatch(text, "T\|(\d+)\|CARET\|(-?\d+)\|(-?\d+)\|(-?\d+)\|([A-Za-z0-9_-]+)", &match) {
+            age := A_TickCount - Integer(match[1])
+            if (age < 0)
+                age := 0
+            result.AgeMs := age
+            if (age > this.CaretFreshMs)
+                return result
+            result.Known := true
+            result.X := Integer(match[2])
+            result.Y := Integer(match[3])
+            result.Source := match[5]
+            result.Ok := InputAnchor.IsRealCaretSource(result.Source)
             return result
-
-        age := A_TickCount - Integer(match[1])
-        if (age < 0)
-            age := 0
-        result.AgeMs := age
-        if (age > this.CaretFreshMs)
-            return result
-        result.X := Integer(match[2])
-        result.Y := Integer(match[3])
-        result.Source := match[5]
-        result.Ok := InputAnchor.IsRealCaretSource(result.Source)
+        }
+        if RegExMatch(text, "T\|(\d+)\|NOCARET\|([A-Za-z0-9_-]+)", &miss) {
+            age := A_TickCount - Integer(miss[1])
+            if (age < 0)
+                age := 0
+            result.AgeMs := age
+            if (age <= this.CaretFreshMs)
+                result.Known := true
+        }
         return result
     }
 
@@ -518,22 +543,115 @@ class ImeHud {
             this.LastError := "no-hwnd"
             return false
         }
-        if this.SendCopyData(hwnd, command)
+        ; 已知卡死就别再等 2.5 秒超时：直接换一个干净进程。
+        if this.IsHung(hwnd) {
+            this.Log("hud-hung pre-send hwnd=" hwnd)
+            this.KillHudProcess(hwnd)
+            hwnd := 0
+            if !this.EnsureRunning()
+                return false
+            hwnd := this.FindWindow()
+            if !hwnd {
+                this.LastError := "no-hwnd-after-hung-restart"
+                return false
+            }
+        }
+        if this.SendCopyData(hwnd, command) {
+            this.LastError := ""
             return true
-        ; 窗口句柄可能刚失效。再拉一次常驻进程，仍失败就停，不叠 GDI。
+        }
+        ; HUD 可能正在冷启动（窗口已建、消息循环还没泵）：短超时多试几次，
+        ; 比直接杀进程省掉一整次 WinUI 冷启动。
+        loop (this.SendAttempts - 1) {
+            Sleep this.SendRetryDelayMs
+            if this.SendCopyData(hwnd, command) {
+                this.LastError := ""
+                return true
+            }
+        }
+        ; 仍然失败：可能句柄失效，也可能进程已经卡死
+        ; （WinUI 在锁屏/切显示器后偶发死锁）。
+        ; 不能只 EnsureRunning(true)：它只会再次 FindWindow 找到同一个卡死窗口，
+        ; 于是每一轮都超时，直到手动重启 AHK 才恢复。
         this.LastError := "copydata-failed"
-        if !this.EnsureRunning(true)
+        killed := this.KillHudProcess(hwnd)
+        this.Log(Format("hud-restart reason=copydata-failed killed={1}", killed ? 1 : 0))
+        if !this.EnsureRunning()
             return false
         hwnd := this.FindWindow()
         if !hwnd {
             this.LastError := "no-hwnd-after-restart"
             return false
         }
-        if this.SendCopyData(hwnd, command)
+        if this.SendCopyData(hwnd, command) {
+            this.LastError := ""
             return true
+        }
         this.LastError := "copydata-failed-after-restart"
         this.Log("send-failed command=" command)
         return false
+    }
+
+    ; 窗口是否超过 5 秒没处理消息。卡死的 HUD 会一直保留窗口句柄，
+    ; 但 SendMessageTimeout 全部超时，表现就是"切换没有通知"。
+    static IsHung(hwnd) {
+        if !hwnd
+            return false
+        try {
+            return DllCall("User32\IsHungAppWindow", "Ptr", hwnd, "Int") ? true : false
+        } catch {
+            return false
+        }
+    }
+
+    ; 结束拥有该窗口的进程。返回 true 表示进程确实退出了。
+    static KillHudProcess(hwnd) {
+        pid := 0
+        try {
+            DllCall("User32\GetWindowThreadProcessId", "Ptr", hwnd, "UInt*", &pid, "UInt")
+        } catch {
+            return false
+        }
+        if !pid
+            return false
+        try {
+            ProcessClose(pid)
+        } catch {
+            return false
+        }
+        deadline := A_TickCount + 2000
+        while (A_TickCount < deadline) {
+            if !ProcessExist(pid)
+                return true
+            Sleep 30
+        }
+        return !ProcessExist(pid)
+    }
+
+    ; 健康巡检：HUD 卡死就杀掉，下一次切换会冷启动一个干净的。
+    static HealthIntervalMs := 20000
+
+    static StartHealthWatch() {
+        if this._healthTimer
+            return
+        this._healthTimer := true
+        SetTimer this.HealthTickCallback, this.HealthIntervalMs
+    }
+
+    static HealthTick(*) {
+        ; 助手必须常驻：它一冷启动，下一次按键就要多等它建树（实测 859ms）。
+        this.EnsureCaretServer()
+
+        hwnd := this.FindWindow()
+        if !hwnd {
+            ; HUD 不在就提前拉起，别让第一次 CapsLock 现启动（冷启动 2.5s+）。
+            this.EnsureRunning()
+            return
+        }
+        if !this.IsHung(hwnd)
+            return
+        this.Log("hud-hung health-kill hwnd=" hwnd)
+        this.KillHudProcess(hwnd)
     }
 
     static SendCopyData(hwnd, command) {
@@ -558,9 +676,15 @@ class ImeHud {
         return sent != 0 && result != 0
     }
 
-    ; force=true 时先丢掉失效 HWND，再冷启动。空命令转发不算成功。
+    ; force=true 时先杀掉卡死的旧实例再冷启动。
+    ; 只丢弃 HWND 是不够的：旧进程还占着 mutex，新实例会直接转发给它然后退出。
     static EnsureRunning(force := false) {
-        if !force && this.FindWindow()
+        hwnd := this.FindWindow()
+        if force && hwnd {
+            this.KillHudProcess(hwnd)
+            hwnd := this.FindWindow()
+        }
+        if !force && hwnd
             return true
         exe := NotifyPaths.ImeHudWinUiExe()
         if !FileExist(exe) {
@@ -575,13 +699,22 @@ class ImeHud {
             return false
         }
         deadline := A_TickCount + this.LaunchWaitMs
+        hwnd := 0
         while (A_TickCount < deadline) {
-            if this.FindWindow()
-                return true
+            hwnd := this.FindWindow()
+            if hwnd {
+                ; 窗口存在不代表消息循环已开始泵消息（WinUI 冷启动要 1-3 秒）。
+                ; 用 PING 探活，比只等窗口句柄更准，也能让调用方立刻拿到"可发送"状态。
+                if this.SendCopyData(hwnd, "PING")
+                    return true
+            }
             Sleep 20
         }
-        if this.FindWindow()
-            return true
+        if hwnd {
+            ; 起来了但一直不应答：清掉，别留一个僵尸窗口让后续每次都超时。
+            this.Log("hud-unresponsive-after-launch hwnd=" hwnd)
+            this.KillHudProcess(hwnd)
+        }
         this.LastError := "launch-timeout"
         return false
     }
@@ -597,19 +730,26 @@ class ImeHud {
         ; 常驻光标助手也在这里预热：它冷启动要 0.7-1.4s，
         ; 不预热的话第一次 CapsLock 会拿不到真插入点、落到窗口底部。
         this.EnsureCaretServer()
-        return this.EnsureRunning()
+        ok := this.EnsureRunning()
+        ; 常驻巡检：HUD 卡死（锁屏/切显示器后偶发）时自动清掉，下一次切换重建。
+        this.StartHealthWatch()
+        return ok
     }
 
     ; 首次按键时助手可能还没写完第一行：短暂等它一次，
     ; 避免"第一次显示在窗口底部、第二次才跟光标"。
     ; 只在真的没有任何新鲜数据时等，且最多等 FirstWaitMs。
-    static FirstWaitMs := 900
+    ; 首次按键时助手可能还没写完第一行：短暂等它一次。
+    ; 助手正常常驻（180ms 刷新、12h 寿命），所以只在开机/重启后第一次按下才会等到；
+    ; 900ms 实测偏长，350ms 已够覆盖一次发布间隔，等不到就直接用退化锚点 + 跟随升级。
+    static FirstWaitMs := 350
 
     static WaitCaretServer() {
         deadline := A_TickCount + this.FirstWaitMs
         loop {
             served := this.ReadCaretServer()
-            if served.Ok
+            ; Known 也直接返回：助手明确说"没有插入点"时再等也没用。
+            if (served.Ok || served.Known)
                 return served
             if (A_TickCount >= deadline)
                 return served
@@ -686,6 +826,9 @@ class ImeHud {
     static CaretServerIntervalMs := 180
     static _caretServerPid := 0
     static _caretServerFile := ""
+    ; HUD 健康巡检
+    static _healthTimer := false
 }
 
 ImeHud.FollowTickCallback := ObjBindMethod(ImeHud, "FollowTick")
+ImeHud.HealthTickCallback := ObjBindMethod(ImeHud, "HealthTick")

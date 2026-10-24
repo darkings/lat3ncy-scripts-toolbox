@@ -154,6 +154,9 @@ IsToolboxTestMode() {
 ; 摇动定位指针：快速左右反向时临时放大箭头，停下后交回当前光标方案。无快捷键。
 #Include features\find-mouse.ahk
 
+; ThinkPad 键盘背光：夜间敲击/点击唤醒、超时自动熄灭、晃动鼠标不唤醒。非 ThinkPad 自动跳过。
+#Include features\thinkpad-backlight.ahk
+
 ; 统一路由层必须在全部 feature 之后加载。
 #Include hotkey-router.ahk
 

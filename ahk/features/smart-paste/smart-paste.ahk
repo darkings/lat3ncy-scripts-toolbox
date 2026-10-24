@@ -254,7 +254,8 @@ class SmartPaste {
                 return false
             }
 
-            Notify.Success("✓", "已保存 " fileName)
+            ; 降级为光标处轻量提示芯片，避免频繁弹系统 Toast
+            Notify.State("✓", "已保存 " fileName)
             return true
         } catch {
             Notify.Error("×", "图片保存失败")

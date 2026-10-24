@@ -9,7 +9,7 @@
 switch_type = "mode"
 
 # 切换时是否弹出 HUD 提示通知 (☀️ 已切换为浅色模式 / 🌙 已切换为深色模式)
-show_notification = true
+show_notification = false
 
 [schedule]
 # 触发机制：
@@ -91,3 +91,35 @@ dark_scheme  = "Cursor Concept 3 Dark"
 # 尺寸由系统按 DPI 从多尺寸资源里选，脚本不写 CursorBaseSize / CursorSize。
 # 资源包内含 32/48/64/96/128。本机 200% 缩放对应 64。
 # 不要用 SetSystemCursor 强行塞句柄：DPI 不感知的 powershell.exe 会把 64 再放大成 128。
+
+# ============================================================
+# ThinkPad 键盘背光联动 (可选，非 ThinkPad 设备自动跳过)
+# ============================================================
+[keyboard_backlight]
+# 是否启用键盘灯随主题联动 (true / false)
+# 若非 ThinkPad 硬件或未检测到底层控制驱动，脚本将静默忽略
+enabled = true
+
+# 浅色模式 / 白天 键盘背光亮度：
+# 0 = 关闭 (推荐，白天日光充足，关灯省电不晃眼)
+# 1 = 低亮度
+# 2 = 高亮度
+light_level = 0
+
+# 深色模式 / 夜晚 键盘背光亮度：
+# 0 = 关闭
+# 1 = 低亮度 (推荐，暗光下柔和不刺眼)
+# 2 = 高亮度
+dark_level = 1
+
+# 深色模式下的闲置超时熄灯（秒）：
+# 0 = 不自动熄灭（常亮）
+# >0 = 超过该秒数未输入则自动关闭背光（推荐 30）
+idle_timeout_seconds = 30
+
+# 鼠标点击是否唤醒背光（true / false）：
+# true = 敲击键盘或鼠标按键点击唤醒（单纯移动/晃动鼠标不唤醒，避免夜间看视频/阅读光污染）
+# false = 仅敲击键盘唤醒
+wake_on_mouse_click = true
+
+

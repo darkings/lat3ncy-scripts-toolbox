@@ -40,6 +40,8 @@ if ($already)
 {
   # 颜色已经对时仍补套鼠标，避免刚加上光标资源后要等到下一次日出日落才生效。
   Set-WindowsCursorScheme -Mode $desired -Config $config | Out-Null
+  # 颜色已经对时仍对齐键盘灯（ThinkPad 开机/睡眠唤醒后背光会被固件置 0，且函数内部已内置幂等短路）
+  Set-ThinkPadKeyboardBacklight -Mode $desired -Config $config | Out-Null
   # Keep the lock screen aligned with the current desktop wallpaper on logon as well.
   Sync-LockScreenWallpaper -Config $config -ImagePath '' | Out-Null
   Write-ThemeLog ("Apply-Now skip: already {0}" -f $desired)
@@ -63,4 +65,5 @@ if (-not (Test-Path -LiteralPath $targetScript -PathType Leaf))
 
 & $targetScript
 Set-WindowsCursorScheme -Mode $desired -Config $config | Out-Null
+Set-ThinkPadKeyboardBacklight -Mode $desired -Config $config | Out-Null
 Write-ThemeLog ("Apply-Now switched to {0}" -f $desired)

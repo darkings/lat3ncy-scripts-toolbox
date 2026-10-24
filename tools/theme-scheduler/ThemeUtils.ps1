@@ -14,7 +14,7 @@ function Get-ThemeConfig
   $config = @{
     general = @{
       switch_type = 'mode'
-      show_notification = $true
+      show_notification = $false
     }
     schedule = @{
       trigger_mode = 'sun'
@@ -45,6 +45,13 @@ function Get-ThemeConfig
       dark_dir = ''
       light_scheme = 'Cursor Concept 3 Light'
       dark_scheme = 'Cursor Concept 3 Dark'
+    }
+    keyboard_backlight = @{
+      enabled = $true
+      light_level = 0
+      dark_level = 1
+      idle_timeout_seconds = 30
+      wake_on_mouse_click = $true
     }
   }
 
@@ -1914,3 +1921,250 @@ function Invoke-ThemeNotify
   {
   }
 }
+
+function Test-IsThinkPadDevice
+{
+  if ($null -ne $script:IsThinkPadDeviceCache)
+  {
+    return $script:IsThinkPadDeviceCache
+  }
+
+  $isThinkPad = $false
+  try
+  {
+    $biosKey = 'HKLM:\HARDWARE\DESCRIPTION\System\BIOS'
+    if (Test-Path -LiteralPath $biosKey)
+    {
+      $bios = Get-ItemProperty -LiteralPath $biosKey -ErrorAction SilentlyContinue
+      if ($bios)
+      {
+        $vendor = "{0} {1} {2}" -f $bios.SystemManufacturer, $bios.BaseBoardManufacturer, $bios.BIOSVendor
+        $product = "{0} {1} {2} {3}" -f $bios.SystemFamily, $bios.SystemProductName, $bios.SystemVersion, $bios.SystemSKU
+        if ($vendor -match '(?i)lenovo' -and $product -match '(?i)thinkpad')
+        {
+          $isThinkPad = $true
+        }
+      }
+    }
+  }
+  catch
+  {
+  }
+
+  $script:IsThinkPadDeviceCache = $isThinkPad
+  return $isThinkPad
+}
+
+function Ensure-ThinkPadBacklightNative
+{
+  if (([System.Management.Automation.PSTypeName]'ThinkPadBacklightNative').Type)
+  {
+    return $true
+  }
+
+  $code = @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class ThinkPadBacklightNative {
+  private const uint GENERIC_READ = 0x80000000;
+  private const uint GENERIC_WRITE = 0x40000000;
+  private const uint FILE_SHARE_READ = 0x00000001;
+  private const uint FILE_SHARE_WRITE = 0x00000002;
+  private const uint OPEN_EXISTING = 3;
+  private const uint IOCTL_READ = 0x00222680;
+  private const uint IOCTL_WRITE = 0x00222684;
+  private const int IBMPMDRV_HAS_BACKLIGHT_BIT = 0x00200000;
+  private const int IBMPMDRV_WRITE_FLAG = 0x00000100;
+
+  [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+  private static extern SafeFileHandle CreateFile(
+    string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+    IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+    uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool DeviceIoControl(
+    SafeFileHandle hDevice, uint dwIoControlCode,
+    byte[] lpInBuffer, int nInBufferSize,
+    byte[] lpOutBuffer, int nOutBufferSize,
+    out int lpBytesReturned, IntPtr lpOverlapped);
+
+  public static int GetBacklightLevel() {
+    try {
+      using (var h = CreateFile(@"\\.\IBMPmDrv", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero)) {
+        if (h.IsInvalid) return -1;
+        byte[] inBuf = new byte[4];
+        byte[] outBuf = new byte[4];
+        int ret;
+        if (!DeviceIoControl(h, IOCTL_READ, inBuf, 4, outBuf, 4, out ret, IntPtr.Zero) || ret < 4) {
+          return -2;
+        }
+        int code = BitConverter.ToInt32(outBuf, 0);
+        if ((code & IBMPMDRV_HAS_BACKLIGHT_BIT) == 0) return -3;
+        return code & 0x0F;
+      }
+    } catch {
+      return -4;
+    }
+  }
+
+  public static bool SetBacklightLevel(int targetLevel, out int prevLevel, out string error) {
+    prevLevel = -1;
+    error = null;
+    if (targetLevel < 0 || targetLevel > 2) {
+      error = "Invalid target level " + targetLevel;
+      return false;
+    }
+    try {
+      using (var h = CreateFile(@"\\.\IBMPmDrv", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero)) {
+        if (h.IsInvalid) {
+          error = "Failed to open \\\\.\\IBMPmDrv (win32=" + Marshal.GetLastWin32Error() + ")";
+          return false;
+        }
+        byte[] inBuf = new byte[4];
+        byte[] outBuf = new byte[4];
+        int ret;
+        if (!DeviceIoControl(h, IOCTL_READ, inBuf, 4, outBuf, 4, out ret, IntPtr.Zero) || ret < 4) {
+          error = "DeviceIoControl read failed (win32=" + Marshal.GetLastWin32Error() + ")";
+          return false;
+        }
+        int code = BitConverter.ToInt32(outBuf, 0);
+        if ((code & IBMPMDRV_HAS_BACKLIGHT_BIT) == 0) {
+          error = "Device does not report keyboard backlight support";
+          return false;
+        }
+        prevLevel = code & 0x0F;
+        if (prevLevel == targetLevel) {
+          return true;
+        }
+
+        int arg = IBMPMDRV_WRITE_FLAG | (code & 0xF0) | (targetLevel & 0x0F);
+        byte[] writeIn = BitConverter.GetBytes(arg);
+        byte[] writeOut = new byte[4];
+        if (!DeviceIoControl(h, IOCTL_WRITE, writeIn, 4, writeOut, 4, out ret, IntPtr.Zero)) {
+          error = "DeviceIoControl write failed (win32=" + Marshal.GetLastWin32Error() + ")";
+          return false;
+        }
+        return true;
+      }
+    } catch (Exception ex) {
+      error = ex.Message;
+      return false;
+    }
+  }
+}
+'@
+
+  try
+  {
+    Add-Type -TypeDefinition $code -ErrorAction Stop
+    return $true
+  }
+  catch
+  {
+    return $false
+  }
+}
+
+function Test-ThinkPadCapability
+{
+  if ($null -ne $script:ThinkPadCapabilityCache)
+  {
+    return $script:ThinkPadCapabilityCache
+  }
+
+  if (-not (Test-IsThinkPadDevice))
+  {
+    $script:ThinkPadCapabilityCache = $false
+    return $false
+  }
+
+  if (-not (Ensure-ThinkPadBacklightNative))
+  {
+    $script:ThinkPadCapabilityCache = $false
+    return $false
+  }
+
+  $level = [ThinkPadBacklightNative]::GetBacklightLevel()
+  $capable = ($level -ge 0)
+  $script:ThinkPadCapabilityCache = $capable
+  return $capable
+}
+
+function Get-ThinkPadKeyboardBacklight
+{
+  if (-not (Test-ThinkPadCapability))
+  {
+    return -1
+  }
+  return [ThinkPadBacklightNative]::GetBacklightLevel()
+}
+
+function Set-ThinkPadKeyboardBacklight
+{
+  param(
+    [ValidateRange(0, 2)]
+    [int]$Level = -1,
+    [ValidateSet('light', 'dark', '')]
+    [string]$Mode = '',
+    $Config = $null
+  )
+
+  if (-not $Config)
+  {
+    $Config = Get-ThemeConfig
+  }
+
+  if ($Config.keyboard_backlight -and -not $Config.keyboard_backlight.enabled)
+  {
+    Write-ThemeLog 'Keyboard backlight switch skipped: disabled in config'
+    return $false
+  }
+
+  if (-not (Test-ThinkPadCapability))
+  {
+    Write-ThemeLog 'Keyboard backlight switch skipped: not a supported ThinkPad device or driver unavailable'
+    return $false
+  }
+
+  if ($Level -lt 0)
+  {
+    if ($Mode -eq 'light')
+    {
+      $Level = if ($Config.keyboard_backlight -and $null -ne $Config.keyboard_backlight.light_level) { [int]$Config.keyboard_backlight.light_level } else { 0 }
+    }
+    elseif ($Mode -eq 'dark')
+    {
+      $Level = if ($Config.keyboard_backlight -and $null -ne $Config.keyboard_backlight.dark_level) { [int]$Config.keyboard_backlight.dark_level } else { 1 }
+    }
+    else
+    {
+      Write-ThemeLog 'Keyboard backlight switch skipped: neither Level nor Mode specified'
+      return $false
+    }
+  }
+
+  $prevLevel = -1
+  $err = $null
+  $ok = [ThinkPadBacklightNative]::SetBacklightLevel($Level, [ref]$prevLevel, [ref]$err)
+  if ($ok)
+  {
+    if ($prevLevel -eq $Level)
+    {
+      Write-ThemeLog ("Keyboard backlight unchanged (already level {0}), skipped" -f $Level)
+    }
+    else
+    {
+      Write-ThemeLog ("Keyboard backlight switched: {0} -> {1}" -f $prevLevel, $Level)
+    }
+    return $true
+  }
+  else
+  {
+    Write-ThemeLog ("Keyboard backlight switch failed: {0}" -f $err)
+    return $false
+  }
+}
+

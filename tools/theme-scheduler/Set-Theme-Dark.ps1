@@ -1,4 +1,8 @@
-﻿$ErrorActionPreference = 'Continue'
+﻿param(
+  [switch]$Force
+)
+
+$ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'ThemeUtils.ps1')
 
 $config = Get-ThemeConfig
@@ -6,12 +10,15 @@ $config = Get-ThemeConfig
 # 目标状态判断：不用「是否接近触发时刻」而用「当前时间应该是什么模式」。
 # Modern Standby 会把进程冻结数小时，唤醒后 Get-Date 已远离触发时刻，
 # 时间窗口会误判为「错过」而跳过；目标状态判断天然免疫这个问题。
-$schedule = Get-ThemeScheduleTimes -Config $config
-$desired = Get-DesiredThemeMode -Now (Get-Date) -RiseTime $schedule.RiseTime -SetTime $schedule.SetTime
-if ($desired -ne 'dark')
+if (-not $Force)
 {
-  Write-ThemeLog ("Set-Theme-Dark skipped: now={0} desired={1}" -f (Get-Date -Format 'HH:mm'), $desired)
-  return
+  $schedule = Get-ThemeScheduleTimes -Config $config
+  $desired = Get-DesiredThemeMode -Now (Get-Date) -RiseTime $schedule.RiseTime -SetTime $schedule.SetTime
+  if ($desired -ne 'dark')
+  {
+    Write-ThemeLog ("Set-Theme-Dark skipped: now={0} desired={1}" -f (Get-Date -Format 'HH:mm'), $desired)
+    return
+  }
 }
 
 if ($config.general.switch_type -eq 'theme' -and $config.theme_settings.dark_theme_file)
@@ -37,6 +44,9 @@ $lockScreenImage = if ($config.wallpaper.enabled -and $wallpaperImage) { $wallpa
 
 # 颜色切完再换指针；缺文件或关闭 cursor.enabled 时静默跳过。
 Set-WindowsCursorScheme -Mode 'dark' -Config $config | Out-Null
+
+# 键盘背光：ThinkPad 设备随深色模式切至目标亮度（非 ThinkPad 或禁用时静默跳过）
+Set-ThinkPadKeyboardBacklight -Mode 'dark' -Config $config | Out-Null
 
 if ($config.general.show_notification)
 {

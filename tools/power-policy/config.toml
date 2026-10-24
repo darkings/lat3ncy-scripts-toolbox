@@ -1,0 +1,36 @@
+# lat3ncy-scripts-toolbox / tools/power-policy/config.toml
+#
+# 改这里的值之后，需要重新运行 Install-PowerPolicy.ps1 才会生效：
+# 安装脚本会把解析后的数值烘焙进计划任务参数，运行期不再读本文件。
+# 单位统一为「秒」，0 表示「永不」。
+#
+# 说明：本工具用自带的极简 TOML 读取（只支持 [section] 与 key = 标量），
+#       字符串里的反斜杠按字面处理，不做转义解释。
+
+[general]
+# 常驻循环的检查间隔（秒）。Caffeine 手开手关，5 秒足够。
+interval_seconds = 5
+# 计划任务名前缀。会注册 "<task_name>" 与 "<task_name>-OnLidEvent" 两个任务。
+task_name = "PowerPolicy"
+
+[power]
+# 空闲多久后睡眠（STANDBYIDLE）
+#   插电 0    = 永不
+#   电池 1800 = 30 分钟
+ac_standby_seconds = 0
+dc_standby_seconds = 1800
+
+# 睡满多久后转 S4 休眠（HIBERNATEIDLE）
+#   插电 0    = 永不（开盖瞬亮，不必等固件 POST）
+#   电池 3600 = 60 分钟
+ac_hibernate_seconds = 0
+dc_hibernate_seconds = 3600
+
+# 空闲多久后关屏（VIDEOIDLE）
+ac_video_idle_seconds = 600
+dc_video_idle_seconds = 600
+
+[caffeine]
+# Raycast Coffee 扩展的状态目录。
+# 判定方式：该目录下存在 state.json，且其中的 pid 进程仍存活。
+coffee_dir = "%LOCALAPPDATA%\coffee"

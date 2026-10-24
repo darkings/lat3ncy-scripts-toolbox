@@ -22,7 +22,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\startup\Start-Toolbo
 Get-Content "$env:LOCALAPPDATA\lat3ncy-toolbox\startup.log" -Tail 20
 ```
 
-**看护任务（防 AHK 消失）**：`Lat3ncyToolbox-Watchdog` 在登录时以及之后每 5 分钟检查一次 `ahk/main.ahk`，不在就调用 `Start-Toolbox.ps1` 拉起。启动方式是 `wscript.exe //B tools\startup\Watchdog-Launch.vbs`（VBS 里写死路径，任务参数没有嵌套引号），不分配控制台。
+**看护任务（唯一一个，看护两个对象）**：`Lat3ncyToolbox-Watchdog` 在登录时以及之后每 5 分钟检查一次，对象有两个：
+
+1. `ahk/main.ahk` —— 不在就调用 `Start-Toolbox.ps1` 拉起；
+2. `tools/power-policy/PowerPolicy.ps1` 的常驻循环进程 —— 不在就 `Start-ScheduledTask PowerPolicy`。
+
+两段逻辑都在 `tools/startup/Ensure-ToolboxRunning.ps1` 里，任一对象异常都以退出码 1 结束并写日志。启动方式是 `wscript.exe //B tools\startup\Watchdog-Launch.vbs`（VBS 里写死路径，任务参数没有嵌套引号），不分配控制台。
+
+> 补充：非提权进程可以启动 `RunLevel=Highest` 的计划任务（本机 2026-10-24 实测），所以看护任务保持 `Limited`，电源策略任务保持 `Highest`，两者不冲突。
 
 ```powershell
 # 注册/更新（需要管理员；任务注册在普通权限下会被拒）
@@ -73,7 +80,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ahk\tests\run-tests.ps
 | `tools/ime-hud-winui/` | CapsLock 状态芯片与翻译面板（WinUI 3），改了必须重载 |
 | `tools/raycast-scripts/` | Raycast Script Commands，见下表 |
 | `tools/theme-scheduler/` | 按日出日落切深浅色 / 壁纸 / 鼠标方案 |
-| `tools/startup/` | 登录自启入口 |
+| `tools/power-policy/` | 合盖/空闲的睡眠与休眠策略，Caffeine 感知（动态切 `LIDACTION`） |
+| `tools/startup/` | 登录自启入口 + 看护任务（看护 AHK 与 power-policy） |
 | `resources/cursors/` | 9 套鼠标配色，供 theme-scheduler 使用 |
 
 Raycast 里添加 `tools/raycast-scripts` 目录即可用，可逐个绑 Hotkey：

@@ -285,3 +285,56 @@ Raycast Coffee、PowerToys Awake、Insomnia 用的都是这个 API，**所以"�
 
 - 迁移后的端到端行为（拔电合盖 → 睡 → 开盖瞬亮；插电合盖 70 分钟 → 不转 S4）需要实机跑一次确认。
 - `LenovoSmartStandby` 服务停摆的**诱因**未定位（`Service Control Manager` 日志里没有对应记录），目前是"减少扰动 + 出错自愈"，不是根治。
+
+## 2026-10-25：插电合盖 60 分钟后仍然休眠——Lenovo 一直在改写 HIBERNATEIDLE(AC)
+
+10-25 出现两次真 S4（都做了固件 POST，`Kernel-Boot 27 引导类型=0x2`、`hiberfil.sys` 被写），其中 18:05 那次是确定的缺陷。
+
+### 现象与证据
+
+```
+17:05:26  Lid has been closed
+17:05:27  Hibernate Timeout (AC) has been updated to 60 minutes.     ← Lenovo，合盖同一秒
+18:05:28  Kernel-Power 507 时长=60分 睡眠=60分
+18:05:31  Kernel-Power 42 Reason=6 (Hibernate from Sleep - Fixed Timeout) TargetState=5
+19:22:27  Kernel-Boot 27 引导类型=0x2 → 真 S4 恢复，开盖见 BIOS logo
+```
+
+`powercfg` 里 AC 明明是 0（永不）。防漂移当天纠正了约 10 次，每次回读都是 `AC=0s`——**但纠正发生在唤醒之后，对"睡眠期间就已经触发"的休眠无效**。
+
+按天统计 Lenovo 的写入（`Lenovo-Power-SmartStandby/Operational`）：
+
+| 日期 | AC 写入 | DC 写入 |
+|---|---|---|
+| 10-13 ~ 10-21（IsAutonomic=1） | 每天 4~12 笔 | 每天 17~42 笔 |
+| **10-22 起（IsAutonomic=0）** | 每天 7~49 笔 | **0 笔** |
+
+结论：`IsAutonomic=0` 确实让它不再碰 DC，但**它仍然独占 AC**——每次合盖/唤醒都按 `HibernateIdleOvertime` 写一次。
+
+### 根因：字段映射猜错了一次
+
+第一版把 AC 目标写进 `HibernateIdleDaytime`（=0），重启服务后它照样打印 `Hibernate Timeout (AC) has been updated to 60 minutes`（当时 Overtime=60）→ **AC 取的是 Overtime，不是 Daytime**。
+
+第二次把 `HibernateIdleOvertime = 0`、`Daytime = 60`，服务重启后日志变成：
+
+```
+Smart Standby is enabled. Idle daytime: 60, Idle overtime: 0, Promote hibernate length: 90.
+The calculated value out of range.
+```
+
+**它算出越界值后直接跳过写入**，AC 保留 `powercfg` 设的 0 → 插电合盖不再转 S4。这也是想要的最终效果：不写 = 不覆盖。
+
+### 修复
+
+| 位置 | 改动 |
+|---|---|
+| `Set-LenovoSmartStandbyPolicy` | `HibernateIdleOvertime = LenovoAcHibernateMinutes`（默认 0）、`HibernateIdleDaytime = DC 分钟数`；注释写明实测依据 |
+| `Test-LenovoPolicyDrift` | 同步交换比较对象，避免误判偏离导致无谓重启服务 |
+| `config.toml` | 新增 `lenovo_ac_hibernate_minutes = 0` |
+
+顺带修掉一处 `-f` 运算符优先级 bug：`"A" + "B{0}{1}" -f x,y` 只会格式化第二段，日志里留下未替换的 `{0}`；正确写法是把拼接整体括起来再 `-f`。
+
+### 未验证
+
+- 需要一次真实的"插电 → 合盖 → 70 分钟 → 开盖"来确认不再 S4（服务启动路径已确认跳过写入，但合盖路径尚未实测）。
+- 20:49:57 那次 S4 的 `Kernel-Power 42 Reason=0 (Button or Lid)`，当时 `LidOpenState=true`（盖子开着），更像是手动休眠或电源键触发；Lenovo 同时设置了 `10/26 07:28` 的 BIOS 唤醒定时器，待确认是否为用户操作。

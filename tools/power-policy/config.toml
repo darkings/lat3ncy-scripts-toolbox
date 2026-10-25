@@ -1,4 +1,4 @@
-# lat3ncy-scripts-toolbox / tools/power-policy/config.toml
+﻿# lat3ncy-scripts-toolbox / tools/power-policy/config.toml
 #
 # 改这里的值之后，需要重新运行 Install-PowerPolicy.ps1 才会生效：
 # 安装脚本会把解析后的数值烘焙进计划任务参数，运行期不再读本文件。
@@ -29,6 +29,12 @@ dc_hibernate_seconds = 3600
 # 空闲多久后关屏（VIDEOIDLE）
 ac_video_idle_seconds = 600
 dc_video_idle_seconds = 600
+
+# Lenovo 会把这个值写进 HIBERNATEIDLE(AC)（实测对应它的 HibernateIdleOvertime 字段）。
+# 必须保持 0：否则 Lenovo 会在每次合盖/唤醒时把 AC 改回该值，
+# 而本工具在 S0 期间被挂起、无法纠正，插电合盖就会照样休眠。
+# （DC 不受它影响：IsAutonomic=0 后 Lenovo 不再写 DC）
+lenovo_ac_hibernate_minutes = 0
 
 [caffeine]
 # Raycast Coffee 扩展的状态目录。

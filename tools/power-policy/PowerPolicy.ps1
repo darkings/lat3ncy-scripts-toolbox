@@ -78,6 +78,12 @@ param(
     # 兼容旧参数名（已废弃，仅用于识别老任务配置）
     [int]$BatteryLidGraceMinutes = -1,
 
+    # Lenovo 会把这个值写进 HIBERNATEIDLE(AC)（实测对应其 HibernateIdleOvertime 字段）。
+    # 设 0 = 让 Lenovo 把 AC 写成「永不」，从而插电合盖永不转 S4。
+    # （DC 不受影响：IsAutonomic=0 后 Lenovo 不再写 DC，DC 由 powercfg 控制）
+    [ValidateRange(0, 86400)]
+    [int]$LenovoAcHibernateMinutes = 0,
+
     # 合盖时是否强制请求睡眠。
     # 【默认关闭】2026-10-22 20:33 实测：本机不支持 S3，强制挂起会回落成 S4 休眠，
     # 导致开盖出现 BIOS logo。默认只靠 SC_MONITORPOWER 关屏，让系统自然进 S0。
@@ -188,6 +194,9 @@ if (-not $PSBoundParameters.ContainsKey('AcVideoIdleSeconds')) {
 }
 if (-not $PSBoundParameters.ContainsKey('DcVideoIdleSeconds')) {
     $DcVideoIdleSeconds = [int](Get-CfgValue $PP_CFG 'power' 'dc_video_idle_seconds' $DcVideoIdleSeconds)
+}
+if (-not $PSBoundParameters.ContainsKey('LenovoAcHibernateMinutes')) {
+    $LenovoAcHibernateMinutes = [int](Get-CfgValue $PP_CFG 'power' 'lenovo_ac_hibernate_minutes' $LenovoAcHibernateMinutes)
 }
 if (-not $PSBoundParameters.ContainsKey('IntervalSeconds')) {
     $IntervalSeconds = [int](Get-CfgValue $PP_CFG 'general' 'interval_seconds' $IntervalSeconds)
@@ -402,32 +411,48 @@ function Set-LenovoSmartStandbyPolicy {
     $dcMinutes = [int][math]::Round($DcSeconds / 60)
     if ($dcMinutes -lt 1) { $dcMinutes = 1 }
 
+    # 【2026-10-25 关键修复】Lenovo 的 HibernateIdleDaytime 会被它写进 HIBERNATEIDLE(AC)。
+    #
+    # 实测证据（Lenovo-Power-SmartStandby/Operational）：
+    #   17:05:27  Hibernate Timeout (AC) has been updated to 60 minutes.   ← 合盖同一秒
+    #   18:05:28  Kernel-Power 507 睡眠 60 分 → 42 Reason=6 TargetState=5（fixed timeout）
+    #   19:22:27  Kernel-Boot 27 引导类型=0x2 → 真 S4，开盖见 BIOS logo
+    # 也就是说：Daytime=60 会让 Lenovo 在每次合盖/唤醒时把 AC 改回 60 分钟，
+    # 而本脚本在 S0 期间被 DAM 挂起，根本改不回来 → 插电合盖 60 分钟后仍会休眠。
+    #
+    # 又因为 IsAutonomic=0 之后 Lenovo 只写 AC、完全不再写 DC（10-22 起 DC 写入 0 笔），
+    # 所以把 Daytime 设为 0 即可让 AC 恒为「永不」，DC 仍由我们的 powercfg 管住。
+    $lenovoAcMinutes = [Math]::Max(0, $LenovoAcHibernateMinutes)
+
     try {
         # 先读注册表现值，判断是否真的需要变更 —— 决定要不要重启服务
         $cur = Get-ItemProperty -Path $root -ErrorAction SilentlyContinue
         $regChanged = (
             ($cur.IsEnabled            -ne 1) -or
             ($cur.IsAutonomic          -ne 0) -or
-            ($cur.HibernateIdleDaytime -ne $dcMinutes) -or
-            ($cur.HibernateIdleOvertime -ne $dcMinutes)
+            ($cur.HibernateIdleOvertime -ne $lenovoAcMinutes) -or
+            ($cur.HibernateIdleDaytime -ne $dcMinutes)
         )
 
         if ($regChanged) {
-            # 1) 保持服务启用 —— 这是 LidPolicy 拿到 Lid / Console Display 事件的唯一数据源
+            # 1) 保持服务启用 —— 这是本工具拿到 Lid / Console Display 事件的唯一数据源
             Set-ItemProperty -Path $root -Name 'IsEnabled' -Value 1 -Type DWord -ErrorAction Stop
-            # 2) 关闭自适应 —— 它便不再按存在感动态计算，也不再改写 AC
+            # 2) 关闭自适应 —— 它便不再按存在感动态计算，也不再碰 DC
             Set-ItemProperty -Path $root -Name 'IsAutonomic' -Value 0 -Type DWord -ErrorAction Stop
-            # 3) 用它的手动参数直接规定 DC 超时（实测单位：分钟）
+            # 3) 【实测修正 2026-10-25】Lenovo 把 HibernateIdleOvertime 写进 HIBERNATEIDLE(AC)：
+            #    把 Daytime 设 0 后它仍打印 "Hibernate Timeout (AC) ... 60 minutes"，
+            #    而当时 Overtime=60 -> 证明 AC 取的是 Overtime。故把 AC 目标写进 Overtime。
+            Set-ItemProperty -Path $root -Name 'HibernateIdleOvertime' -Value $lenovoAcMinutes -Type DWord -ErrorAction Stop
+            # 4) Daytime 不再是 AC 的来源；填 DC 分钟数，作为语义参考（IsAutonomic=0 时它不写 DC）
             Set-ItemProperty -Path $root -Name 'HibernateIdleDaytime'  -Value $dcMinutes -Type DWord -ErrorAction Stop
-            Set-ItemProperty -Path $root -Name 'HibernateIdleOvertime' -Value $dcMinutes -Type DWord -ErrorAction Stop
-            # 4) 子键里的自适应/存在感预测一并关掉
+            # 5) 子键里的自适应/存在感预测一并关掉
             $auto = Join-Path $root 'Autonomic'
             if (Test-Path $auto) {
                 Set-ItemProperty -Path $auto -Name 'IsAutonomic' -Value 0 -Type DWord -ErrorAction SilentlyContinue
                 Set-ItemProperty -Path $auto -Name 'IsPresenceDataSufficient' -Value 0 -Type DWord -ErrorAction SilentlyContinue
             }
-            Write-Log ("  [Lenovo] IsEnabled=1（保留事件日志）、IsAutonomic=0（不改 AC）、" +
-                       "IdleDaytime/Overtime={0} 分钟 -> DC 目标 {1}s" -f $dcMinutes, $DcSeconds)
+            Write-Log (("  [Lenovo] IsEnabled=1、IsAutonomic=0；Overtime={0} 分钟（它写 AC）" +
+                        " Daytime={1} 分钟（DC 实际由 powercfg 控制）") -f $lenovoAcMinutes, $dcMinutes)
         }
 
         # 5) 【2026-10-24 优化】仅在必要时才重启服务。
@@ -485,7 +510,11 @@ function Set-LenovoSmartStandbyPolicy {
 
 function Test-LenovoPolicyDrift {
     <# 检查 Lenovo 状态是否与策略一致；$true = 发生偏离，需要重新应用 #>
-    param([int]$AcSeconds = 0, [int]$DcSeconds = 3600)
+    param(
+        [int]$AcSeconds = 0,
+        [int]$DcSeconds = 3600,
+        [int]$LenovoAcMinutes = 0
+    )
 
     $root = 'HKLM:\SOFTWARE\WOW6432Node\Lenovo\SmartStandby'
     if (-not (Test-Path $root)) { return $false }
@@ -495,10 +524,11 @@ function Test-LenovoPolicyDrift {
     $dcMinutes = [int][math]::Round($DcSeconds / 60)
     if ($dcMinutes -lt 1) { $dcMinutes = 1 }
 
+    # Daytime 对应 Lenovo 写进 AC 的值（见 Set-LenovoSmartStandbyPolicy 注释）
     $bad = ($p.IsEnabled   -ne 1) -or
            ($p.IsAutonomic -ne 0) -or
-           ($p.HibernateIdleDaytime  -ne $dcMinutes) -or
-           ($p.HibernateIdleOvertime -ne $dcMinutes)
+           ($p.HibernateIdleOvertime -ne $LenovoAcMinutes) -or
+           ($p.HibernateIdleDaytime  -ne $dcMinutes)
     if ($bad) { return $true }
 
     $q = & powercfg /q SCHEME_CURRENT SUB_SLEEP 9d7815a6-7ee4-497e-8888-515a05f02364 2>&1 | Out-String
@@ -949,12 +979,12 @@ function Start-LidPolicyLoop {
                 # 或改写 HIBERNATEIDLE。仅在检测到偏离时才纠正一次，
                 # 不是每轮都写（避免变成对抗式反复重写）。
                 try {
-                    if (Test-LenovoPolicyDrift -AcSeconds $AcHibernateSeconds -DcSeconds $DcHibernateSeconds) {
+                    if (Test-LenovoPolicyDrift -AcSeconds $AcHibernateSeconds -DcSeconds $DcHibernateSeconds -LenovoAcMinutes $LenovoAcHibernateMinutes) {
                         # 注意：多数情况下只是 HIBERNATEIDLE 被 Lenovo 从睡眠恢复时改回去了，
                         # 注册表参数仍是好的。Set-LenovoSmartStandbyPolicy 内部会自行判断
                         # 是否真的需要重启服务，所以这里不必再区分。
                         Write-Log '  [防漂移] 检测到 Lenovo 休眠参数偏离，重新应用'
-                        [void](Set-LenovoSmartStandbyPolicy -AcSeconds $AcHibernateSeconds -DcSeconds $DcHibernateSeconds)
+                        [void](Set-LenovoSmartStandbyPolicy -AcSeconds $AcHibernateSeconds -DcSeconds $DcHibernateSeconds -LenovoAcHibernateMinutes $LenovoAcHibernateMinutes)
                     }
                     # 同时纠正空闲睡眠 / 关屏超时（内部自带"相同就不写"，开销极小）
                     [void](Set-StandbyIdle -AcSeconds $AcStandbySeconds -DcSeconds $DcStandbySeconds)
@@ -1019,7 +1049,7 @@ if ($Install) {
     # ---- 第 1 步：配置 Lenovo Smart Standby（让它自己写入并保持目标值）----
     Write-Log ''
     Write-Log '=== 配置 Lenovo Smart Standby ==='
-    [void](Set-LenovoSmartStandbyPolicy -AcSeconds $AcHibernateSeconds -DcSeconds $DcHibernateSeconds)
+    [void](Set-LenovoSmartStandbyPolicy -AcSeconds $AcHibernateSeconds -DcSeconds $DcHibernateSeconds -LenovoAcHibernateMinutes $LenovoAcHibernateMinutes)
 
     # ---- 第 1b 步：空闲睡眠超时（AC 永不 / DC 30 分钟）+ 空闲关屏（都是 10 分钟）----
     Write-Log ''
@@ -1038,7 +1068,7 @@ if ($Install) {
     }
 
     # 统一参数串
-    $commonArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`" -AcHibernateSeconds $AcHibernateSeconds -DcHibernateSeconds $DcHibernateSeconds -AcStandbySeconds $AcStandbySeconds -DcStandbySeconds $DcStandbySeconds -AcVideoIdleSeconds $AcVideoIdleSeconds -DcVideoIdleSeconds $DcVideoIdleSeconds"
+    $commonArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`" -AcHibernateSeconds $AcHibernateSeconds -DcHibernateSeconds $DcHibernateSeconds -AcStandbySeconds $AcStandbySeconds -DcStandbySeconds $DcStandbySeconds -AcVideoIdleSeconds $AcVideoIdleSeconds -DcVideoIdleSeconds $DcVideoIdleSeconds -LenovoAcHibernateMinutes $LenovoAcHibernateMinutes"
     if ($WakeWhitelist.Count -gt 0) {
         $quoted = ($WakeWhitelist | ForEach-Object { "'$_'" }) -join ','
         $commonArgs += " -WakeWhitelist $quoted"

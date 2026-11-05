@@ -466,8 +466,19 @@ function Set-LenovoSmartStandbyPolicy {
         #      - 注册表真的变了、或服务没在跑  -> 才重启/启动服务
         #      - 只是 powercfg 的 HIBERNATEIDLE 漂移 -> 纯 powercfg 覆盖，不碰服务
         #    这样 Lenovo 改回去一次，我们只覆盖一个数值，服务完全不受扰动。
-        $svcStatus = (Get-Service -Name 'LenovoSmartStandby' -ErrorAction SilentlyContinue).Status
-        if ($regChanged -or $svcStatus -ne 'Running') {
+        # 【2026-11-05】若服务已被手动禁用（StartType=Disabled），说明用户选择让它彻底不运行
+        #   —— 它是 HIBERNATEIDLE(AC) 被反复改写、以及按活跃时段算倒计时的唯一来源。
+        #   此时绝不尝试启动/重启它，只维护下面 powercfg 里的数值。
+        $svcObj = Get-Service -Name 'LenovoSmartStandby' -ErrorAction SilentlyContinue
+        $svcDisabled = ($svcObj -and $svcObj.StartType -eq 'Disabled')
+        if ($svcDisabled) {
+            if (-not $script:LenovoDisabledNotice) {
+                Write-Log '  [Lenovo] 服务已禁用（StartType=Disabled）：跳过启动/重启，仅维护 powercfg'
+                $script:LenovoDisabledNotice = $true
+            }
+        }
+        $svcStatus = if ($svcObj) { $svcObj.Status } else { 'NotFound' }
+        if (-not $svcDisabled -and ($regChanged -or $svcStatus -ne 'Running')) {
             if ($svcStatus -eq 'Running') {
                 Restart-Service -Name 'LenovoSmartStandby' -Force -ErrorAction SilentlyContinue
                 $act = '重启'
@@ -550,7 +561,15 @@ function Restore-LenovoSmartStandbyDefault {
             Set-ItemProperty -Path $auto -Name 'IsAutonomic' -Value 1 -Type DWord -ErrorAction SilentlyContinue
             Set-ItemProperty -Path $auto -Name 'IsPresenceDataSufficient' -Value 1 -Type DWord -ErrorAction SilentlyContinue
         }
-        Restart-Service -Name 'LenovoSmartStandby' -Force -ErrorAction SilentlyContinue
+        # 若之前被设为 Disabled，回滚时必须改回 Automatic 才能真正恢复
+        $svc = Get-Service -Name 'LenovoSmartStandby' -ErrorAction SilentlyContinue
+        if ($svc -and $svc.StartType -eq 'Disabled') {
+            Set-Service -Name 'LenovoSmartStandby' -StartupType Automatic -ErrorAction SilentlyContinue
+            Write-Log '  [Lenovo] 启动类型已从 Disabled 恢复为 Automatic'
+            Start-Service -Name 'LenovoSmartStandby' -ErrorAction SilentlyContinue
+        } else {
+            Restart-Service -Name 'LenovoSmartStandby' -Force -ErrorAction SilentlyContinue
+        }
         Write-Log '  [Lenovo] 已恢复 Smart Standby 自主管理（IsEnabled=1）'
     } catch {
         Write-Log ("  [Lenovo] 回滚失败：{0}" -f $_.Exception.Message)
@@ -608,12 +627,69 @@ function Set-DisplayOn {
 }
 
 # ---------------------------------------------------------------- 盖子状态
+# ---------------------------------------------------------------- 盖子状态
+# 2026-11-05：Lenovo 的 Smart Standby 服务被禁用后（见 findings.md），
+# Lenovo-Power-SmartStandby 事件日志不再更新。盖子状态改以 **OS 自己的**
+# Kernel-Power 506/507 事件的 LidOpenState 字段为准——不依赖任何厂商服务。
+# Lenovo 日志降级为次要回退（服务仍启用时可用）。
+#
+# 已知局限：当 LIDACTION=0（Caffeine 开着合盖不睡）时，合盖不会产生 506/507，
+# 因此最后一次快照可能仍是「打开」。这只影响日志文案，不影响行为——
+# 睡眠决策只由 Caffeine 决定，与盖子状态无关。
+$script:LidSnapCache      = $null
+$script:LidSnapCacheAt    = [datetime]::MinValue
+$script:LidSnapCacheTtlSec = 6
+
+function Get-KernelPowerLidSnapshots {
+    <# 返回按时间升序的 @{ Time; LidOpen } 列表；带 6 秒缓存避免每轮重复解析 XML。 #>
+    if ($null -ne $script:LidSnapCache -and
+        ((Get-Date) - $script:LidSnapCacheAt).TotalSeconds -lt $script:LidSnapCacheTtlSec) {
+        return $script:LidSnapCache
+    }
+
+    $snaps = @()
+    try {
+        $raw = Get-WinEvent -FilterHashtable @{
+            LogName      = 'System'
+            ProviderName = 'Microsoft-Windows-Kernel-Power'
+            Id           = 506, 507
+        } -MaxEvents 80 -ErrorAction Stop
+    } catch {
+        $raw = @()
+    }
+
+    if (@($raw).Count -gt 0) {
+        $list = New-Object System.Collections.ArrayList
+        foreach ($e in (@($raw) | Sort-Object TimeCreated)) {
+            try { $x = [xml]$e.ToXml() } catch { continue }
+            $h = @{}
+            foreach ($d in $x.Event.EventData.Data) { $h[$d.Name] = $d.'#text' }
+            $v = $h['LidOpenState']
+            if (-not $v) { continue }
+            [void]$list.Add([pscustomobject]@{
+                Time    = $e.TimeCreated
+                LidOpen = ($v -eq 'true')
+            })
+        }
+        $snaps = $list.ToArray()
+    }
+
+    $script:LidSnapCache   = $snaps
+    $script:LidSnapCacheAt = Get-Date
+    return $snaps
+}
+
 function Get-LidState {
     <#
-        返回 $true = 盖子打开，$false = 盖子关闭，$null = 无法确定
-        依据：Lenovo-Power-SmartStandby 日志中的 "Lid has been opened/closed"
-        该日志在本机实测可读，且与 Kernel-Power 的 LidOpenState 交叉一致。
+        返回 $true = 盖子打开，$false = 盖子关闭，$null = 无法确定。
+        首选 Kernel-Power 506/507 的 LidOpenState；取不到时回退 Lenovo 日志。
     #>
+    $snaps = @(Get-KernelPowerLidSnapshots)
+    if ($snaps.Count -gt 0) {
+        return $snaps[-1].LidOpen
+    }
+
+    # 回退：Lenovo 日志（服务被禁用后会停在旧状态，仅作兜底）
     try {
         $ev = Get-WinEvent -LogName $LID_LOG -MaxEvents 400 -ErrorAction Stop |
               Where-Object { $_.Message -match 'Lid has been' } |
@@ -629,9 +705,20 @@ function Get-LidState {
 
 function Get-LidClosedTime {
     <#
-        返回最近一次「合盖」事件的时刻（DateTime），无法确定时返回 $null。
-        直接从事件日志读取，因此脚本重启后仍能正确计算已合盖时长。
+        返回最近一次「合盖」时刻；无法确定返回 $null。
+        做法：在 LidOpenState 快照里找当前这段连续「关闭」的起点。
     #>
+    $snaps = @(Get-KernelPowerLidSnapshots)
+    if ($snaps.Count -gt 0) {
+        if ($snaps[-1].LidOpen) { return $null }
+        $closedAt = $snaps[-1].Time
+        for ($i = $snaps.Count - 2; $i -ge 0; $i--) {
+            if ($snaps[$i].LidOpen) { break }
+            $closedAt = $snaps[$i].Time
+        }
+        return $closedAt
+    }
+
     try {
         $ev = Get-WinEvent -LogName $LID_LOG -MaxEvents 400 -ErrorAction Stop |
               Where-Object { $_.Message -match 'Lid has been closed' } |
@@ -998,7 +1085,10 @@ function Start-LidPolicyLoop {
                     #   行为仍正确（Windows 自己按 LIDACTION 执行），但可观测性与保活分支失效。
                     #   之前防漂移只查注册表数值，服务停了不算偏离，永远纠正不到，现补上。
                     $svc = Get-Service -Name 'LenovoSmartStandby' -ErrorAction SilentlyContinue
-                    if ($svc -and $svc.Status -ne 'Running') {
+                    # 用户主动禁用（StartType=Disabled）时不要拉起它
+                    if ($svc -and $svc.StartType -eq 'Disabled') {
+                        # 预期状态，静默
+                    } elseif ($svc -and $svc.Status -ne 'Running') {
                         Write-Log ("  [防漂移] LenovoSmartStandby 状态为 {0}，正在启动（否则盖子事件流会断）" -f $svc.Status)
                         Start-Service -Name 'LenovoSmartStandby' -ErrorAction SilentlyContinue
                         Start-Sleep -Seconds 2

@@ -1,4 +1,4 @@
-# power-policy
+﻿# power-policy
 
 合盖 / 空闲时的睡眠与休眠策略，带 Caffeine（Raycast Coffee 扩展）感知。
 
@@ -94,6 +94,48 @@ Raycast 的 Coffee 扩展在 worker 启动时写 `state.json`（含 `pid`），�
 
 - **`SetSuspendState(force=TRUE)` 在本机会被固件回落成 S4**。本机只有 S0/S4，没有 S3；强制挂起等于休眠，开盖必见 BIOS logo。所以本工具**不调用任何睡眠 API**。
 - **类型编译不能带副作用**。曾把「未编译就调 `Set-DisplayOff`」当编译触发器，注释写着「副作用为一次关屏，可接受」。事件任务每次合盖都是新进程，于是每次合盖都真的发了 `SC_MONITORPOWER`，把 Caffeine 开着的情况也睡掉。现在编译与动作彻底分离。
-- **`LenovoSmartStandby` 服务停掉会静默断掉盖子事件流**。本工具靠 `Lenovo-Power-SmartStandby/Operational` 日志判断盖子状态，服务一停，日志永久谎报「盖子=打开」。防漂移检查现在包含服务健康检查。
+- **`LenovoSmartStandby` 服务停掉会让 Lenovo 日志断流**。2026-11-05 起盖子状态改读 `Kernel-Power 506/507` 的 `LidOpenState`（OS 自己的记录），不再依赖该日志；Lenovo 日志只作兜底。
 - **不要频繁重启该服务**。Lenovo 每次从睡眠恢复都会改回 `HIBERNATEIDLE`；旧逻辑每次都 `Restart-Service -Force` 纠正，一天七次后服务再也起不来。现在只有注册表参数真变时才重启，纯数值漂移用 `powercfg` 覆盖。
-- **`IsEnabled=0` 不是「关闭 Smart Standby」，而是「拆掉自己的数据源」**。关掉后 Lenovo 不再记录 Lid 事件，本工具失去盖子感知。正确做法是 `IsEnabled=1` + `IsAutonomic=0`。
+- **`IsEnabled=0` 不是「关闭 Smart Standby」**。它只让服务不执行动作，实测它**每天仍改写 `HIBERNATEIDLE(AC)` 4–13 次**。真正阻断只能让服务不运行，见下节。
+## 2026-11-05：为什么最终把 LenovoSmartStandby 服务禁用了
+
+### 现象
+
+10-27 ~ 11-05 共 13 次 S4，全部是 `Kernel-Power 42 Reason=6`（固定超时）。其中 11 次在电池上、累计睡眠正好 ≈60 分钟（**符合设定**）；**但 2 次发生在插电状态**（累计 34 分钟 / 45 分钟），违反「插电永不 S4」。
+
+### 结论：它不是应用，是驱动；且没有任何参数能关掉它
+
+- 服务映像是 `DriverStore\...\smartstandbycomponent.inf_amd64_*\SmartStandby.exe`，来自驱动包 `oem114.inf`（Class=System，WHQL 签名）。**卸载 Lenovo Vantage 不会移除它**。
+- 二进制字符串扫描：`SmartStandby.exe` 含全部四个配置值名；`Program Files\Lenovo` 与 `WindowsApps` 命中 **0** —— Vantage 只是 UI（RPC 客户端）。
+- 三次参数实验（`Daytime` / `Overtime` / `PromoteHibernateLength` 各种组合）**都仍会写 AC=有限值**。11-02 的日志暴露了规律：它按「活跃时段结束 23:30」算剩余分钟并倒计时（35 → 34）。
+- 所以**注册表层面没有开关**，只能让它不运行。
+
+### 采用方案
+
+```powershell
+sc config LenovoSmartStandby start= disabled
+sc stop  LenovoSmartStandby
+```
+
+本机 `FailureActions` 未配置，不需要额外清「自动恢复」。回退：
+
+```powershell
+sc config LenovoSmartStandby start= auto
+sc start  LenovoSmartStandby
+```
+
+`Uninstall-PowerPolicy.ps1` 也会把启动类型恢复为 Automatic。
+
+### 配套代码改动
+
+1. 盖子状态改读 `Kernel-Power 506/507` 的 `LidOpenState`（OS 自己的记录，不依赖厂商服务），Lenovo 日志降为兜底。带 6 秒缓存，避免每轮重复解析 XML。
+2. 服务为 `Disabled` 时不再尝试启动/重启它，只维护 `powercfg` 数值。
+
+### 已知局限
+
+`LIDACTION=0`（Caffeine 开着、合盖不睡）时合盖**不产生** 506/507，最后一次快照可能仍是「打开」。只影响日志文案，**不影响行为**——睡眠决策只由 Caffeine 决定，与盖子状态无关。
+
+### 参考
+
+- GitHub `brevstgaard/-Kill--the-Lenovo-SmartStandby-and-User-Presence-Sensing-feature`：同样用 `sc config` + `sc stop`
+- GitHub gist（T14 Gen 3 实测）：额外提醒清 `sc failure ... actions=none`（本机本来就没有配置，无需处理）

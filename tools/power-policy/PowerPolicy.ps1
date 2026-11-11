@@ -983,11 +983,19 @@ function Invoke-LidPolicy {
         return
     }
 
-    # Caffeine 开着且已合盖：额外持有保活，确保即便 LIDACTION 被外部改回也能撑住
+    # Caffeine 开着且已合盖：额外持有保活，确保即便 LIDACTION 被外部改回也能撑住。
+    #
+    # 【2026-11-11 修复】这里原本每轮（5 秒）都写一条日志，合盖 + Caffeine 一开就是
+    # 400+ 行/天（当天 455 行里 406 行是它）。改为只在「进入该状态」时记一次。
     if (-not $lidOpen -and $caffeine) {
         if (Set-SystemAwake) {
-            Write-Log '  [保活] Caffeine 开启，持有 ES_SYSTEM_REQUIRED 保持运行'
+            if (-not $script:LidKeepAwakeNoted) {
+                Write-Log '  [保活] Caffeine 开启 + 已合盖：持有 ES_SYSTEM_REQUIRED，保持运行'
+                $script:LidKeepAwakeNoted = $true
+            }
         }
+    } else {
+        $script:LidKeepAwakeNoted = $false
     }
 }
 

@@ -139,3 +139,58 @@ sc start  LenovoSmartStandby
 
 - GitHub `brevstgaard/-Kill--the-Lenovo-SmartStandby-and-User-Presence-Sensing-feature`：同样用 `sc config` + `sc stop`
 - GitHub gist（T14 Gen 3 实测）：额外提醒清 `sc failure ... actions=none`（本机本来就没有配置，无需处理）
+## 2026-11-11（二）：路线 A 定稿 —— 合盖会锁屏，但系统不睡
+
+### 最终形态
+
+`LIDACTION` **恒为 1**（睡眠），不再随 Caffeine 在 0/1 之间切换：
+
+| Caffeine | 合盖后 |
+| --- | --- |
+| 开 | Windows 关屏 + 锁屏 + 尝试进 S0；本工具持有 Power Request → 系统**留在工作状态**，不睡 |
+| 关 | Windows 关屏 + 锁屏 + 进 S0 → DC 满 60 分钟按 `HIBERNATEIDLE` 转 S4 |
+
+开盖需要重新验证登录（Windows 在合盖时就锁了会话）。**这是 `LIDACTION=1` 的固有行为，已确认可接受。**
+
+### 为什么不是 LIDACTION=0
+
+`LIDACTION=0` 是「什么都不做」：
+
+1. 合盖后屏幕**不关**；
+2. 合盖**不产生** `Kernel-Power 506/507`，本工具的盖子检测会永久停在旧值。
+
+曾经为此尝试过用 AHK 监听 `GUID_LIDSWITCH_STATE_CHANGE` 广播来补救，但实测 **AHK 的隐藏窗口收不到 `WM_POWERBROADCAST`**（`RegisterPowerSettingNotification` 返回了有效句柄，60 秒内 0 次回调），该方案已放弃并删除 `shared/notify/lid-broadcast.ahk`。
+
+### Power Request 的实测边界
+
+升级到 `PowerCreateRequest/PowerSetRequest` 后，请求会以原因字符串
+`Lat3ncy PowerPolicy: Caffeine keep-awake` 出现在 `powercfg /requests` 的 SYSTEM 段，
+从此「有没有生效」可以直接验证。
+
+**已经有量化的对照数据：**
+
+| 合盖时刻 | Caffeine 开启时长 | SleepEntered | 实际睡眠 |
+| --- | --- | --- | --- |
+| 21:47:08 | **4 秒** | `true` | **167 秒** ❌ |
+| 21:55:40 | 8 分钟 | `false` | **0 秒** ✅ |
+
+结论：请求本身有效，但**刚建立时存在生效延迟**。开关 Caffeine 之后立刻合盖（几秒内）
+仍可能被睡眠指令抢在前面。正常使用不会触发，暂不额外处理。
+
+### 仍然存在的限制
+
+`PolicyChange` 级别的会话切换（例如 11-11 12:22 那次由 `AnalyzeSystem`
+触发的连续会话重建）有可能绕过 Power Request。该任务已禁用：
+
+```powershell
+schtasks /Change /TN "\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem" /DISABLE
+# 回滚
+schtasks /Change /TN "\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem" /ENABLE
+```
+
+### 不做的两件事
+
+- **不自己发 `SC_MONITORPOWER`**：关屏交给 Windows（`LIDACTION=1`），
+  `Set-DisplayOff` / `Set-DisplayOn` 已删除，避开 10-23 那个「类型编译副作用关屏」的坑。
+- **不设 `CONSOLELOCK=0`**：那是「从睡眠唤醒不要求密码」，而现在的锁屏是
+  合盖动作直接触发的，改它对本次场景无效。

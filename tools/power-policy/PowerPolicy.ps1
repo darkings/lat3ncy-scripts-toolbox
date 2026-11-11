@@ -309,27 +309,85 @@ namespace LidPolicy {
                 SendMessage(HWND_BROADCAST, WM_SYSCOMMAND, (IntPtr)SC_MONITORPOWER, (IntPtr)(-1));
             }
         }
-        // 持有：阻止系统进入 S0 待机（不阻止显式 shutdown /h）
-        public static bool HoldSystem() {
-            return SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) != 0;
+        // ================= 现代 Power Request API（2026-11-11 升级）=================
+        // 为什么加这一层：
+        //   11-11 12:22 出现过「Caffeine 开着 + 插电 + 合盖」仍然睡 116 分钟。
+        //   当时只用了 legacy 的 SetThreadExecutionState，它在 powercfg /requests 里
+        //   【完全不可见】，也没挡住 PolicyChange 级别的会话切换。
+        //   PowerCreateRequest/PowerSetRequest 是视频播放器/下载工具用的机制，
+        //   请求会以 REASON_CONTEXT 的字符串出现在 powercfg /requests 的 SYSTEM 段，
+        //   从此「到底有没有生效」可以直接验证，不用靠日志推断。
+        //   两套 API 同时持有：现代请求为主，legacy 作为兜底。
+        public enum POWER_REQUEST_TYPE {
+            PowerRequestDisplayRequired = 0,
+            PowerRequestSystemRequired  = 1,
+            PowerRequestAwayModeRequired = 2,
+            PowerRequestExecutionRequired = 3
         }
-        // 释放：恢复正常电源策略
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct REASON_CONTEXT {
+            public uint Version;
+            public uint Flags;
+            public IntPtr SimpleReasonString;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern IntPtr PowerCreateRequest(ref REASON_CONTEXT Context);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool PowerSetRequest(IntPtr PowerRequest, POWER_REQUEST_TYPE RequestType);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool PowerClearRequest(IntPtr PowerRequest, POWER_REQUEST_TYPE RequestType);
+
+        const uint POWER_REQUEST_CONTEXT_VERSION = 0;
+        const uint POWER_REQUEST_CONTEXT_SIMPLE_STRING = 0x1;
+
+        static IntPtr _reqHandle = IntPtr.Zero;
+        static IntPtr _reqReason = IntPtr.Zero;
+        static bool _modernHeld = false;
+
+        public static bool ModernRequestAvailable { get { return _reqHandle != IntPtr.Zero; } }
+
+        static IntPtr EnsurePowerRequest() {
+            if (_reqHandle != IntPtr.Zero) return _reqHandle;
+            _reqReason = Marshal.StringToHGlobalUni("Lat3ncy PowerPolicy: Caffeine keep-awake");
+            REASON_CONTEXT ctx = new REASON_CONTEXT();
+            ctx.Version = POWER_REQUEST_CONTEXT_VERSION;
+            ctx.Flags = POWER_REQUEST_CONTEXT_SIMPLE_STRING;
+            ctx.SimpleReasonString = _reqReason;
+            _reqHandle = PowerCreateRequest(ref ctx);
+            return _reqHandle;
+        }
+
+        // 持有：现代电源请求（powercfg /requests 可见）+ legacy 兜底
+        public static bool HoldSystem() {
+            bool modern = false;
+            IntPtr h = EnsurePowerRequest();
+            if (h != IntPtr.Zero) {
+                modern = PowerSetRequest(h, POWER_REQUEST_TYPE.PowerRequestSystemRequired);
+                _modernHeld = modern;
+            }
+            bool legacy = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) != 0;
+            return modern || legacy;
+        }
+
+        // 释放：两套一起清
         public static bool Release() {
-            return SetThreadExecutionState(ES_CONTINUOUS) != 0;
+            bool modern = true;
+            if (_reqHandle != IntPtr.Zero && _modernHeld) {
+                modern = PowerClearRequest(_reqHandle, POWER_REQUEST_TYPE.PowerRequestSystemRequired);
+                _modernHeld = false;
+            }
+            bool legacy = SetThreadExecutionState(ES_CONTINUOUS) != 0;
+            return modern && legacy;
         }
     }
 }
 '@ -ErrorAction Stop
 }
 
-function Set-DisplayOff {
-    <#
-        主动关闭显示器（不进入睡眠/休眠）。
-        仅在被显式调用时才执行，绝不作为编译类型的副作用。
-    #>
-    Initialize-DisplayType
-    [LidPolicy.Display]::Off()
-}
 
 function Set-SystemAwake {
     <#
@@ -620,11 +678,6 @@ namespace LidPolicy {
     }
 }
 
-function Set-DisplayOn {
-    # 主动点亮显示器（复用上方已编译的 LidPolicy.Display 类型）
-    if (-not ('LidPolicy.Display' -as [type])) { return }
-    [LidPolicy.Display]::On()
-}
 
 # ---------------------------------------------------------------- 盖子状态
 # ---------------------------------------------------------------- 盖子状态
@@ -939,17 +992,25 @@ function Invoke-LidPolicy {
     #   3) 之前自己调 SetSuspendState(force=TRUE) 会被固件回落成 S4（见 BIOS logo），
     #      这个方案完全不调用睡眠 API，规避该陷阱。
     #
-    # 实现：
-    #   Caffeine 开  -> LIDACTION=0（不操作）+ 持有保活  => 合盖后继续运行
-    #   Caffeine 关  -> LIDACTION=1（睡眠）             => 合盖后 Windows 原生入睡
-    # 这个设置每轮（5 秒）维护一次，保证在你合盖之前已经就位。
-    $wantSleepOnLidClose = -not $caffeine
+    # 【2026-11-11 路线 A 定稿】LIDACTION 恒为 1（睡眠），不再在 0/1 之间切换。
+    #
+    # 为什么不是 0：
+    #   LIDACTION=0 是「什么都不做」——合盖后屏幕常亮。而且 0 时合盖
+    #   不产生 Kernel-Power 506/507 事件，本工具的盖子检测会永久停在旧值。
+    # 为什么 1 也能实现「关屏但不睡」：
+    #   合盖 -> Windows 按 LIDACTION=1 关屏并尝试进 S0；
+    #   但本工具同时持有 Power Request（SystemRequired），系统会留在 S0
+    #   低功耗运行而不真正断开。关屏由 Windows 完成，我们不自己发
+    #   SC_MONITORPOWER，从而避开 10-23 那个「类型编译副作用关屏」的坑。
+    #
+    #   Caffeine 开 -> 持有请求，系统留在 S0 继续跑（屏幕已灭）
+    #   Caffeine 关 -> 释放请求，S0 满 60 分钟（DC）后按 HIBERNATEIDLE 转 S4
+    $wantSleepOnLidClose = $false          # 恒不主动请求睡眠
+    $lidAction = 1                         # 恒为「睡眠」，关屏交给 Windows
+    $lidActionText = '睡眠'
 
-    $lidAction = if ($wantSleepOnLidClose) { 1 } else { 0 }
-    $lidActionText = if ($wantSleepOnLidClose) { '睡眠' } else { '不操作' }
-
-    $action = if ($wantSleepOnLidClose) { "合盖=睡眠$($(if($lidOpen){''}else{'（已合盖）'}))" }
-              else { "合盖=不操作$($(if($lidOpen){''}else{'（仍保持运行）'}))" }
+    $action = if ($caffeine) { "合盖=关屏不睡（Caffeine 优先）" }
+              else { "合盖=睡眠->S4 计时" }
 
     # 维护 LIDACTION（AC/DC 一致）
     Set-LidAction -Value $lidAction
@@ -983,18 +1044,24 @@ function Invoke-LidPolicy {
         return
     }
 
-    # Caffeine 开着且已合盖：额外持有保活，确保即便 LIDACTION 被外部改回也能撑住。
+    # 【路线 A】这里不再自己发 SC_MONITORPOWER —— 关屏完全交给 Windows。
     #
-    # 【2026-11-11 修复】这里原本每轮（5 秒）都写一条日志，合盖 + Caffeine 一开就是
-    # 400+ 行/天（当天 455 行里 406 行是它）。改为只在「进入该状态」时记一次。
-    if (-not $lidOpen -and $caffeine) {
+    # 我们只做一件事：Caffeine 开着时持有 Power Request。
+    #   - 合盖后 Windows 按 LIDACTION=1 关屏并尝试进 S0
+    #   - 我们的请求让系统留在 S0（低功耗运行），不会断开
+    #   - 开盖时 Windows 自动点亮，无需我们干预
+    if ($caffeine) {
         if (Set-SystemAwake) {
             if (-not $script:LidKeepAwakeNoted) {
-                Write-Log '  [保活] Caffeine 开启 + 已合盖：持有 ES_SYSTEM_REQUIRED，保持运行'
+                Write-Log '  [保活] Caffeine 开启：持有电源请求（合盖时关屏但不断开）'
                 $script:LidKeepAwakeNoted = $true
             }
         }
     } else {
+        if ($script:LidKeepAwakeNoted) {
+            [void](Clear-SystemAwake)
+            Write-Log '  [保活] Caffeine 关闭：释放电源请求，恢复正常的 S0->S4 计时'
+        }
         $script:LidKeepAwakeNoted = $false
     }
 }
@@ -1049,6 +1116,7 @@ function Start-LidPolicyLoop {
             #   插电与电池行为完全一致；唯一能阻止睡眠的只有 Caffeine。
             #   Caffeine 开 -> 持有保活，绝不进 S0（其它电源请求一律不理会）
             #   Caffeine 关 -> 不持有，让系统正常进 S0，由 HIBERNATEIDLE 在 60 分钟后转 S4
+            # 【路线 A】保活只看 Caffeine，与盖子状态无关
             $keepAwake = ($script:LastCaffeine -eq $true)
 
             if ($keepAwake -and -not $holding) {

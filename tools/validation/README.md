@@ -24,4 +24,24 @@ tools/tts/.venv/Scripts/python.exe tools/validation/integration_smoke.py playbac
 
 `playback` 是单独的可选例外：真实调用 MCI 播放静音 WAV，验证正常完成以及播放中的进程取消，不朗读文字或改变音量/默认端点。TTS 探针还运行真实任务编排和终态协议，设备播放边界由文件解码器替代；其通过不等于听感验收。AHK 本机套件另覆盖实际父子进程取消、句柄关闭、归属校验及残片清理。
 
-当前已验证真实 OCR 文字/空白图片、TTS 在线恢复、静音 MCI 播放/中断以及受管 Python 请求的错误交付；本地低完整性 SAPI 限制如实保留为失败。UIA、多屏/DPI、真实剪贴板、朗读听感与连续快捷键打断、合盖/睡眠及设备断连仍按 `tools/startup/README.md` 的矩阵执行。
+当前已验证真实 OCR 文字/空白图片、TTS 在线恢复、MCI 播放/连续替换以及受管 Python 请求的错误交付，面板协议的真实剪贴板探针见下文；本地低完整性 SAPI 限制如实保留为失败。UIA、多屏/DPI、跨应用交付、朗读听感、合盖/睡眠及设备断连仍按 `tools/startup/README.md` 的矩阵执行。
+
+## 可见选区与真实剪贴板探针
+
+`desktop-fixture.ahk` 是显式执行的桌面验收入口，不加入 CI。先创建证据目录，再用本机 AHK v2 引擎运行：
+
+```powershell
+New-Item -ItemType Directory -Force .tmp/integration/desktop | Out-Null
+$ahk = 'C:\path\to\v2\AutoHotkey64.exe' # 替换为已安装的 v2 引擎路径
+& $ahk /ErrorStdOut tools/validation/desktop-fixture.ahk .tmp/integration/desktop/fixture.log
+# 另一种模式：通过现有面板协议测试真实剪贴板，不需要操作工具窗口
+& $ahk /ErrorStdOut tools/validation/desktop-fixture.ahk --protocol-smoke .tmp/integration/desktop/panel.log
+```
+
+可见模式只创建带固定中英文文本的只读编辑框，不注入按键或自动调用语音服务。点击文本框、Ctrl+A，再连续触发真实常驻 Caps+S；结合任务日志、进程与文件清理验证替换/最终完成，点击“检查剪贴板是否恢复”比较完整 ClipboardAll 的字节。用户需另行确认声音和听感。
+
+长译文为 7397 个 UTF-16 代码单元，包含 emoji、竖线、CRLF 和末尾标记。可点“打开长译文测试面板”、实际复制按钮，再点“校验面板复制完整性”。`--protocol-smoke` 则通过现有 `PANEL|COPY|result` 调用同一个生产剪贴板写入路径，验证完整复制、空占位保留剪贴板、关闭后迟到结果不重开；**这不代表按钮命中、翻译后端或跨应用选区已验收**。该模式要求当前仓库 HUD 已运行，会替换并最终关闭当前面板。
+
+探针只在内存保存原 ClipboardAll，日志仅记录布尔值和长度；正常结束时仅在剪贴板仍为本探针已知内容时恢复，避免覆盖期间无关的新复制内容。请正常退出可见窗口，强制结束无法执行恢复回调。
+
+2026-11-20 在单屏、HUD DPI 192 的环境实测：真实 Caps+S 连续三轮，前两轮播放中被替换且进程退出，第三轮两段 MCI 播放正常完成；任务目录/残片无遗留，完整剪贴板恢复通过。上述三个协议探针均通过，证据 `.tmp/integration/20261120-desktop/`。多屏、浏览器/终端选区、复制按钮点击和听感仍待验收。

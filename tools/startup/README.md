@@ -55,7 +55,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 
 ## 自动化与真机验收
 
-`ahk/tests/run-offline-tests.ps1` 是 Windows CI 子集：全部第一方 PowerShell AST/BOM、启动/心跳/发布回滚桩以及 55 个 Python 行为测试。Python 使用 `-S` 排除本机 site-packages；模型、网络服务和硬件均为桩。`.github/workflows/offline-windows.yml` 使用 Python 3.13、Windows PowerShell 5.1 执行它。该流程已在本机验证；远端 Actions 需提交推送后才会运行。
+`ahk/tests/run-offline-tests.ps1` 是 Windows CI 子集：全部第一方 PowerShell AST/BOM、启动/心跳/发布回滚桩以及当前 74 个 Python 行为测试。Python 使用 `-S` 排除本机 site-packages；模型、网络服务和硬件均为桩。`.github/workflows/offline-windows.yml` 使用 Python 3.13、Windows PowerShell 5.1 执行它，并独立源码构建 WinUI；可靠性分支已有远端通过记录，最新结果以对应提交的 Actions 为准。
 
 `run-tests.ps1` 额外验证真实 AHK 引擎、独立 feature 加载、WinUI 构建戳/self-test 与锚点 self-test。两种套件通过都不代表真实合盖、蓝牙和 UIA 场景已验收。
 
@@ -68,9 +68,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 | 场景/步骤 | 预期 | 当前结果 |
 | --- | --- | --- |
 | Chromium、编辑控件、终端中选区翻译；逐一切换多屏/DPI | 锚点落在有效显示范围，原文/结果完整 | 待真机验证 |
-| 5000+ 字符/emoji 译文，点击复制；关闭面板后等待迟到结果 | 剪贴板完整，面板不重开 | 离线行为通过，真实剪贴板待测 |
-| OCR 成功、空白、取消、模型失败 | 正确交付，错误通知存在，runner 最终清理 | 离线桩通过，真实识别待测 |
-| TTS 连续打断、下载失败、本地兜底 | 无残留音频/进程，后续请求正常 | 离线桩通过，真实播放待测 |
+| 5000+ 字符/emoji 译文，点击复制；关闭面板后等待迟到结果 | 剪贴板完整，面板不重开 | 7397 UTF-16 单元的真实协议复制、空结果保护与关闭后迟到结果通过；按钮点击待测 |
+| OCR 成功、空白、取消、模型失败 | 正确交付，错误通知存在，runner 最终清理 | 真实模型固定文字/空白图片通过；真实剪贴板及桌面选区待测，取消/失败离线通过 |
+| TTS 连续打断、下载失败、本地兜底 | 无残留音频/进程，后续请求正常 | 单屏原生编辑控件真实 Caps+S 三轮替换/最终 MCI 完成、进程与文件清理通过；听感待确认，本地 SAPI 仍失败，在线回退通过 |
 | Caffeine 开/关、到期、停止、解锁/恢复 | 请求与策略恢复一致 | 本机开启状态及重载通过，其余待测 |
 | 插电/电池合盖、睡眠、供电切换 | 回调与预期策略一致，任务连续性有实测依据 | 待用户可观察窗口执行 |
 | RGB SDK/HID 断连、重连、退出 | 超时有界，能重连，无忙循环 | 离线协议通过，设备待测 |

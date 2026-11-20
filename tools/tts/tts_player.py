@@ -833,7 +833,7 @@ async def run_pipeline(args) -> None:
     input_text = args.text
     if args.input_file:
         try:
-            with open(args.input_file, "r", encoding="utf-8") as f:
+            with open(args.input_file, "r", encoding="utf-8-sig") as f:
                 input_text = f.read()
         except Exception as e:
             log_error(logger, "读取输入文件失败", e)

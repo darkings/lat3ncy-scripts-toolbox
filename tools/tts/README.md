@@ -69,7 +69,7 @@ tools/tts/.venv/Scripts/python.exe tools/validation/integration_smoke.py tts
 依赖升级应重新验证真实合成，并重新生成带哈希的锁文件。参考 [上游 7.3.0 的协议修复](https://github.com/rany2/edge-tts/releases/tag/7.3.0)、[7.3.1 的日期解析修复](https://github.com/rany2/edge-tts/releases/tag/7.3.1)。
 
 AHK 的“朗读选中文本”入口（`ahk/features/speak-selected-text.ahk`）会把选区写入临时文件，
-再调用本脚本的 `--input-file`；本脚本不负责创建/删除该临时文件。
+再调用本脚本的 `--input-file`；本脚本不负责创建/删除该临时文件。输入文件接受带 BOM 或不带 BOM 的 UTF-8，BOM 不计入文本，只有 BOM/空白的受管请求按输入错误返回。
 
 ## 配置
 

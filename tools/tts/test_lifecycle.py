@@ -95,6 +95,16 @@ class LifecycleTests(unittest.TestCase):
             self.assertIn('status=failed\n', result)
             self.assertIn('error_kind=input\n', result)
 
+    def test_bom_only_input_is_an_input_failure_instead_of_false_success(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(tts, 'get_logger', return_value=Mock()):
+            root = Path(directory)
+            source = root/'input.txt'
+            source.write_text(' \r\n', encoding='utf-8-sig')
+            with patch.object(sys, 'argv', ['tts_player.py', '--input-file', str(source),
+                    '--request-id', 'bom-empty', '--result-file', str(root/'result.txt')]):
+                self.assertEqual(1, tts.main())
+            self.assertIn('error_kind=input\n', (root/'result.txt').read_text('utf-8'))
+
 
 if __name__ == '__main__':
     unittest.main()

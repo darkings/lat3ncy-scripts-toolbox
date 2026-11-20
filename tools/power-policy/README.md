@@ -1,196 +1,78 @@
-﻿# power-policy
+# power-policy v2
 
-合盖 / 空闲时的睡眠与休眠策略，带 Caffeine（Raycast Coffee 扩展）感知。
+Caffeine（Raycast Coffee）决定合盖/空闲策略。睡眠指 Modern Standby（S0 Low Power Idle），休眠指 S4。
 
-Windows 的「合上盖子操作」是静态设置，无法表达「Caffeine 开着就别睡」。本工具每 5 秒读一次 Caffeine 状态，动态改写 `LIDACTION`，把「合盖该不该睡」交回 Windows 原生逻辑处理。
+## 策略
 
-## 行为
-
-| 场景 | 行为 |
-| --- | --- |
-| 插电 + 合盖，Caffeine 关 | 立刻进 S0 睡眠；**永不**转 S4，开盖瞬亮 |
-| 电池 + 合盖，Caffeine 关 | 立刻进 S0 睡眠；60 分钟后转 S4（开盖需等固件 POST） |
-| 合盖，Caffeine 开 | **不睡**，保持运行 |
-| 插电 + 不合盖 | 10 分钟关屏，**永不**因空闲睡眠 |
-| 电池 + 不合盖 | 10 分钟关屏，30 分钟后睡眠 |
-
-术语沿用本机约定：**睡眠 = S4**（恢复见 BIOS logo），**休眠 = S0**（开盖即亮）。上表按实际电源状态描述，避免歧义。
-
-## 为什么不是「让 Caffeine 直接挡住合盖」
-
-Microsoft 文档对 `SetThreadExecutionState` 的说明很明确：
-
-> It cannot prevent sleep caused by the user pressing the power button or closing the lid.
-
-Caffeine（以及 PowerToys Awake 等）用的都是这个 API，**只能挡空闲超时，挡不住合盖**。所以必须改电源设置——也就是 `LIDACTION`。
-
-本机实测各「关屏原因」的真实入睡率（来自睡眠分析报告统计）：
-
-| 关屏原因 | 入睡率 |
-| --- | --- |
-| Video Idle Timeout | 3% |
-| SC_MONITORPOWER（脚本自己的关屏） | 32% |
-| Lid（Windows 原生合盖） | **83%** |
-
-因此本工具**不再自己关屏**，只维护 `LIDACTION`，让 Windows 走原生合盖路径。
-
-## 安装
-
-需要管理员（注册计划任务、写 HKLM 的 Lenovo 键、改电源设置）：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\power-policy\Install-PowerPolicy.ps1
-```
-
-注册两个任务：
-
-| 任务 | 触发 | 作用 |
+| 设置 | Caffeine 开 | Caffeine 关 |
 | --- | --- | --- |
-| `PowerPolicy` | 登录时 | 常驻循环（每 5 秒检查一次），靠看护任务兜底拉起 |
-| `PowerPolicy-OnLidEvent` | 合盖 / 开盖 / 断电 | 一次即时检查，秒级响应 |
+| LIDACTION AC/DC | 0 / 0 | 1 / 1 |
+| STANDBYIDLE AC/DC | 0 / 0 | 0 / 1800 秒 |
+| HIBERNATEIDLE AC/DC | 0 / 0 | 0 / 3600 秒 |
+| VIDEOIDLE AC/DC | 600 / 600 秒 | 600 / 600 秒 |
 
-两个任务都以 `wscript.exe //B ..\startup\SilentRun.vbs "<cmd>"` 启动，不分配控制台。**看护只由 `Lat3ncyToolbox-Watchdog` 一个任务负责**，它同时看护 `ahk/main.ahk` 和本工具的常驻进程（见 `tools/startup/Ensure-ToolboxRunning.ps1`）。
+LenovoSmartStandby 必须保持 Stopped / Disabled。本工具不写 Lenovo 注册表，不启动该服务。
+低电量、过热和手动睡眠等系统保护不被屏蔽。其他程序仍可以独立持有电源请求，本工具不提供全局独占白名单。
 
-## 卸载
+`config.toml` 的 `[wake] disable_timers = true` 独立控制 AC/DC 唤醒定时器，默认保持禁用策略。RTCWAKE 与其余设置一起在写入前备份，卸载时按电源计划恢复。旧备份缺少此字段时只补存当前值，不覆盖已有字段；旧版本已经丢失的历史原值无法推断恢复。
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\power-policy\Uninstall-PowerPolicy.ps1
-```
+设备禁用也先持久化恢复日志，写档失败即停止禁用。卸载时仅删除成功恢复的设备记录；离线设备等恢复失败会保留存档并报错，设备可用后重跑卸载即可重试。JSON 使用统一 UTF-8 BOM，支持 Windows PowerShell 5.1 与 PowerShell 7 互读。
 
-会移除任务、清掉关屏/睡眠标记，并把 Lenovo Smart Standby 恢复为自主管理。
+## 原生盖子通知与关屏
 
-## 配置
+PowerNative.cs 使用 PowerSettingRegisterNotification + DEVICE_NOTIFY_CALLBACK；回调完全在 C# 内执行，不依赖 PowerShell 运行空间或 AHK GUI 生命周期。同时订阅 AC/DC 和恢复睡眠通知。
 
-改 `config.toml` 后**必须重新运行 `Install-PowerPolicy.ps1`**：安装脚本把解析后的数值烘焙进任务参数，运行期不读配置文件。
+盖子状态只能来自当前进程的原生回调。未知值为 -1，不使用历史 506/507 或 Lenovo 日志推断当前状态。Caffeine 策略选择不依赖盖子状态，因此缺少盖子事件不会阻断保活策略。
 
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| `power.ac_standby_seconds` | 0 | 插电空闲睡眠（0 = 永不） |
-| `power.dc_standby_seconds` | 1800 | 电池空闲睡眠 30 分钟 |
-| `power.ac_hibernate_seconds` | 0 | 插电转 S4（0 = 永不） |
-| `power.dc_hibernate_seconds` | 3600 | 电池 60 分钟后转 S4 |
-| `power.ac/dc_video_idle_seconds` | 600 | 空闲关屏 10 分钟 |
-| `caffeine.coffee_dir` | `%LOCALAPPDATA%\coffee` | Coffee 扩展状态目录 |
+2026-11-11 第一次手工测试确认：SC_MONITORPOWER 在本机导致约 220 秒常驻中断和 Modern Standby，已移除该指令及相关 user32 调用。
 
-## Caffeine 判定
+当前候选：仅 Caffeine 开且原生盖子状态为关闭时，将 VIDEOIDLE AC/DC 临时设为 1 秒，让 Windows 走自然显示空闲关屏；开盖、Caffeine 关闭、进程正常退出后恢复 600 秒。STANDBYIDLE 和 HIBERNATEIDLE 在 Caffeine 期间继续保持 0。订阅 GUID_CONSOLE_DISPLAY_STATE，记录真实系统显示状态（0 关闭、1 打开、2 变暗），并记录最大循环间隔。第二次插电手工短测已通过：2026-11-11 23:02:14 至 23:03:41，SleepStudy 为 Screen Off 87.018 秒，Sleep 0 秒，常驻最大循环间隔 1.601 秒，显示回调确认关屏/亮屏。此结论仅覆盖本次插电短测，电池和长时间运行仍待验证。
 
-Raycast 的 Coffee 扩展在 worker 启动时写 `state.json`（含 `pid`），停止时删除。本工具校验「文件存在 + 该 pid 仍存活」，防 PID 复用误判。
+Power Request 每个句柄只申请一次；重复轮询不增加计数。AC/DC 切换和恢复睡眠后重建句柄。不再将请求当成 LIDACTION=1 的拦截器。
 
-注意这只认 Raycast 的 Coffee 扩展。换用 PowerToys Awake 或独立版 Caffeine **不会被识别**。
+## 安装、预览、测试
 
-## 日志
+在管理员终端运行 `tools/power-policy/Install-PowerPolicy.ps1`。安装会重启 PowerPolicy 常驻，移除旧 OnLidEvent 任务。单实例互斥；后台通过 Run-PowerPolicy.vbs 隐藏启动，该启动器保留退出码，供任务计划程序重启失败实例。保留仓库已有 Watchdog 兜底。
 
-```
-%LOCALAPPDATA%\lat3ncy-toolbox\power-policy.log
-```
+任务引擎固定为系统 `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`，不依赖 Codex runtime 的版本目录。已有提权常驻启动时仅校验并迁移属于本仓库的任务 action，保留其他任务设置。日常优雅重载使用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Restart-PowerPolicy.ps1`；它验证新鲜心跳身份及源码指纹后重启原任务，无需重装。
 
-写入策略：
-
-- **状态行节流**：只在「盖子 / 供电 / Caffeine / LIDACTION」任一变化时写一行，另外每 30 分钟打一行心跳。5 秒轮询不会刷屏（迁移前的旧实现每轮都写，日志涨到 19 MB）。
-- **轮转**：每 200 次写入检查一次，超过 3000 行只保留最后 2000 行。
-- `[LIDACTION] 已切换为 ...` 只在真正的切换瞬间出现一次。
-
-## 已知坑（都实际踩过）
-
-- **`SetSuspendState(force=TRUE)` 在本机会被固件回落成 S4**。本机只有 S0/S4，没有 S3；强制挂起等于休眠，开盖必见 BIOS logo。所以本工具**不调用任何睡眠 API**。
-- **类型编译不能带副作用**。曾把「未编译就调 `Set-DisplayOff`」当编译触发器，注释写着「副作用为一次关屏，可接受」。事件任务每次合盖都是新进程，于是每次合盖都真的发了 `SC_MONITORPOWER`，把 Caffeine 开着的情况也睡掉。现在编译与动作彻底分离。
-- **`LenovoSmartStandby` 服务停掉会让 Lenovo 日志断流**。2026-11-05 起盖子状态改读 `Kernel-Power 506/507` 的 `LidOpenState`（OS 自己的记录），不再依赖该日志；Lenovo 日志只作兜底。
-- **不要频繁重启该服务**。Lenovo 每次从睡眠恢复都会改回 `HIBERNATEIDLE`；旧逻辑每次都 `Restart-Service -Force` 纠正，一天七次后服务再也起不来。现在只有注册表参数真变时才重启，纯数值漂移用 `powercfg` 覆盖。
-- **`IsEnabled=0` 不是「关闭 Smart Standby」**。它只让服务不执行动作，实测它**每天仍改写 `HIBERNATEIDLE(AC)` 4–13 次**。真正阻断只能让服务不运行，见下节。
-## 2026-11-05：为什么最终把 LenovoSmartStandby 服务禁用了
-
-### 现象
-
-10-27 ~ 11-05 共 13 次 S4，全部是 `Kernel-Power 42 Reason=6`（固定超时）。其中 11 次在电池上、累计睡眠正好 ≈60 分钟（**符合设定**）；**但 2 次发生在插电状态**（累计 34 分钟 / 45 分钟），违反「插电永不 S4」。
-
-### 结论：它不是应用，是驱动；且没有任何参数能关掉它
-
-- 服务映像是 `DriverStore\...\smartstandbycomponent.inf_amd64_*\SmartStandby.exe`，来自驱动包 `oem114.inf`（Class=System，WHQL 签名）。**卸载 Lenovo Vantage 不会移除它**。
-- 二进制字符串扫描：`SmartStandby.exe` 含全部四个配置值名；`Program Files\Lenovo` 与 `WindowsApps` 命中 **0** —— Vantage 只是 UI（RPC 客户端）。
-- 三次参数实验（`Daytime` / `Overtime` / `PromoteHibernateLength` 各种组合）**都仍会写 AC=有限值**。11-02 的日志暴露了规律：它按「活跃时段结束 23:30」算剩余分钟并倒计时（35 → 34）。
-- 所以**注册表层面没有开关**，只能让它不运行。
-
-### 采用方案
+心跳新增 `identityVersion/scriptPath/repoRoot/startTicks/sourceFingerprint/hostPath`。普通权限看护交叉验证进程创建时间；`outdated` 与 `query-failed` 都不会重复启动。具体状态契约、发布回滚与真机验收见 `tools/startup/README.md`。
 
 ```powershell
-sc config LenovoSmartStandby start= disabled
-sc stop  LenovoSmartStandby
+pwsh -NoProfile -File ./tools/power-policy/PowerPolicy.ps1 -DryRun
+pwsh -NoProfile -File ./tools/power-policy/Test-PowerPolicy.ps1
 ```
 
-本机 `FailureActions` 未配置，不需要额外清「自动恢复」。回退：
+默认单次调用也是只读。DryRun 不写策略、服务、请求或恢复备份。测试不发送关屏/睡眠指令，但会在测试进程中短暂申请和释放电源请求，以及注册/注销回调。
 
-```powershell
-sc config LenovoSmartStandby start= auto
-sc start  LenovoSmartStandby
-```
+config.toml 在每次常驻启动时读取，修改后需重启任务。Caffeine 状态校验 PID、进程创建 FILETIME、会话到期和 stop.flag；轮询默认 1 秒，期间存在最多约一个轮询间隔的开关响应延迟。
 
-`Uninstall-PowerPolicy.ps1` 也会把启动类型恢复为 Automatic。
+## 恢复与故障
 
-### 配套代码改动
+首次变更每个电源计划前保存四项设置，文件为 `%LOCALAPPDATA%/lat3ncy-toolbox/power-policy-backup-<GUID>.json`；已有备份不覆盖。修改后只激活一次，回读验证；失败则回滚该批设置。设置相同时不重复写入/激活。
 
-1. 盖子状态改读 `Kernel-Power 506/507` 的 `LidOpenState`（OS 自己的记录，不依赖厂商服务），Lenovo 日志降为兜底。带 6 秒缓存，避免每轮重复解析 XML。
-2. 服务为 `Disabled` 时不再尝试启动/重启它，只维护 `powercfg` 数值。
+Caffeine 关闭/退出后恢复上表关闭策略。常驻正常退出或抛出异常时释放请求并恢复关闭策略；任务失败由计划程序重试，已有 Watchdog 亦可拉起。强制杀进程/系统崩溃无法执行 finally，重启常驻后重新读真实 Caffeine 状态并纠正策略，不能保证进程完全停止期间立即恢复。
 
-### 已知局限
+管理员运行 Uninstall-PowerPolicy.ps1 会发送优雅停止信号、删除任务、恢复备份电源设置；不会重新启用 Lenovo。
 
-`LIDACTION=0`（Caffeine 开着、合盖不睡）时合盖**不产生** 506/507，最后一次快照可能仍是「打开」。只影响日志文案，**不影响行为**——睡眠决策只由 Caffeine 决定，与盖子状态无关。
+诊断文件：
 
-### 参考
+- `%LOCALAPPDATA%/lat3ncy-toolbox/power-policy.log`
+- `%LOCALAPPDATA%/lat3ncy-toolbox/power-policy-status.json`（当前 PID、Caffeine、供电、原生状态/回调计数、注册错误码、请求状态）
 
-- GitHub `brevstgaard/-Kill--the-Lenovo-SmartStandby-and-User-Presence-Sensing-feature`：同样用 `sc config` + `sc stop`
-- GitHub gist（T14 Gen 3 实测）：额外提醒清 `sc failure ... actions=none`（本机本来就没有配置，无需处理）
-## 2026-11-11（二）：路线 A 定稿 —— 合盖会锁屏，但系统不睡
+## 手工验收
 
-### 最终形态
+先确认原生初始状态为打开、Caffeine 开启、四项策略回读正确，再通知用户合盖。
 
-`LIDACTION` **恒为 1**（睡眠），不再随 Caffeine 在 0/1 之间切换：
+1. 插电+Caffeine 开，合盖约 2 分钟后开盖，检查原生闭/开回调及任务是否连续运行。
+2. 电池+Caffeine 开，保持至少 45 分钟，覆盖旧 30 分钟睡眠超时再加 5 分钟限制。
+3. 合盖期间插拔电源，检查供电回调和请求重建。
+4. Caffeine 关，确认空闲睡眠 30 分钟、电池休眠 60 分钟基线恢复；合盖后开关 Caffeine 需单独验收。
 
-| Caffeine | 合盖后 |
-| --- | --- |
-| 开 | Windows 关屏 + 锁屏 + 尝试进 S0；本工具持有 Power Request → 系统**留在工作状态**，不睡 |
-| 关 | Windows 关屏 + 锁屏 + 进 S0 → DC 满 60 分钟按 `HIBERNATEIDLE` 转 S4 |
+用实际任务进度与 SleepStudy 的 Screen Off / Sleep 分段交叉核对。506/507 本身不能证明应用曾暂停，也不能单凭 DRIPS 时间判断任务连续性。
 
-开盖需要重新验证登录（Windows 在合盖时就锁了会话）。**这是 `LIDACTION=1` 的固有行为，已确认可接受。**
+微软参考：
 
-### 为什么不是 LIDACTION=0
-
-`LIDACTION=0` 是「什么都不做」：
-
-1. 合盖后屏幕**不关**；
-2. 合盖**不产生** `Kernel-Power 506/507`，本工具的盖子检测会永久停在旧值。
-
-曾经为此尝试过用 AHK 监听 `GUID_LIDSWITCH_STATE_CHANGE` 广播来补救，但实测 **AHK 的隐藏窗口收不到 `WM_POWERBROADCAST`**（`RegisterPowerSettingNotification` 返回了有效句柄，60 秒内 0 次回调），该方案已放弃并删除 `shared/notify/lid-broadcast.ahk`。
-
-### Power Request 的实测边界
-
-升级到 `PowerCreateRequest/PowerSetRequest` 后，请求会以原因字符串
-`Lat3ncy PowerPolicy: Caffeine keep-awake` 出现在 `powercfg /requests` 的 SYSTEM 段，
-从此「有没有生效」可以直接验证。
-
-**已经有量化的对照数据：**
-
-| 合盖时刻 | Caffeine 开启时长 | SleepEntered | 实际睡眠 |
-| --- | --- | --- | --- |
-| 21:47:08 | **4 秒** | `true` | **167 秒** ❌ |
-| 21:55:40 | 8 分钟 | `false` | **0 秒** ✅ |
-
-结论：请求本身有效，但**刚建立时存在生效延迟**。开关 Caffeine 之后立刻合盖（几秒内）
-仍可能被睡眠指令抢在前面。正常使用不会触发，暂不额外处理。
-
-### 仍然存在的限制
-
-`PolicyChange` 级别的会话切换（例如 11-11 12:22 那次由 `AnalyzeSystem`
-触发的连续会话重建）有可能绕过 Power Request。该任务已禁用：
-
-```powershell
-schtasks /Change /TN "\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem" /DISABLE
-# 回滚
-schtasks /Change /TN "\Microsoft\Windows\Power Efficiency Diagnostics\AnalyzeSystem" /ENABLE
-```
-
-### 不做的两件事
-
-- **不自己发 `SC_MONITORPOWER`**：关屏交给 Windows（`LIDACTION=1`），
-  `Set-DisplayOff` / `Set-DisplayOn` 已删除，避开 10-23 那个「类型编译副作用关屏」的坑。
-- **不设 `CONSOLELOCK=0`**：那是「从睡眠唤醒不要求密码」，而现在的锁屏是
-  合盖动作直接触发的，改它对本次场景无效。
+- [PowerSetRequest](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-powersetrequest)
+- [原生通知回调](https://learn.microsoft.com/en-us/windows/win32/api/powersetting/nf-powersetting-powersettingregisternotification)
+- [显示与睡眠计时器](https://learn.microsoft.com/en-us/windows-hardware/design/device-experiences/display--sleep--and-hibernate-idle-timers)

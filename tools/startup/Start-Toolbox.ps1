@@ -56,7 +56,8 @@ $repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $mainScript = Join-Path $repoRoot 'ahk\main.ahk'
 $logDirectory = Join-Path $env:LOCALAPPDATA 'lat3ncy-toolbox'
 $logFile = Join-Path $logDirectory 'startup.log'
-$toolboxPathPattern = 'lat3ncy-scripts-toolbox[\\/]ahk[\\/]main\.ahk'
+
+. (Join-Path $PSScriptRoot 'ToolboxProcess.ps1')
 
 function Write-StartupLog
 {
@@ -85,18 +86,17 @@ function Limit-StartupLog
 
 function Get-ToolboxProcess
 {
-	@(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-			$_.Name -like 'AutoHotkey*.exe' -and $_.CommandLine -and $_.CommandLine -match $toolboxPathPattern
-		})
+	return Get-ToolboxProcessSnapshot -MainScript $mainScript
 }
 
 function Get-ToolboxStartupErrorDialog
 {
+	param([int[]]$ProcessIds = @())
+
 	# main.ahk 启动失败时会弹"脚本工具箱启动错误"MsgBox 并阻塞在对话框上，
-	# 此时进程仍然存在，只看进程会误判成功。
-	@(Get-Process -Name 'AutoHotkey*' -ErrorAction SilentlyContinue | Where-Object {
-			$_.MainWindowTitle -and $_.MainWindowTitle -match '启动错误'
-		})
+	# 此时进程仍然存在，只看进程会误判成功。只看本次启动的 PID，
+	# 避免把其他 AHK 脚本的错误框当成本工具箱的失败。
+	return Get-ToolboxStartupErrorDialogSnapshot -ProcessIds $ProcessIds
 }
 
 function Resolve-ToolboxEngine
@@ -192,16 +192,25 @@ if (!(Test-Path -LiteralPath $mainScript -PathType Leaf))
 	exit 2
 }
 
-$existing = @(Get-ToolboxProcess)
-if ($existing.Count -gt 0 -and !$Force)
+$existingSnapshot = Get-ToolboxProcess
+$guardAction = Get-StartupGuardAction -Status $existingSnapshot.Status -Force:$Force
+if ($guardAction -eq 'query-failed')
 {
-	Write-StartupLog ("startup: 已在运行 (PID {0})，跳过" -f (($existing.ProcessId) -join ','))
+	# 查询失败时不能当成"没在运行"：main.ahk 是 #SingleInstance Force，
+	# 再启动一个会把正在运行的实例替换掉。宁可让看护任务下一轮重试。
+	Write-StartupLog ("startup: 失败 - 无法查询工具箱进程状态，未启动以避免重复: {0}" -f $existingSnapshot.ErrorMessage)
+	Show-StartupFailure '无法查询工具箱进程状态，已跳过本次启动以避免重复。详情见 %LOCALAPPDATA%\lat3ncy-toolbox\startup.log'
+	exit 5
+}
+if ($guardAction -eq 'skip')
+{
+	Write-StartupLog ("startup: 已在运行 (PID {0})，跳过" -f ($existingSnapshot.ProcessIds -join ','))
 	exit 0
 }
-if ($existing.Count -gt 0 -and $Force)
+if ($guardAction -eq 'force')
 {
-	$oldIds = ($existing.ProcessId) -join ','
-	foreach ($process in $existing) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }
+	$oldIds = $existingSnapshot.ProcessIds -join ','
+	foreach ($process in $existingSnapshot.Processes) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }
 	Start-Sleep -Milliseconds 500
 	Write-StartupLog ("startup: -Force 结束旧实例 {0}" -f $oldIds)
 }
@@ -223,7 +232,7 @@ while ($attempt -lt $MaxAttempts)
 	$started = $null
 	try
 	{
-		$started = Start-Process -FilePath $engine -ArgumentList @($mainScript) -WorkingDirectory $workingDirectory -PassThru
+		$started = Start-Process -FilePath $engine -ArgumentList (ConvertTo-ToolboxCommandLineArgument $mainScript) -WorkingDirectory $workingDirectory -PassThru
 	}
 	catch
 	{
@@ -234,29 +243,34 @@ while ($attempt -lt $MaxAttempts)
 
 	# 轮询等待：登录时 WMI 枚举可能滞后，AHK 也要解析 include/依赖，
 	# 单次快照会误判"没起来"。错误框优先判定——它出现时进程仍存在，只看进程会误报成功。
-	$found = @()
-	$dialog = @()
+	# 查询失败不等于不存在：持续记录，最终失败时给出查询诊断，不据此再启动。
+	$foundSnapshot = New-ToolboxProcessSnapshot -Status 'not-running'
+	$dialogSnapshot = New-ToolboxProcessSnapshot -Status 'not-running'
+	$queryFailed = $false
 	$waitUntil = (Get-Date).AddSeconds($StartupWaitSeconds)
 	do
 	{
 		Start-Sleep -Milliseconds 500
-		$dialog = @(Get-ToolboxStartupErrorDialog)
-		if ($dialog.Count -gt 0) { break }
-		$found = @(Get-ToolboxProcess)
-	} while ($found.Count -eq 0 -and (Get-Date) -lt $waitUntil)
+		$dialogSnapshot = Get-ToolboxStartupErrorDialog -ProcessIds @($started.Id)
+		if ($dialogSnapshot.Status -eq 'running') { break }
+		$foundSnapshot = Get-ToolboxProcess
+		if ($foundSnapshot.Status -eq 'running') { break }
+		$queryFailed = ($foundSnapshot.Status -eq 'query-failed' -or $dialogSnapshot.Status -eq 'query-failed')
+	} while ((Get-Date) -lt $waitUntil)
 
-	if ($dialog.Count -gt 0)
+	if ($dialogSnapshot.Status -eq 'running')
 	{
 		Write-StartupLog ("startup: 第 {0} 次启动后 main.ahk 弹出启动错误框（等待人工确认），视为失败" -f $attempt)
 	}
-	elseif ($found.Count -gt 0)
+	elseif ($foundSnapshot.Status -eq 'running')
 	{
-		Write-StartupLog ("startup: 成功 - PID {0}（第 {1} 次尝试，等待 {2} 秒内出现）" -f (($found.ProcessId) -join ','), $attempt, $StartupWaitSeconds)
+		Write-StartupLog ("startup: 成功 - PID {0}（第 {1} 次尝试，等待 {2} 秒内出现）" -f ($foundSnapshot.ProcessIds -join ','), $attempt, $StartupWaitSeconds)
 		exit 0
 	}
 	else
 	{
-		Write-StartupLog ("startup: 第 {0} 次启动后 {1} 秒内未检测到工具箱进程 (启动 PID {2})" -f $attempt, $StartupWaitSeconds, $started.Id)
+		$queryNote = if ($queryFailed) { '；进程查询失败: ' + $foundSnapshot.ErrorMessage } else { '' }
+		Write-StartupLog ("startup: 第 {0} 次启动后 {1} 秒内未检测到工具箱进程 (启动 PID {2}){3}" -f $attempt, $StartupWaitSeconds, $started.Id, $queryNote)
 	}
 
 	if ($attempt -lt $MaxAttempts) { Start-Sleep -Seconds $RetryDelaySeconds }

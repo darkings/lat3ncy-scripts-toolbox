@@ -22,6 +22,8 @@ $powerTask = 'PowerPolicy'
 $logDirectory = Join-Path $env:LOCALAPPDATA 'lat3ncy-toolbox'
 $logFile = Join-Path $logDirectory 'startup.log'
 
+. (Join-Path $PSScriptRoot 'ToolboxProcess.ps1')
+
 function Write-StartupLog {
   param([string]$Message)
   try {
@@ -40,102 +42,116 @@ function Write-StartupLog {
 
 # ---------------------------------------------------------------- target 1: AHK
 
-function Get-ToolboxAutoHotkeyProcess {
-  $escaped = [Regex]::Escape($mainScript)
-  @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.Name -like 'AutoHotkey*.exe' -and $_.CommandLine -and
-        ($_.CommandLine -match $escaped -or $_.CommandLine -match 'lat3ncy-scripts-toolbox[\\/]ahk[\\/]main\.ahk')
-      })
-}
-
-# CIM can lag right after a process starts; fall back to process name.
-function Test-ToolboxProcessAlive {
-  if (@(Get-ToolboxAutoHotkeyProcess).Count -gt 0) { return $true }
-  return @(Get-Process -Name 'AutoHotkey64', 'AutoHotkey32' -ErrorAction SilentlyContinue).Count -gt 0
+function Get-ToolboxAhkSnapshot {
+  return Get-ToolboxProcessSnapshot -MainScript $mainScript
 }
 
 # ---------------------------------------------------- target 2: power policy
 
-function Get-PowerPolicyProcess {
-  @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.Name -like 'pwsh*' -and $_.CommandLine -and
-        $_.CommandLine -match 'PowerPolicy\.ps1' -and $_.CommandLine -match '\-Run'
-      })
-}
-
-function Test-PowerPolicyAlive {
-  return @(Get-PowerPolicyProcess).Count -gt 0
+function Get-PowerPolicySnapshot {
+  return Get-ToolboxPowerPolicySnapshot -PowerScript $powerScript
 }
 
 # ------------------------------------------------------------------- main
 
+# A crashed deployer releases its kernel lease automatically; no stale flag.
+if((Get-ToolboxDeploymentState $mainScript) -ne 'idle'){exit 0}
 $failures = @()
 
 # --- target 1
 if (-not (Test-Path -LiteralPath $mainScript)) {
   Write-StartupLog "watchdog: main.ahk missing, skipped ($mainScript)"
   $failures += 'ahk-missing'
-} elseif (Test-ToolboxProcessAlive) {
-  # Normal case: stay quiet so the log does not grow every 5 minutes.
 } else {
-  Write-StartupLog "watchdog: main.ahk not running, starting toolbox"
-  try {
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $startScript *> $null
-  } catch {
-    Write-StartupLog ("watchdog: Start-Toolbox failed: " + $_.Exception.Message)
-    $failures += 'ahk-start-failed'
-  }
-
-  $started = $false
-  for ($i = 0; $i -lt 10; $i++) {
-    if (Test-ToolboxProcessAlive) {
-      $after = @(Get-ToolboxAutoHotkeyProcess)
-      $ids = if ($after.Count -gt 0) { ($after.ProcessId) -join ', ' } else { 'confirmed-by-process-name' }
-      Write-StartupLog ("watchdog: ahk started - PID " + $ids)
-      $started = $true
-      break
+  $snapshot = Get-ToolboxAhkSnapshot
+  $action = Get-WatchdogAhkAction -Status $snapshot.Status
+  switch ($action) {
+    'query-failed' {
+      Write-StartupLog ("watchdog: process query failed; not starting to avoid a duplicate: " + $snapshot.ErrorMessage)
+      $failures += 'ahk-query-failed'
     }
-    Start-Sleep -Seconds 1
-  }
-  if (-not $started) {
-    Write-StartupLog "watchdog: still no main.ahk after start (see the startup: line above)"
-    $failures += 'ahk-not-up'
+    'quiet' {
+      # Normal case: stay quiet so the log does not grow every 5 minutes.
+    }
+    'start' {
+      Write-StartupLog "watchdog: main.ahk not running, starting toolbox"
+      try {
+        & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $startScript *> $null
+      } catch {
+        Write-StartupLog ("watchdog: Start-Toolbox failed: " + $_.Exception.Message)
+        $failures += 'ahk-start-failed'
+      }
+
+      $started = $false
+      $queryFailed = $false
+      for ($i = 0; $i -lt 10; $i++) {
+        $after = Get-ToolboxAhkSnapshot
+        if ($after.Status -eq 'running') {
+          Write-StartupLog ("watchdog: ahk started - PID " + ($after.ProcessIds -join ', '))
+          $started = $true
+          break
+        }
+        $queryFailed = $after.Status -eq 'query-failed'
+        Start-Sleep -Seconds 1
+      }
+      if (-not $started) {
+        if ($queryFailed) {
+          Write-StartupLog "watchdog: process query kept failing after start; not retrying"
+        } else {
+          Write-StartupLog "watchdog: still no main.ahk after start (see the startup: line above)"
+        }
+        $failures += 'ahk-not-up'
+      }
+    }
   }
 }
 
 # --- target 2
 if (-not (Test-Path -LiteralPath $powerScript)) {
   Write-StartupLog "watchdog: PowerPolicy.ps1 missing, skipped ($powerScript)"
-} elseif (Test-PowerPolicyAlive) {
-  # Normal case: quiet.
 } else {
-  $task = Get-ScheduledTask -TaskName $powerTask -ErrorAction SilentlyContinue
-  if (-not $task) {
-    Write-StartupLog "watchdog: task '$powerTask' not registered, skipped (run tools\power-policy\Install-PowerPolicy.ps1)"
+  $powerSnapshot = Get-PowerPolicySnapshot
+  if ($powerSnapshot.Status -eq 'query-failed') {
+    Write-StartupLog ("watchdog: power policy query failed; not starting to avoid a duplicate: " + $powerSnapshot.ErrorMessage)
+    $failures += 'power-query-failed'
+  } elseif ($powerSnapshot.Status -eq 'running') {
+    # Normal case: quiet.
+  } elseif ($powerSnapshot.Status -eq 'outdated') {
+    Write-StartupLog 'watchdog: power policy is running older sources/config; reload required, not starting a duplicate'
+    $failures += 'power-outdated'
   } else {
-    Write-StartupLog "watchdog: power policy resident not running, starting task '$powerTask'"
-    try {
-      Start-ScheduledTask -TaskName $powerTask -ErrorAction Stop
-    } catch {
-      Write-StartupLog ("watchdog: Start-ScheduledTask '$powerTask' failed: " + $_.Exception.Message)
-      $failures += 'power-start-failed'
-    }
-
-    $powerUp = $false
-    for ($i = 0; $i -lt 15; $i++) {
-      if (Test-PowerPolicyAlive) {
-        $pids = @(Get-PowerPolicyProcess) | ForEach-Object { $_.ProcessId }
-        Write-StartupLog ("watchdog: power policy started - PID " + ($pids -join ', '))
-        $powerUp = $true
-        break
+    $task = Get-ScheduledTask -TaskName $powerTask -ErrorAction SilentlyContinue
+    if (-not $task) {
+      Write-StartupLog "watchdog: task '$powerTask' not registered, skipped (run tools\power-policy\Install-PowerPolicy.ps1)"
+    } else {
+      Write-StartupLog "watchdog: power policy resident not running, starting task '$powerTask'"
+      try {
+        Start-ScheduledTask -TaskName $powerTask -ErrorAction Stop
+      } catch {
+        Write-StartupLog ("watchdog: Start-ScheduledTask '$powerTask' failed: " + $_.Exception.Message)
+        $failures += 'power-start-failed'
       }
-      Start-Sleep -Seconds 1
-    }
-    if (-not $powerUp) {
-      Write-StartupLog "watchdog: power policy still not running after start"
-      $failures += 'power-not-up'
+
+      $powerUp = $false
+      $powerQueryFailed = $false
+      for ($i = 0; $i -lt 15; $i++) {
+        $afterPower = Get-PowerPolicySnapshot
+        if ($afterPower.Status -eq 'running') {
+          Write-StartupLog ("watchdog: power policy started - PID " + ($afterPower.ProcessIds -join ', '))
+          $powerUp = $true
+          break
+        }
+        $powerQueryFailed = $afterPower.Status -eq 'query-failed'
+        Start-Sleep -Seconds 1
+      }
+      if (-not $powerUp) {
+        if ($powerQueryFailed) {
+          Write-StartupLog "watchdog: power policy query kept failing after start; not retrying"
+        } else {
+          Write-StartupLog "watchdog: power policy still not running after start"
+        }
+        $failures += 'power-not-up'
+      }
     }
   }
 }

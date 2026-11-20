@@ -1,10 +1,8 @@
 ﻿# Install-PowerPolicy.ps1
-# 注册电源策略的两个计划任务：
-#   <TaskName>           常驻循环（AtLogOn，靠 Lat3ncyToolbox-Watchdog 兜底拉起）
-#   <TaskName>-OnLidEvent 合盖/开盖/断电 事件触发，做一次即时检查
+# 注册静默常驻任务，原生回调监听盖子/供电；移除旧事件任务。
 #
-# 幂等；需要管理员（注册计划任务、写 HKLM 的 Lenovo 键、改电源设置）。
-# 数值来自 config.toml，解析后由 PowerPolicy.ps1 烘焙进任务参数。
+# 幂等；需要管理员注册计划任务。不写 Lenovo 注册表，不启用其服务。
+# 数值在常驻启动时读取 config.toml。
 
 $ErrorActionPreference = 'Stop'
 
@@ -14,7 +12,8 @@ if (-not (Test-Path -LiteralPath $engine -PathType Leaf)) {
 }
 
 Write-Host '=== 安装电源策略计划任务 ==='
-& pwsh -NoProfile -ExecutionPolicy Bypass -File $engine -Install
+$hostExe=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+& $hostExe -NoProfile -ExecutionPolicy Bypass -File $engine -Install
 if ($LASTEXITCODE -ne 0) {
     Write-Host ("[!!] PowerPolicy -Install 退出码 {0}" -f $LASTEXITCODE) -ForegroundColor Red
     exit $LASTEXITCODE

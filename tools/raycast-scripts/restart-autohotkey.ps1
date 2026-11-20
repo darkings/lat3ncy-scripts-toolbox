@@ -26,8 +26,8 @@ if (-not (Test-Path -LiteralPath $mainScript -PathType Leaf))
 }
 
 $resolvedMainScript = (Resolve-Path -LiteralPath $mainScript).Path
-$escapedMainScript = [Regex]::Escape($resolvedMainScript)
-$toolboxPathPattern = 'lat3ncy-scripts-toolbox[\\/]ahk[\\/]main\.ahk'
+$toolboxStartupRoot = Join-Path $repositoryRoot 'tools\startup'
+. (Join-Path $toolboxStartupRoot 'ToolboxProcess.ps1')
 
 function Resolve-AutoHotkeyV2Executable
 {
@@ -116,17 +116,34 @@ function Resolve-AutoHotkeyV2Executable
 function Get-ToolboxAutoHotkeyProcess
 {
   try {
-    $cimProcs = @(Get-CimInstance Win32_Process -ErrorAction Stop |
+    $allAhk = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $_.Name -like 'AutoHotkey*.exe' })
+    $cimProcs = @($allAhk |
         Where-Object {
           $_.Name -like 'AutoHotkey*.exe' -and
           $_.CommandLine -and
-          ($_.CommandLine -match $escapedMainScript -or $_.CommandLine -match $toolboxPathPattern)
+          (Test-ToolboxMainScriptCommandLine -CommandLine $_.CommandLine -MainScript $resolvedMainScript)
         })
     if ($cimProcs.Count -gt 0) { return $cimProcs }
+    if (@($allAhk | Where-Object { -not $_.CommandLine }).Count -eq 0) { return @() }
   } catch {}
 
-  # Fallback: 使用原生 Get-Process（免 WMI / CIM 权限限制）
-  return @(Get-Process -Name 'AutoHotkey*' -ErrorAction SilentlyContinue)
+  # CIM 不可用时的兜底：绝不按进程名杀进程。
+  # 机器上属于其它项目的 AHK 脚本会被一起干掉 —— 这正是 tools/startup/ToolboxProcess.ps1
+  # 开头写明的「Matching by process name alone is wrong」。
+  # 这里只回答一个能被证据支撑的问题：现在到底有没有任何 AutoHotkey 在跑。
+  $named = @(Get-Process -ErrorAction SilentlyContinue |
+      Where-Object { $_.ProcessName -like 'AutoHotkey*' })
+  if ($named.Count -eq 0) { return @() }
+
+  $markerState = 'unknown'
+  try {
+    . (Join-Path $toolboxStartupRoot 'ToolboxProcess.ps1')
+    $markerState = Get-ToolboxInstanceMarkerState -MainScript $resolvedMainScript
+  } catch {}
+
+  throw ("无法读取 AutoHotkey 进程的命令行（CIM 查询被拒绝），无法确认哪个进程属于本仓库的 main.ahk。" +
+         "为避免误杀其它 AutoHotkey 脚本，操作已中止：请用管理员权限重跑本脚本。" +
+         "（实例标记={0}，AutoHotkey 进程数={1}）" -f $markerState, $named.Count)
 }
 
 # 常驻 ImeHudWinUi.exe 也要一起结束，否则：
@@ -162,9 +179,8 @@ function Stop-ToolboxImeHud
   }
 }
 
-Stop-ToolboxImeHud
-
 $toolboxProcesses = Get-ToolboxAutoHotkeyProcess
+Stop-ToolboxImeHud
 
 foreach ($process in $toolboxProcesses)
 {
@@ -209,14 +225,25 @@ if (-not $started)
 }
 
 Start-Sleep -Milliseconds 600
-$reloadedProcesses = Get-ToolboxAutoHotkeyProcess
+$reloadedProcesses = @()
+try { $reloadedProcesses = @(Get-ToolboxAutoHotkeyProcess) } catch { $reloadedProcesses = @() }
 
 if (-not $reloadedProcesses)
 {
-  throw 'AutoHotkey main.ahk process was not detected after launch'
+  # CIM 可能仍然不可用：实例标记是权威来源，且不依赖 WMI。
+  $markerState = 'unknown'
+  try {
+    . (Join-Path $toolboxStartupRoot 'ToolboxProcess.ps1')
+    $markerState = Get-ToolboxInstanceMarkerState -MainScript $resolvedMainScript
+  } catch {}
+  if ($markerState -ne 'present')
+  {
+    throw ('AutoHotkey main.ahk was not detected after launch (marker=' + $markerState + ')')
+  }
 }
 
 $pids = foreach ($p in $reloadedProcesses) { if ($p.ProcessId) { $p.ProcessId } else { $p.Id } }
 $processIds = ($pids | Sort-Object -Unique) -join ', '
+if (-not $processIds) { $processIds = '已由实例标记确认（CIM 不可用）' }
 # silent 会关 Raycast 窗口。成功也走系统 Toast，不再弹共享 HUD / stdout。
 Show-SystemToast -Title '✓ AutoHotkey + IME HUD 已重载' -Message ("AHK PID: {0}" -f $processIds) | Out-Null

@@ -103,3 +103,7 @@ Raycast 只有一个 `toggle-rgb.ps1`。旗标：
 * `dxcam hang` → 默认 `mss`，不要用 auto 里的 dxcam 作首选
 * `BitBlt` / `ScreenShotError` → 当前没有可用交互桌面会话（Session 0 / 无显示器抓屏）。这不是 OpenRGB 服务或 `hi75.exe` 损坏；日常压测用 `--bench`，不要把 `--bench-capture` 失败当成硬件故障
 * 服务日志：`C:\Program Files\OpenRGB\service_config\logs`
+
+## 随仓依赖补丁
+
+`lib/openrgb/network.py` 保留本仓库的网络修复：头部和包体使用 `recv_exact` 收满，EOF 立即断开，失败清理不重复释放锁。更新随仓 OpenRGB Python 库时须保留或确认上游已包含这些行为，并运行 `python -m unittest discover -s tools/rgb -p test_protocols.py`。该测试只使用本机 socket pair 和测试子进程，不连接 SDK 或 HID。

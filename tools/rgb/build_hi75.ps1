@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # Build hi75.py as --onedir (single process).
 # --onefile always shows two hi75.exe on Windows (bootloader + worker).
 # --onedir keeps one hi75.exe; deps live in _internal next to it.

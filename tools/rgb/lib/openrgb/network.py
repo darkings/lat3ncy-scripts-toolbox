@@ -64,7 +64,7 @@ class NetworkClient:
             self.read()
         except socket.timeout:
             self._protocol_version = 0
-            self.lock.release()
+            self._release_lock()
         self.sock.settimeout(10.0)
         # Sending the client name
         name = bytes(f"{self.name}\0", 'utf-8')
@@ -76,13 +76,30 @@ class NetworkClient:
         Closes the active socket
         '''
         try:
-            self.lock.release()
+            self._release_lock()
         except Exception:
             pass
 
         if self.sock is not None:
             self.sock.close()
             self.sock = None
+
+    def _release_lock(self):
+        # A failed read closes the connection before its branch's finally runs.
+        try:
+            self.lock.release()
+        except RuntimeError:
+            pass
+
+    def _recv_exact(self, size: int) -> bytes:
+        """Local patch: TCP can split headers/bodies; EOF must never spin."""
+        chunks = bytearray()
+        while len(chunks) < size:
+            part = self.sock.recv(size - len(chunks))
+            if not part:
+                raise ConnectionResetError("OpenRGB SDK closed an incomplete packet")
+            chunks.extend(part)
+        return bytes(chunks)
 
     def read(self):
         '''
@@ -92,14 +109,13 @@ class NetworkClient:
         '''
         if not self.connected:
             raise utils.OpenRGBDisconnected()
-        header = bytearray(utils.HEADER_SIZE)
         try:
-            self.sock.recv_into(header)
+            header = self._recv_exact(utils.HEADER_SIZE)
         except utils.CONNECTION_ERRORS as e:
             self.stop_connection()
             raise utils.OpenRGBDisconnected() from e
 
-        if header == '\x00'*utils.HEADER_SIZE:
+        if header[:4] != b'ORGB':
             self.stop_connection()
             raise utils.OpenRGBDisconnected()
         # Unpacking the contents of the raw header struct into a list
@@ -112,28 +128,26 @@ class NetworkClient:
             # Parse information from each packet type
             if packet_type == utils.PacketType.REQUEST_CONTROLLER_COUNT:
                 try:
-                    buff = struct.unpack("I", self.sock.recv(packet_size))
-                    self.lock.release()
+                    buff = struct.unpack("I", self._recv_exact(packet_size))
+                    self._release_lock()
                     self.callback(device_id, packet_type, buff[0])
                 except utils.CONNECTION_ERRORS as e:
                     self.stop_connection()
                     raise utils.OpenRGBDisconnected() from e
                 finally:
                     try:
-                        self.lock.release()
+                        self._release_lock()
                     except RuntimeError:
                         pass
 
             elif packet_type == utils.PacketType.REQUEST_CONTROLLER_DATA:
                 try:
-                    data = bytes()
-                    while len(data) < packet_size:
-                        data += self.sock.recv(packet_size - len(data))
+                    data = self._recv_exact(packet_size)
                 except utils.CONNECTION_ERRORS as e:
                     self.stop_connection()
                     raise utils.OpenRGBDisconnected() from e
                 finally:
-                    self.lock.release()
+                    self._release_lock()
                 try:
                     self.callback(device_id, packet_type, utils.ControllerData.unpack(data, self._protocol_version))
                 except utils.PARSING_ERRORS as e:
@@ -146,19 +160,17 @@ class NetworkClient:
 
             elif packet_type == utils.PacketType.REQUEST_PROTOCOL_VERSION:
                 try:
-                    self.max_protocol_version = min(struct.unpack("I", self.sock.recv(packet_size))[0], OPENRGB_PROTOCOL_VERSION)
+                    self.max_protocol_version = min(struct.unpack("I", self._recv_exact(packet_size))[0], OPENRGB_PROTOCOL_VERSION)
                     self._protocol_version = min(self.max_protocol_version, self._protocol_version)
                 except utils.CONNECTION_ERRORS as e:
                     self.stop_connection()
                     raise utils.OpenRGBDisconnected() from e
                 finally:
-                    self.lock.release()
+                    self._release_lock()
 
             elif packet_type == utils.PacketType.REQUEST_PROFILE_LIST:
                 try:
-                    data = bytes()
-                    while len(data) < packet_size:
-                        data += self.sock.recv(packet_size - len(data))
+                    data = self._recv_exact(packet_size)
                     idata = iter(data)
                     for _ in range(4):
                         next(idata)
@@ -166,13 +178,11 @@ class NetworkClient:
                     self.stop_connection()
                     raise utils.OpenRGBDisconnected() from e
                 finally:
-                    self.lock.release()
+                    self._release_lock()
                 self.callback(device_id, packet_type, utils.parse_list(utils.Profile, idata, self._protocol_version))
             elif packet_type == utils.PacketType.REQUEST_PLUGIN_LIST:
                 try:
-                    data = bytes()
-                    while len(data) < packet_size:
-                        data += self.sock.recv(packet_size - len(data))
+                    data = self._recv_exact(packet_size)
                     idata = iter(data)
                     for _ in range(4):
                         next(idata)
@@ -180,19 +190,17 @@ class NetworkClient:
                     self.stop_connection()
                     raise utils.OpenRGBDisconnected() from e
                 finally:
-                    self.lock.release()
+                    self._release_lock()
                 self.callback(device_id, packet_type, utils.parse_list(utils.Plugin, idata, self._protocol_version))
             elif packet_type == utils.PacketType.PLUGIN_SPECIFIC:
                 try:
-                    data = bytes()
-                    while len(data) < packet_size:
-                        data += self.sock.recv(packet_size - len(data))
+                    data = self._recv_exact(packet_size)
                     idata = iter(data)
                 except utils.CONNECTION_ERRORS as e:
                     self.stop_connection()
                     raise utils.OpenRGBDisconnected() from e
                 finally:
-                    self.lock.release()
+                    self._release_lock()
                 self.callback(device_id, packet_type, idata)
 
     def requestDeviceData(self, device: int):
@@ -255,7 +263,7 @@ class NetworkClient:
                                                                          utils.PacketType.REQUEST_PROFILE_LIST,
                                                                          utils.PacketType.REQUEST_PLUGIN_LIST,
                                                                          utils.PacketType.PLUGIN_SPECIFIC):
-                self.lock.release()
+                self._release_lock()
         except utils.CONNECTION_ERRORS as e:
             self.stop_connection()
             raise utils.OpenRGBDisconnected() from e
@@ -274,7 +282,7 @@ class NetworkClient:
                 self.stop_connection()
                 raise utils.OpenRGBDisconnected()
             if release_lock:
-                self.lock.release()
+                self._release_lock()
         except utils.CONNECTION_ERRORS as e:
             self.stop_connection()
             raise utils.OpenRGBDisconnected() from e

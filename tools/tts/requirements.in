@@ -1,0 +1,2 @@
+# Validated online synthesis: 7.2.8 returns HTTP 403 with the current service.
+edge-tts==7.3.1

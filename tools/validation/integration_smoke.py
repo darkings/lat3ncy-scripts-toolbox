@@ -1,6 +1,7 @@
 """Opt-in real OCR / TTS probes using synthetic fixtures, never desktop content.
 
-Run OCR with its dedicated interpreter. TTS writes files and never plays audio.
+Run OCR with its dedicated interpreter. TTS writes files without audio playback;
+the separate playback mode explicitly exercises MCI using silent PCM fixtures.
 No clipboard, resident, task, power setting or device connection is changed.
 """
 from __future__ import annotations
@@ -25,7 +26,11 @@ ROOT = Path(__file__).resolve().parents[2]
 def load_module(name: str, relative: str):
     spec = importlib.util.spec_from_file_location(name, ROOT / relative)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str((ROOT / relative).parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
@@ -86,6 +91,50 @@ def audio_length(path: Path) -> int:
         send(f'close {alias}', None, 0, None)
 
 
+def playback_probe(output: Path) -> dict:
+    """Exercise real MCI with silence, then cancel a process during playback."""
+    script = output/'player.py'
+    script.write_text('''import sys
+sys.path.insert(0, sys.argv[1])
+import tts_player as tts
+logger=tts.configure_logging(sys.argv[3], log_text=False)
+try: code=0 if tts.play_audio_file(sys.argv[2]) else 1
+finally: tts.close_logger(logger)
+raise SystemExit(code)
+''', encoding='ascii')
+    def fixture(name, seconds):
+        path = output/name
+        with wave.open(str(path), 'wb') as audio:
+            audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(22050)
+            audio.writeframes(b'\0'*(22050*2*seconds))
+        return path
+    short = fixture('short-silence.wav', 1)
+    command = [sys.executable, str(script), str(ROOT/'tools/tts')]
+    normal = subprocess.run(command+[str(short), str(output/'normal.log')], capture_output=True,
+                            timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+    long = fixture('long-silence.wav', 20)
+    log = output/'cancel.log'
+    child = subprocess.Popen(command+[str(long), str(log)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             creationflags=subprocess.CREATE_NO_WINDOW)
+    started = False
+    try:
+        deadline = time.monotonic()+5
+        while time.monotonic() < deadline and child.poll() is None:
+            if log.exists() and '播放片段音频 (MCI)' in log.read_text('utf-8'):
+                started = True; break
+            time.sleep(0.025)
+        was_playing = started and child.poll() is None
+        if child.poll() is None:
+            child.terminate()
+        child.wait(timeout=5)
+    finally:
+        if child.poll() is None:
+            child.kill(); child.wait(timeout=5)
+    return {'status': 'passed' if normal.returncode == 0 and was_playing else 'failed',
+            'normalPlayback': normal.returncode == 0, 'cancelledDuringPlayback': was_playing,
+            'processExited': child.poll() is not None, 'audio': 'silent PCM fixtures; no speech or volume changes'}
+
+
 def tts_probe(output: Path) -> dict:
     tts = load_module('toolbox_real_tts', 'tools/tts/tts_player.py')
     logger = tts.configure_logging(str(output / 'tts.log'), log_text=False)
@@ -134,6 +183,24 @@ def tts_probe(output: Path) -> dict:
         zh_duration = audio_length(Path(zh_path)) if zh_path else 0
         results['autoRecoveryChinese'] = {'status': 'passed' if zh_duration > 0 and zh_delivered else 'failed',
                                           'format': Path(zh_path).suffix if zh_path else None, 'durationMs': zh_duration}
+        # Run the real CLI orchestration/result writer, replacing only device
+        # playback with a real file decoder so the probe remains inaudible.
+        request_id = 'validation-' + uuid.uuid4().hex
+        report = output/'managed-result.txt'
+        prior_argv, prior_player, prior_sapi = sys.argv, tts.play_audio_file, tts.play_sapi_fallback
+        try:
+            tts.play_audio_file = lambda path: audio_length(Path(path)) > 0
+            tts.play_sapi_fallback = lambda *a, **k: False
+            sys.argv = [str(ROOT/'tools/tts/tts_player.py'), '--text', 'Toolbox managed recovery validation.',
+                        '--request-id', request_id, '--result-file', str(report), '--task-timeout', '45']
+            code = tts.main()
+            record = dict(line.split('=', 1) for line in report.read_text('utf-8').splitlines())
+            results['managedPipeline'] = {'status': 'passed' if code == 0 and record.get('request_id') == request_id and record.get('status') == 'success' else 'failed',
+                                          'exitCode': code, 'resultVersion': record.get('version'),
+                                          'playback': 'file decode adapter; no device playback'}
+        finally:
+            sys.argv, tts.play_audio_file, tts.play_sapi_fallback = prior_argv, prior_player, prior_sapi
+            tts._TASK = None
     except Exception as error:
         results['autoRecovery'] = {'status': 'failed', 'errorType': type(error).__name__}
     finally:
@@ -172,7 +239,7 @@ try {$voice.SetOutputToWaveFile($OutputPath);$voice.Speak('Toolbox validation, o
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('component', choices=['ocr', 'tts'])
+    parser.add_argument('component', choices=['ocr', 'tts', 'playback'])
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     output = (args.output or ROOT / '.tmp/integration' / uuid.uuid4().hex).resolve()
@@ -180,7 +247,10 @@ def main() -> int:
     result = {'component': args.component, 'python': sys.version, 'executable': sys.executable,
               'scope': 'synthetic fixture; no UI, clipboard, playback or device-state changes'}
     try:
-        result.update(ocr_probe(output) if args.component == 'ocr' else tts_probe(output))
+        probes = {'ocr': ocr_probe, 'tts': tts_probe, 'playback': playback_probe}
+        if args.component == 'playback':
+            result['scope'] = 'real MCI playback/cancellation with silent PCM; no speech or device setting changes'
+        result.update(probes[args.component](output))
     except Exception as error:
         result.update({'status': 'failed', 'errorType': type(error).__name__})
     (output / 'report.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')

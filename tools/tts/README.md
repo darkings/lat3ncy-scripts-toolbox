@@ -19,6 +19,26 @@
 
 实际 MCI 或 SAPI 失败不会再记为播放成功；所有后备路径都失败时，进程返回非零退出码。
 
+## 任务、取消与时间预算
+
+AHK 现在持有要求成功绑定 Windows Job 的异步任务，创建时先挂起、绑定后恢复。取消或退出会结束整组进程，包含 SAPI 子进程；不能建立进程组时拒绝启动，不退回只杀父 PID。播放资源随所属进程回收，不再从 AHK 调用全局 `close all`。
+
+每次请求在 `.cache/requests/<id>/` 创建独立输入和结果文件。id 包含 AHK PID、创建 FILETIME 与随机量；只接受当前请求、当前 generation 的完成结果。音频残片同样带 request id，清理不会扫描删除其他请求的文件。取消后异步重试文件清理；AHK 被强制结束留下的请求，会在后续朗读启动时核验旧 owner 的 PID/创建时间后回收，未知或活跃 owner 保留。
+
+默认每片合成预算 30 秒，包含本地尝试及在线回退；排队时间另计。Python 总任务预算 1795 秒，AHK 进程组硬上限 1800 秒（30 分钟），避免原生播放或线程退出拖住整个请求。合成/等待超时会取消未完成的合成并执行清理；外层硬上限仍可结束整个进程组。较长朗读需考虑该上限。
+
+内部调用参数为 `--request-id`、`--result-file`、`--synthesis-timeout`、`--task-timeout`。终态文件是最多 1 KiB 的 UTF-8 固定字段协议：
+
+```text
+version=1
+request_id=<当前请求编号>
+status=success|failed|timeout|cancelled
+error_kind=none|input|synthesis|playback|timeout|internal|cancelled
+stage=input|synthesis|waiting|playback|complete
+```
+
+Python 原子发布结果；AHK 校验字段、请求归属及退出码，拒绝重复/缺失/矛盾结果。失败映射为固定中文通知，不透传异常原文。主动取消保持安静；过期任务不能清除新任务或覆盖新结果。文件不含选中文本。直接运行脚本时可省略这组内部参数。
+
 ## 用法
 
 ```powershell

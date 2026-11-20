@@ -25,6 +25,11 @@ import tomllib
 import uuid
 from logging.handlers import RotatingFileHandler
 from typing import Any
+from task_protocol import RequestState, TaskFailure
+
+_TASK: RequestState | None = None
+SYNTHESIS_TIMEOUT_SECONDS = 30.0
+TASK_TIMEOUT_SECONDS = 1800.0
 
 ZH_CHAR_PATTERN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
 ZH_PUNCT_PATTERN = re.compile(r"[\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]")
@@ -448,6 +453,8 @@ def unique_temp_path(cache_path: str, ext: str) -> str:
     cache_path；只用 pid 命名时两个写者互相截断，先完成的那个 shutil.move 还会抛
     FileNotFoundError，残片则被后续的"文件非空"校验当成缓存命中。
     """
+    if _TASK and _TASK.request_id:
+        return os.path.join(os.path.dirname(cache_path), f".tts-tmp.{_TASK.request_id}.{os.urandom(8).hex()}{ext}")
     return f"{cache_path}.tmp.{os.getpid()}.{os.urandom(8).hex()}{ext}"
 
 
@@ -624,6 +631,8 @@ async def synthesize_one_segment(
     semaphore: asyncio.Semaphore | None = None,
     *,
     log_text: bool = False,
+    timeout_seconds: float = SYNTHESIS_TIMEOUT_SECONDS,
+    errors: list[str | None] | None = None,
 ) -> None:
     logger = get_logger()
     started = time.perf_counter()
@@ -695,6 +704,8 @@ async def synthesize_one_segment(
                 log_text=log_text,
             )
         else:
+            if errors is not None:
+                errors[idx] = 'synthesis'
             log_segment_result(
                 logger,
                 idx,
@@ -709,10 +720,16 @@ async def synthesize_one_segment(
     try:
         if semaphore is not None:
             async with semaphore:
-                await _do_synthesize()
+                await asyncio.wait_for(_do_synthesize(), timeout_seconds)
         else:
-            await _do_synthesize()
+            await asyncio.wait_for(_do_synthesize(), timeout_seconds)
+    except TimeoutError:
+        if errors is not None:
+            errors[idx] = 'timeout'
+        logger.error('片段 #%d 合成超时', idx + 1)
     except Exception as e:
+        if errors is not None:
+            errors[idx] = 'synthesis'
         log_error(
             logger,
             f"片段 #{idx + 1} [{lang}] 合成发生异常",
@@ -791,6 +808,7 @@ def play_audio_file(file_path: str) -> bool:
 
 
 async def main_async() -> None:
+    global _TASK
     logger = get_logger()
     logger.info("=== TTS Player 启动 ===")
 
@@ -798,20 +816,35 @@ async def main_async() -> None:
     parser.add_argument("--text", type=str, default="", help="要朗读的文本")
     parser.add_argument("--input-file", type=str, default="", help="包含要朗读文本的文件路径")
     parser.add_argument("--config", type=str, default=None, help="配置文件路径")
+    parser.add_argument('--request-id', default='')
+    parser.add_argument('--result-file', default='')
+    parser.add_argument('--synthesis-timeout', type=float, default=SYNTHESIS_TIMEOUT_SECONDS)
+    parser.add_argument('--task-timeout', type=float, default=TASK_TIMEOUT_SECONDS)
     args = parser.parse_args()
+    _TASK = RequestState(args.request_id, args.result_file)
+    if not 0.05 <= args.synthesis_timeout <= 120 or not 0.05 <= args.task_timeout <= 7200:
+        raise TaskFailure('input', 'Invalid TTS time budget')
+    await asyncio.wait_for(run_pipeline(args), args.task_timeout)
+
+
+async def run_pipeline(args) -> None:
+    logger = get_logger()
 
     input_text = args.text
-    if args.input_file and os.path.isfile(args.input_file):
+    if args.input_file:
         try:
             with open(args.input_file, "r", encoding="utf-8") as f:
                 input_text = f.read()
         except Exception as e:
             log_error(logger, "读取输入文件失败", e)
+            raise TaskFailure('input', 'TTS input is unavailable') from e
 
     input_text = input_text.strip()
     if not input_text:
         clear_redaction_context()
         logger.info("=== 输入为空，退出 ===")
+        if _TASK and _TASK.request_id:
+            raise TaskFailure('input', 'TTS input is empty')
         return
 
     config = load_config(args.config)
@@ -857,6 +890,7 @@ async def main_async() -> None:
 
     ready_events = [asyncio.Event() for _ in segments]
     result_files: list[str | None] = [None] * len(segments)
+    errors: list[str | None] = [None] * len(segments)
 
     # 1. 启动受控并发合成 Task (并发上限={concurrency})
     tasks = []
@@ -882,16 +916,34 @@ async def main_async() -> None:
                     result_files,
                     semaphore,
                     log_text=log_text,
+                    timeout_seconds=args.synthesis_timeout,
+                    errors=errors,
                 )
             )
         )
 
-    # 2. 流水线即时播放（首段就绪即开播）
+    try:
+        await play_pipeline(segments, ready_events, result_files, errors, args.synthesis_timeout, log_text)
+        await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        prune_lru_cache(cache_dir, max_size_mb, max_files)
+
+
+async def play_pipeline(segments, ready_events, result_files, errors, synthesis_timeout, log_text):
+    logger = get_logger()
     played_count = 0
     fallback_count = 0
-    failed_count = 0
+    failures = []
     for idx in range(len(segments)):
-        await ready_events[idx].wait()
+        if _TASK:
+            _TASK.stage = 'waiting'
+        await asyncio.wait_for(ready_events[idx].wait(), synthesis_timeout * (idx + 1) + 5)
+        if _TASK:
+            _TASK.stage = 'playback'
         audio_path = result_files[idx]
         played = False
         if audio_path and os.path.isfile(audio_path):
@@ -905,14 +957,11 @@ async def main_async() -> None:
             if await asyncio.to_thread(play_sapi_fallback, seg_text, log_text=log_text):
                 fallback_count += 1
             else:
-                failed_count += 1
+                failures.append(errors[idx] or ('playback' if audio_path else 'synthesis'))
 
-    # 等待所有后台任务完成并执行 LRU 容量清理
-    await asyncio.gather(*tasks, return_exceptions=True)
-    prune_lru_cache(cache_dir, max_size_mb, max_files)
-
-    if failed_count:
-        raise RuntimeError(f"TTS playback failed for {failed_count} segment(s)")
+    if failures:
+        kind = 'timeout' if 'timeout' in failures else ('playback' if 'playback' in failures else 'synthesis')
+        raise TaskFailure(kind, f"TTS playback failed for {len(failures)} segment(s)")
 
     logger.info(
         "=== TTS Player 播放完成退出: 状态=success，切片=%d，音频播放=%d，SAPI 兜底=%d ===",
@@ -1004,12 +1053,21 @@ def run_self_test() -> int:
 
 
 def main() -> int:
+    global _TASK
+    _TASK = None
     if "--self-test" in sys.argv:
         raise SystemExit(run_self_test())
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:
-        return 0
+        finish_request('cancelled', 'cancelled')
+        return 130
+    except TimeoutError:
+        finish_request('timeout', 'timeout')
+        return 2
+    except TaskFailure as error:
+        finish_request('timeout' if error.kind == 'timeout' else 'failed', error.kind)
+        return 2 if error.kind == 'timeout' else 1
     except Exception as e:
         # 顶层拿不到输入原文上下文：默认只留异常类型，避免未知异常消息泄露文本。
         log_error(
@@ -1019,8 +1077,23 @@ def main() -> int:
             log_text=get_log_text_enabled(),
             include_message=get_log_text_enabled(),
         )
+        finish_request('failed', 'internal')
+        return 1
+    if _TASK:
+        _TASK.stage = 'complete'
+    if not finish_request('success'):
         return 1
     return 0
+
+
+def finish_request(status: str, kind: str = 'none') -> bool:
+    try:
+        if _TASK:
+            _TASK.finish(status, kind)
+        return True
+    except OSError:
+        get_logger().error('TTS result delivery failed')
+        return False
 
 
 if __name__ == "__main__":

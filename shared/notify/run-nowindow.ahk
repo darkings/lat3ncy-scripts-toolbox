@@ -133,9 +133,9 @@ class ProcessNoWindow {
 
     ; 非阻塞启动，返回 ProcessNoWindowJob。调用方用 Poll() 轮询完成，
     ; 不得在 AHK 热键线程里 WaitForSingleObject 等待翻译这类慢操作。
-    static StartAsync(command, stdoutFile := "", timeoutMs := 0) {
+    static StartAsync(command, stdoutFile := "", timeoutMs := 0, requireJob := false) {
         proc := this.StartProcess(command, stdoutFile, true)
-        return ProcessNoWindowJob(proc, timeoutMs)
+        return ProcessNoWindowJob(proc, timeoutMs, requireJob)
     }
 
     static RunWait(command, stdoutFile := "", timeoutMs := 0) {
@@ -216,7 +216,7 @@ class ProcessNoWindow {
 ; 超时/取消优先 TerminateJobObject（连同子进程树），完成后再关闭 Job/Process 句柄。
 ; 调用方必须持续 Poll() 直到 Done，或者 Dispose()；否则句柄和进程会滞留。
 class ProcessNoWindowJob {
-    __New(proc, timeoutMs := 0) {
+    __New(proc, timeoutMs := 0, requireJob := false) {
         this.Status := "running"
         this.Pid := proc.pid
         this.ExitCode := 0
@@ -238,6 +238,8 @@ class ProcessNoWindowJob {
             ; 先挂起创建，加入 Job 后再 Resume，避免孙进程逃出 Job。
             this.hJob := ProcessNoWindow.TryCreateKillOnCloseJob(this.hProcess)
             this.AssignedToJob := this.hJob != 0
+            if (requireJob && !this.AssignedToJob)
+                throw Error("无法绑定任务进程组")
             resumeResult := DllCall("ResumeThread", "Ptr", this.hThread, "UInt")
             if (resumeResult = 0xFFFFFFFF)
                 throw Error("ResumeThread 失败: " A_LastError)

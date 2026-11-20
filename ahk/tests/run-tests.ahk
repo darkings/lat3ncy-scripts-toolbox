@@ -1,4 +1,4 @@
-#Requires AutoHotkey v2.0
+﻿#Requires AutoHotkey v2.0
 #Include ..\main.ahk
 
 ; Task 1 contract harness. Run via run-tests.ps1 so stale results are removed and
@@ -899,43 +899,12 @@ AssertThrows(
     () => ProcessNoWindow.RunWait("cmd.exe /c ping 127.0.0.1 -n 8 >nul", "", 200),
     "超时",
     "no-window helper times out and terminates the child")
-; 非等待模式返回真实 PID，不是退出码；WatchPid 只在进程消失后删临时文件。不启动 TTS、不播放。
 noWaitPid := ProcessNoWindow.Run("ping.exe 127.0.0.1 -n 8")
 try {
-    AssertEqual(true, noWaitPid > 0, "non-wait Run returns a positive pid")
-    AssertEqual(true, ProcessExist(noWaitPid) != 0, "non-wait Run pid is a live process")
-    watchFile := A_Temp "\lat3ncy-tts-watch-" A_TickCount "-" Random(1000, 9999) ".txt"
-    FileAppend "probe", watchFile, "UTF-8"
-    savedPid := SpeakSelectedText.TtsPid
-    savedFile := SpeakSelectedText.LastInputFile
-    savedWatch := SpeakSelectedText.WatchBound
-    try {
-        SpeakSelectedText.TtsPid := noWaitPid
-        SpeakSelectedText.LastInputFile := watchFile
-        SpeakSelectedText.WatchBound := ""
-        SpeakSelectedText.WatchPid()
-        AssertEqual(true, FileExist(watchFile) != "", "WatchPid keeps temp input while pid exists")
-        AssertEqual(watchFile, SpeakSelectedText.LastInputFile, "WatchPid keeps LastInputFile while pid exists")
-        AssertEqual(noWaitPid, SpeakSelectedText.TtsPid, "WatchPid keeps TtsPid while process exists")
-        try ProcessClose(noWaitPid)
-        deadline := A_TickCount + 3000
-        while (ProcessExist(noWaitPid) && A_TickCount < deadline)
-            Sleep 50
-        SpeakSelectedText.WatchPid()
-        AssertEqual(false, FileExist(watchFile) != "", "WatchPid deletes temp input after pid exits")
-        AssertEqual("", SpeakSelectedText.LastInputFile, "WatchPid clears LastInputFile after pid exits")
-        AssertEqual(0, SpeakSelectedText.TtsPid, "WatchPid clears TtsPid after pid exits")
-    } finally {
-        SpeakSelectedText.TtsPid := savedPid
-        SpeakSelectedText.LastInputFile := savedFile
-        SpeakSelectedText.WatchBound := savedWatch
-        if FileExist(watchFile)
-            FileDelete watchFile
-    }
+    AssertEqual(true, noWaitPid > 0 && ProcessExist(noWaitPid) != 0, "non-wait Run still returns a live pid")
 } finally {
-    if (noWaitPid && ProcessExist(noWaitPid)) {
-        try ProcessClose(noWaitPid)
-    }
+    if ProcessExist(noWaitPid)
+        ProcessClose noWaitPid
 }
 
 ; --- 异步子进程：等待期间热键线程已返回，AHK 定时器仍能运行 ---
@@ -1451,7 +1420,7 @@ AssertNotContains(speakSource, "lat3ncy-tts-input.txt", "speak no longer reuses 
 AssertContains(speakSource, "WatchPid", "speak watches the TTS pid to delete temp input")
 AssertContains(speakSource, 'ClipboardAll()', "speak captures clipboard safely")
 AssertContains(speakSource, 'finally', "speak restores clipboard in finally block")
-AssertContains(speakSource, 'mciSendStringW', "speak uses MCI to close audio")
+AssertNotContains(speakSource, '"close all"', "speak cancellation owns its job instead of closing unrelated audio")
 AssertNotContains(translateSource, "Shortcuts.", "translate is independent from shortcut config")
 AssertContains(translateSource, "ClipboardAll()", "translate captures clipboard safely")
 AssertContains(translateSource, "finally", "translate restores clipboard in finally block")
@@ -1968,6 +1937,8 @@ AssertContains(smartPasteHelperSource, '[Drawing.Image]::FromStream', "image hel
 AssertNotContains(smartPasteHelperSource, 'Remove-Item -LiteralPath $outputPath', "image helper never removes published output")
 
 #Include review-regressions.ahk
+#Include tts-lifecycle.ahk
+TtsLifecycleTests()
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

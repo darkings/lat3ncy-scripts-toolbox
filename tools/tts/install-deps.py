@@ -15,10 +15,18 @@ import re
 import subprocess
 import sys
 import venv
+from tts_runtime import claim_profile, owns_profile, profile_directory, publish_ready
 
 ROOT = Path(__file__).resolve().parent
 LOCK = ROOT / 'requirements.lock'
-RUNTIME = ROOT / '.venv' / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+DEFAULT_LOCATION = 'profile' if sys.platform == 'win32' else 'repo'
+
+
+def environment_directory(location: str = DEFAULT_LOCATION) -> Path:
+    return profile_directory(ROOT) if location == 'profile' else ROOT/'.venv'
+
+
+RUNTIME = environment_directory() / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
 
 
 def expected_versions(lock: Path = LOCK) -> dict[str, str]:
@@ -51,19 +59,36 @@ print(json.dumps(result))
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--location', choices=['profile', 'repo'], default=DEFAULT_LOCATION)
     args = parser.parse_args()
     try:
-        status = check_environment()
-        if args.check or status['status'] == 'ready':
+        directory = environment_directory(args.location)
+        runtime = directory / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+        if args.location == 'profile' and directory.exists() and any(directory.iterdir()) and not owns_profile(directory, ROOT):
+            raise ValueError('Refusing an unowned or foreign TTS environment')
+        if args.location == 'profile' and not args.check:
+            claim_profile(directory, ROOT)
+            (directory/'.ready.txt').unlink(missing_ok=True)
+        status = check_environment(runtime)
+        if args.check:
+            if args.location == 'profile' and not owns_profile(directory, ROOT, ready=True):
+                status['status'] = 'unready'
             print(json.dumps(status))
             return 0 if status['status'] == 'ready' else 1
-        if not RUNTIME.is_file():
-            venv.EnvBuilder(with_pip=True).create(ROOT / '.venv')
-        has_pip = subprocess.run([str(RUNTIME), '-m', 'pip', '--version'], capture_output=True, timeout=20)
+        if status['status'] == 'ready':
+            if args.location == 'profile':
+                publish_ready(directory, ROOT)
+            print(json.dumps(status))
+            return 0
+        if not runtime.is_file():
+            venv.EnvBuilder(with_pip=True).create(directory)
+        has_pip = subprocess.run([str(runtime), '-m', 'pip', '--version'], capture_output=True, timeout=20)
         if has_pip.returncode:
-            subprocess.run([str(RUNTIME), '-m', 'ensurepip', '--upgrade'], check=True, timeout=120)
-        subprocess.run([str(RUNTIME), '-m', 'pip', 'install', '--require-hashes', '-r', str(LOCK)], check=True, timeout=300)
-        status = check_environment()
+            subprocess.run([str(runtime), '-m', 'ensurepip', '--upgrade'], check=True, timeout=120)
+        subprocess.run([str(runtime), '-m', 'pip', 'install', '--require-hashes', '-r', str(LOCK)], check=True, timeout=300)
+        status = check_environment(runtime)
+        if status['status'] == 'ready' and args.location == 'profile':
+            publish_ready(directory, ROOT)
         print(json.dumps(status))
         return 0 if status['status'] == 'ready' else 1
     except (OSError, ValueError, subprocess.SubprocessError, RuntimeError) as error:

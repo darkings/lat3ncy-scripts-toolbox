@@ -1,5 +1,6 @@
 #Requires AutoHotkey v2.0
 #Include ..\..\shared\notify\run-nowindow.ahk
+#Include ..\..\shared\notify\toolbox-instance.ahk
 
 class SpeakSelectedText {
     static TtsPid := 0
@@ -46,10 +47,27 @@ class SpeakSelectedText {
         if (scriptPath = "")
             scriptPath := this.ResolveScript()
         SplitPath scriptPath, , &scriptDir
+        profile := this.ProfilePython(scriptDir)
+        if (profile != "")
+            return profile
         candidate := scriptDir "\.venv\Scripts\pythonw.exe"
         if FileExist(candidate)
             return candidate
         return ToolboxPython.ResolveW()
+    }
+
+    static ProfilePython(scriptDir, localData := "") {
+        if (localData = "")
+            localData := EnvGet("LOCALAPPDATA")
+        if (localData = "")
+            return ""
+        directory := localData "\lat3ncy-toolbox\tts-runtimes\" ToolboxInstance.Hash(scriptDir)
+        candidate := directory "\Scripts\pythonw.exe"
+        try {
+            if (FileExist(candidate) && Trim(FileRead(directory "\.ready.txt", "UTF-8"), "`r`n ") = StrLower(RTrim(scriptDir, "\/")))
+                return candidate
+        }
+        return ""
     }
 
     static ResolveScript() {

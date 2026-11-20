@@ -28,6 +28,18 @@ TtsLifecycleTests() {
     TtsFixtureClient.CurrentTask := "", TtsFixtureClient.RetiredTasks := []
     childPid := 0, job := "", ownedTemp := "", unrelatedTemp := ""
     try {
+        moduleDir := root "\module with spaces"
+        profileRoot := root "\profile"
+        runtimeDir := profileRoot "\lat3ncy-toolbox\tts-runtimes\" ToolboxInstance.Hash(moduleDir)
+        DirCreate runtimeDir "\Scripts"
+        FileAppend "fixture", runtimeDir "\Scripts\pythonw.exe"
+        AssertEqual("", TtsFixtureClient.ProfilePython(moduleDir, profileRoot), "unready profile cannot replace legacy interpreter")
+        FileAppend "another module", runtimeDir "\.ready.txt", "UTF-8-RAW"
+        AssertEqual("", TtsFixtureClient.ProfilePython(moduleDir, profileRoot), "profile ownership rejects a hash collision")
+        FileDelete runtimeDir "\.ready.txt"
+        FileAppend StrLower(moduleDir), runtimeDir "\.ready.txt", "UTF-8-RAW"
+        AssertEqual(runtimeDir "\Scripts\pythonw.exe", TtsFixtureClient.ProfilePython(moduleDir, profileRoot), "owned ready profile is selected")
+
         task := TtsFixture(root, "report-" A_TickCount, TtsFixtureClient.Generation)
         task.job := {Status: "exited", ExitCode: 0}
         TtsReport(task)

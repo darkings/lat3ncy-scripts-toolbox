@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import ctypes
 import hashlib
+import json
 import logging
 import os
 import re
@@ -616,6 +617,52 @@ async def synthesize_edge_segment(
         return False
 
 
+async def synthesize_sapi_segment(voice: str, text: str, lang: str, rate: str, pitch: str, volume: str,
+                                  cache_path: str, *, log_text: bool = False) -> bool:
+    """Offline WAV synthesis via the inherited Windows process context."""
+    if sys.platform != 'win32':
+        return False
+    temporary = unique_temp_path(cache_path, '.wav')
+    process = None
+    try:
+        command = [os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'System32',
+                                'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+                   '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+                   os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sapi-file.ps1')]
+        environment = os.environ.copy()
+        environment['PSMODULEPATH'] = os.path.join(os.environ.get('SystemRoot', r'C:\Windows'),
+                                                   'System32', 'WindowsPowerShell', 'v1.0', 'Modules')
+        process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=environment,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        payload = json.dumps({'voice': voice, 'text': text, 'lang': lang, 'rate': rate,
+                              'pitch': pitch, 'volume': volume, 'output': temporary}, ensure_ascii=False).encode('utf-8')
+        stdout, _ = await process.communicate(payload)
+        if process.returncode or not os.path.isfile(temporary) or os.path.getsize(temporary) <= 44:
+            get_logger().warning('SAPI 本地文件合成失败，退出码=%s', process.returncode)
+            return False
+        # The fixed helper only returns installed voice metadata, never input.
+        metadata = json.loads(stdout.decode('utf-8-sig'))
+        os.replace(temporary, cache_path)
+        get_logger().info('SAPI 本地文件合成完成: 语言=%s，音色=%s', lang, metadata['voice'])
+        return True
+    except Exception as error:
+        log_error(get_logger(), 'SAPI 本地文件合成异常', error, text=text, log_text=log_text, include_message=False)
+        return False
+    finally:
+        if process is not None and process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+        if os.path.exists(temporary):
+            try:
+                os.remove(temporary)
+            except OSError:
+                get_logger().warning('SAPI 临时文件清理失败')
+
+
 async def synthesize_one_segment(
     idx: int,
     lang: str,
@@ -677,6 +724,16 @@ async def synthesize_one_segment(
             ok = await synthesize_edge_segment(
                 used_voice, seg_text, rate, pitch, volume, cache_path, log_text=log_text
             )
+
+        if not ok and is_winrt and engine == 'auto':
+            # Keep SAPI bytes separate from WinRT and online caches.
+            sapi_key = compute_cache_key(seg_text, 'sapi-v1:' + lang + ':' + voice, rate, pitch, volume)
+            resolved_path = os.path.join(os.path.dirname(cache_path), sapi_key + '.wav')
+            if os.path.isfile(resolved_path) and os.path.getsize(resolved_path) > 44:
+                ok = True
+            else:
+                ok = await synthesize_sapi_segment(voice, seg_text, lang, rate, pitch, volume,
+                                                   resolved_path, log_text=log_text)
 
         # auto explicitly permits online fallback. An explicit winrt request
         # remains local-only. Never store MP3 bytes under the local WAV key.

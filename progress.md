@@ -343,6 +343,15 @@
 - 现场 AHK 长度 196 / Python 长度 197 暴露 BOM 被当成字符；改为 utf-8-sig 读取，新增 BOM/空白受管请求必须返回输入失败的行为测试。TTS 29 项测试及离线全套通过，总计 74 项 Python 行为测试。
 - 单屏、HUD DPI=192；用户反馈未留意声音，听感保持未确认。自动测试后临时窗口已关闭，无需再寻找；按钮点击、浏览器/终端与多屏、物理设备仍待测。证据在 `.tmp/integration/20261120-desktop/`；个人配置保留。
 
+## 会话：2026-11-20 普通完整性宿主与离线语音恢复
+
+- 再次对照全局/旧 venv 为 medium8192 / low4096。默认安装改为 `%LOCALAPPDATA%/lat3ncy-toolbox/tts-runtimes/<module-key>`，沿用原 requirements.lock 哈希/版本，未安装全局包、提权或修改 ACL；旧环境保留。
+- Python/AHK 共用路径 FNV 标识，owner 拒绝其他仓库/未归属目录，只有完整依赖检查通过才发布 ready。AHK 优先已就绪的本仓库宿主；安装失败会撤销 ready 并允许回退。新增失败安装/拒绝执行外来目录/缓存/取消/隐私回归。
+- `auto` 增加 SAPI 离线 WAV；文本经 stdin JSON，固定 PowerShell 5.1 helper 构造转义 SSML，匹配语言与名称，当前中文 Huihui、英文 Zira。SAPI 缓存与 WinRT/Edge 分离；取消杀子进程、等待并清理部分文件。
+- 新宿主实测 medium8192、TEMP 可写。真实中英文 WAV、参数与转义、实际 auto 流水线及 AHK 选择的 pythonw + 必需 Job 都通过；禁止在线仍 success/0，onlineCalls=0、两段 WAV、终态和请求清理通过。联合真实 Edge/SAPI 文件探针通过；本轮不播放语音，听感待确认。旧 Low 环境/缺失 WinRT 保留原状。
+- TTS 36 项行为测试通过；此前同一生产代码的全量及干净 clone 离线/助手/WinUI 构建/AHK 套件通过，追加两个安装失败测试后再执行最终离线套件。证据 `.tmp/integration/20261120-local-host/`、`.tmp/validation/20261120-local-host/`。
+- 最终离线全套 81 项 Python 行为测试、65 个 PowerShell AST/BOM 检查通过；安装查询失败撤销 ready 的补充回归通过。已 ForceReload：AHK 25052、HUD 52104、光标助手 34920，PING/实例/归属健康检查通过。HUD 无产物字节变化，个人配置四份哈希保持不变。
+
 ## 会话：2026-11-19 二次评审修复部署与下一步分析
 
 - 用户授权替换并重载后，检查 test-out 源码戳及 self-test，备份生产差异文件后替换 `.source-stamp` / `ImeHudWinUi.dll` / `resources.pri`。

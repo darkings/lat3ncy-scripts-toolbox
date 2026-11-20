@@ -29,6 +29,7 @@ class RecoveryTests(unittest.TestCase):
         results = [None]
         online = AsyncMock(side_effect=edge)
         with patch.object(tts, 'synthesize_winrt_segment', new=AsyncMock(return_value=False)), \
+             patch.object(tts, 'synthesize_sapi_segment', new=AsyncMock(return_value=False)), \
              patch.object(tts, 'synthesize_edge_segment', new=online), patch.object(tts, 'get_logger', return_value=Mock()):
             asyncio.run(tts.synthesize_one_segment(0, 'en', 'fixture', 'Microsoft Zira', '+0%', '+0Hz', '+0%',
                 str(Path(directory)/'local.wav'), engine, events, results))

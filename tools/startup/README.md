@@ -55,7 +55,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 
 ## 自动化与真机验收
 
-`ahk/tests/run-offline-tests.ps1` 是 Windows CI 子集：全部第一方 PowerShell AST/BOM、启动/心跳/发布回滚桩以及当前 74 个 Python 行为测试。Python 使用 `-S` 排除本机 site-packages；模型、网络服务和硬件均为桩。`.github/workflows/offline-windows.yml` 使用 Python 3.13、Windows PowerShell 5.1 执行它，并独立源码构建 WinUI；可靠性分支已有远端通过记录，最新结果以对应提交的 Actions 为准。
+`ahk/tests/run-offline-tests.ps1` 是 Windows CI 子集：全部第一方 PowerShell AST/BOM、启动/心跳/发布回滚桩以及当前 81 个 Python 行为测试。Python 使用 `-S` 排除本机 site-packages；模型、网络服务和硬件均为桩。`.github/workflows/offline-windows.yml` 使用 Python 3.13、Windows PowerShell 5.1 执行它，并独立源码构建 WinUI；可靠性分支已有远端通过记录，最新结果以对应提交的 Actions 为准。
 
 `run-tests.ps1` 额外验证真实 AHK 引擎、独立 feature 加载、WinUI 构建戳/self-test 与锚点 self-test。两种套件通过都不代表真实合盖、蓝牙和 UIA 场景已验收。
 
@@ -70,7 +70,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 | Chromium、编辑控件、终端中选区翻译；逐一切换多屏/DPI | 锚点落在有效显示范围，原文/结果完整 | 待真机验证 |
 | 5000+ 字符/emoji 译文，点击复制；关闭面板后等待迟到结果 | 剪贴板完整，面板不重开 | 7397 UTF-16 单元的真实协议复制、空结果保护与关闭后迟到结果通过；按钮点击待测 |
 | OCR 成功、空白、取消、模型失败 | 正确交付，错误通知存在，runner 最终清理 | 真实模型固定文字/空白图片通过；真实剪贴板及桌面选区待测，取消/失败离线通过 |
-| TTS 连续打断、下载失败、本地兜底 | 无残留音频/进程，后续请求正常 | 单屏原生编辑控件真实 Caps+S 三轮替换/最终 MCI 完成、进程与文件清理通过；听感待确认，本地 SAPI 仍失败，在线回退通过 |
+| TTS 连续打断、下载失败、本地兜底 | 无残留音频/进程，后续请求正常 | 真实 Caps+S 三轮替换/最终 MCI 完成、进程与文件清理通过；新用户目录宿主的中英文 SAPI WAV 和无在线的受管任务通过，旧 Low 宿主仍失败；新路径听感待确认 |
 | Caffeine 开/关、到期、停止、解锁/恢复 | 请求与策略恢复一致 | 本机开启状态及重载通过，其余待测 |
 | 插电/电池合盖、睡眠、供电切换 | 回调与预期策略一致，任务连续性有实测依据 | 待用户可观察窗口执行 |
 | RGB SDK/HID 断连、重连、退出 | 超时有界，能重连，无忙循环 | 离线协议通过，设备待测 |
@@ -88,3 +88,5 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 `config.toml`、运行日志、备份、模型和本机凭证不随上述批次自动暂存。协议/依赖收口仍按模块推进，先收集真机失败证据，再确定升级与性能改动。
 
 2026-11-20 增量：真实 OCR 合成图片/空白图片通过；TTS 中英文 auto 在线恢复、MP3 解码和实际缓存路径通过，低完整性本地 SAPI 失败保留为 partial。干净本地 clone（HEAD 配置、无旧产物）已通过离线、C# 编译、WinUI 构建及 AHK 全量回归。入口与证据范围见 `tools/validation/README.md`，不能将这些结果替代真实 UIA、剪贴板、播放或物理设备验收。
+
+随后完成本地语音恢复：按仓库隔离的用户目录锁定环境为 medium/RID 8192；AHK 仅选择归属匹配且已就绪的宿主，否则保留旧环境回退。WinRT 不可用后先生成 SAPI WAV，失败才在线恢复。真实本地/在线文件和禁止在线的受管流水线通过；未修改 ACL、个人配置或全局 Python 包。证据见 `.tmp/integration/20261120-local-host/`。

@@ -1,6 +1,6 @@
 # TTS Player（tools/tts）
 
-`tts_player.py` 读取文本，按中英文语境切片，通过 WinRT 本地 OneCore 或 Edge Neural TTS
+`tts_player.py` 读取文本，按中英文语境切片，通过 WinRT 本地 OneCore、SAPI WAV 或 Edge Neural TTS
 并发合成并即时播放；带 SHA256 缓存、LRU 容量清理与 Windows SAPI 本地兜底。
 
 ## 运行环境
@@ -12,10 +12,16 @@
   - WinRT 本地离线：`winsdk`；未安装或合成失败时，该片段走 SAPI 兜底朗读。
   - Edge 在线 Neural：`edge-tts`；未安装或合成失败时，该片段走 SAPI 兜底朗读。
     经过真实合成验证的版本为 `edge-tts==7.3.1`；7.2.8 在当前服务返回 HTTP 403。
-- `python tools/tts/install-deps.py` 创建模块自己的 `.venv` 并按 `requirements.lock` 的版本及 SHA-256 安装；不会安装到全局 Python。`--check` 只检查该环境，不会把全局包当作已满足依赖。AHK 优先使用 `.venv\Scripts\pythonw.exe`，缺失时保留原有全局解释器回退。
+- Windows 上 `python tools/tts/install-deps.py` 默认在 `%LOCALAPPDATA%\lat3ncy-toolbox\tts-runtimes\<module-key>` 创建独立环境，按 `requirements.lock` 的版本及 SHA-256 安装，不安装到全局 Python。key 与 AHK 共用规范化模块路径的 UTF-8 FNV-1a；owner 标记防止路径碰撞，依赖校验完成后才原子发布 ready 标记。`--check` 只读检查当前环境，未就绪返回非零。
+- AHK 优先选择归属匹配且已就绪的用户目录 `Scripts\pythonw.exe`；否则依次使用原模块 `.venv` 和原有全局解释器解析。原 `.venv` 保留；`--location repo` / `--check --location repo` 可维护旧环境。安装失败会撤销新环境的 ready 标记，不让半成品替换旧宿主。
+- 新位置使用用户目录的正常继承权限，不修改仓库或解释器 ACL、不提权。本机新环境实测为 medium/RID 8192；已有仓库内 low/RID 4096 的解释器标签保持原样。
 - 缓存优先使用 `%LOCALAPPDATA%\lat3ncy-toolbox\tts-cache`；实际写入探针失败时使用本模块 `.cache`。两处都使用原有 LRU 上限，均不调整系统 ACL 或提权。
 
-`auto` 模式先尝试指定本地音色；本地合成失败后使用 Edge 在线音色（中文 Xiaoxiao、英文 Aria），因此会发送待朗读文本到语音服务。该行为已于 2026-11-20 获用户明确授权。显式 `engine = "winrt"` 保持离线，不启用在线回退。在线结果以独立 MP3 缓存保存，不写入本地 WAV 缓存。
+`auto` 的本地音色路径依次尝试 WinRT、SAPI 文件合成，均失败后才使用 Edge 在线音色（中文 Xiaoxiao、英文 Aria），因此失败回退会发送待朗读文本到语音服务。该行为已于 2026-11-20 获用户明确授权。显式 `engine = "winrt"` 保持离线，不启用在线回退；显式 Neural 音色仍直接走在线引擎。
+
+SAPI 使用系统 Windows PowerShell 5.1 的 `System.Speech`，通过 stdin JSON 接收文本，不把输入放入进程参数或 PowerShell 代码。固定脚本转义 SSML 文本/属性，按请求语言选择已安装的可用声音，优先匹配名称；本机英语为 Zira Desktop，中文请求 Yaoyao 不存在时使用同语言 Huihui Desktop。SSML 处理语速、音高和音量；实际声音效果仍需听感确认。[WAV 输出接口](https://learn.microsoft.com/en-us/dotnet/api/system.speech.synthesis.speechsynthesizer.setoutputtowavefile?view=netframework-4.8.1)、[SpeakSsml 接口](https://learn.microsoft.com/en-us/dotnet/api/system.speech.synthesis.speechsynthesizer.speakssml?view=netframework-4.8.1)。
+
+SAPI WAV 的缓存键包含独立后端前缀、语言、请求音色和参数，不与 WinRT WAV 或 Edge MP3 混用。取消/合成预算耗尽时结束 SAPI 子进程并等待退出、清理残片；它也继承 AHK 任务的 Windows Job 归属。
 
 实际 MCI 或 SAPI 失败不会再记为播放成功；所有后备路径都失败时，进程返回非零退出码。
 
@@ -42,17 +48,19 @@ Python 原子发布结果；AHK 校验字段、请求归属及退出码，拒绝
 ## 用法
 
 ```powershell
+# 安装后取得当前仓库独立宿主的绝对路径
+$python = (python tools/tts/install-deps.py --check | ConvertFrom-Json).python
 # 直接朗读文本
-tools/tts/.venv/Scripts/python.exe tools/tts/tts_player.py --text "今天用 Windows 语音合成"
+& $python tools/tts/tts_player.py --text "今天用 Windows 语音合成"
 
 # 从 UTF-8 文件读取
-tools/tts/.venv/Scripts/python.exe tools/tts/tts_player.py --input-file .\note.txt
+& $python tools/tts/tts_player.py --input-file .\note.txt
 
 # 指定配置文件
-tools/tts/.venv/Scripts/python.exe tools/tts/tts_player.py --config .\tools\tts\config.toml --text "..."
+& $python tools/tts/tts_player.py --config .\tools\tts\config.toml --text "..."
 ```
 
-## 本地语音的上下文诊断
+## 本地语音的上下文诊断与恢复
 
 2026-11-20 的对照：全局 Python 3.15 为 medium（RID 8192），其 PowerShell 子进程能用 SAPI 生成 WAV；模块虚拟环境 Python 为 low（RID 4096），SAPI 能枚举声音但无法合成，默认 TEMP 写入被拒绝。两者都不是 AppContainer 或 restricted token，且子进程均为 STA/FullLanguage。当前 3.15 环境还没有可用的旧 `winsdk`。这些是独立记录的环境限制，不应误报为没有安装任何声音。
 
@@ -62,9 +70,13 @@ tools/tts/.venv/Scripts/python.exe tools/tts/tts_player.py --config .\tools\tts\
 python tools/validation/process_context.py
 tools/tts/.venv/Scripts/python.exe tools/validation/process_context.py
 tools/tts/.venv/Scripts/python.exe tools/validation/integration_smoke.py tts
+# 新用户目录宿主：真实离线合成，禁止在线调用，仅解码 WAV，不播放
+$python = (python tools/tts/install-deps.py --check | ConvertFrom-Json).python
+& $python tools/validation/process_context.py
+& $python tools/validation/integration_smoke.py local-tts
 ```
 
-最后一条使用固定测试文本验证真实合成和 `auto` 回退，只解码文件时长，不播放声音；SAPI 不可用时总体报告仍为 partial。不能将在线恢复成功写成本地合成已修复，也不能将文件合成通过写成实际播放或听感已验收。
+2026-11-20 后续恢复：新用户目录宿主实测 medium/RID 8192，真实中英文 SAPI WAV、带参数/转义文本、`auto` 受管流水线全部通过，禁止在线调用时仍成功且 onlineCalls=0；实际 AHK 选择的新 pythonw 在必需 Job 内也通过，终态及请求清理正常。旧 Low 环境仍失败，WinRT 依赖仍不可用；恢复的是 SAPI 离线路径。联合探针的真实 Edge 与 SAPI 文件均通过，不等于新路径听感已验收。
 
 依赖升级应重新验证真实合成，并重新生成带哈希的锁文件。参考 [上游 7.3.0 的协议修复](https://github.com/rany2/edge-tts/releases/tag/7.3.0)、[7.3.1 的日期解析修复](https://github.com/rany2/edge-tts/releases/tag/7.3.1)。
 

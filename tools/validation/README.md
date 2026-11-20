@@ -9,9 +9,12 @@ tools/tts/.venv/Scripts/python.exe tools/validation/process_context.py
 # 真实 OCR 模型：只读取合成文字图片；剪贴板交付被捕获，不改实际剪贴板
 tools/raycast-scripts/ocr/.venv314/Scripts/python.exe tools/validation/integration_smoke.py ocr
 # 真实 TTS：固定测试文本，在线合成/auto 回退及本地 WAV 探针；不播放
-tools/tts/.venv/Scripts/python.exe tools/validation/integration_smoke.py tts
+$python = (python tools/tts/install-deps.py --check | ConvertFrom-Json).python
+& $python tools/validation/integration_smoke.py tts
+# 仅本地：真实中英文 SAPI WAV、SSML 转义/参数、禁止在线的 auto 流水线
+& $python tools/validation/integration_smoke.py local-tts
 # 显式执行真实 MCI 播放/中断探针：使用静音 PCM，不朗读或改变音量
-tools/tts/.venv/Scripts/python.exe tools/validation/integration_smoke.py playback
+& $python tools/validation/integration_smoke.py playback
 ```
 
 `clean_checkout.py` 从当前候选源码导出快照，在忽略目录创建独立 Git 仓库并做一次本地 clone，路径包含空格。它不修改原仓库的 index、分支、提交或 remote；源码可包含当前未提交修改，配置使用 HEAD 基线，未跟踪的个人配置跳过。文件清单、来源哈希、每阶段日志及 report.json 保留在输出目录。
@@ -20,11 +23,13 @@ tools/tts/.venv/Scripts/python.exe tools/validation/integration_smoke.py playbac
 
 这是本机新 clone 验证，仍使用本机已安装的 SDK、AHK、Python 及 NuGet 缓存；不是干净操作系统或远端 CI 的替代品。远端 workflow 分为 offline 和 winui 两个任务；WinUI 使用独立构建入口及已验证的 .NET 10.0.404。
 
-`integration_smoke.py` 是显式执行的集成探针，不在离线 CI 自动运行。OCR 需要已安装的 RapidOCR/Pillow；TTS 需要模块锁定环境和网络。记录 passed/failed/partial，不会安装模型、切换音频、播放声音、操作用户桌面或改变电源/设备连接状态。
+`integration_smoke.py` 是显式执行的集成探针，不在离线 CI 自动运行。OCR 需要已安装的 RapidOCR/Pillow；`tts` 需要锁定环境和网络，`local-tts` 禁止在线边界、要求当前上下文的 SAPI 可用。记录 passed/failed/partial，不会安装模型、切换音频、播放声音、操作用户桌面或改变电源/设备连接状态。
 
 `playback` 是单独的可选例外：真实调用 MCI 播放静音 WAV，验证正常完成以及播放中的进程取消，不朗读文字或改变音量/默认端点。TTS 探针还运行真实任务编排和终态协议，设备播放边界由文件解码器替代；其通过不等于听感验收。AHK 本机套件另覆盖实际父子进程取消、句柄关闭、归属校验及残片清理。
 
 当前已验证真实 OCR 文字/空白图片、TTS 在线恢复、MCI 播放/连续替换以及受管 Python 请求的错误交付，面板协议的真实剪贴板探针见下文；本地低完整性 SAPI 限制如实保留为失败。UIA、多屏/DPI、跨应用交付、朗读听感、合盖/睡眠及设备断连仍按 `tools/startup/README.md` 的矩阵执行。
+
+2026-11-20 本地语音增量：按仓库隔离的用户目录环境为 medium/RID 8192，中英文 SAPI WAV、SSML 参数及转义、禁止在线的实际 auto 流水线通过；AHK 实际选择该 pythonw 并在必需 Job 内完成本地合成、终态与清理，onlineCalls=0。联合探针的 Edge 与 SAPI 文件均通过。恢复的是新宿主上的 SAPI 路径，旧 Low 环境和缺失的 WinRT 依赖保持原样；新路径听感仍待确认。证据 `.tmp/integration/20261120-local-host/`，干净 clone 构建/全量测试 `.tmp/validation/20261120-local-host/`。
 
 ## 可见选区与真实剪贴板探针
 

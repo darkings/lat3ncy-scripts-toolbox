@@ -237,9 +237,55 @@ try {$voice.SetOutputToWaveFile($OutputPath);$voice.Speak('Toolbox validation, o
     return results
 
 
+def local_tts_probe(output: Path) -> dict:
+    """Real offline SAPI and auto pipeline; online/device playback are denied."""
+    tts = load_module('toolbox_local_tts', 'tools/tts/tts_player.py')
+    logger = tts.configure_logging(str(output/'tts.log'), log_text=False)
+    calls = []
+    async def denied(*args, **kwargs):
+        calls.append(True)
+        raise RuntimeError('Online synthesis is forbidden by this probe')
+    results = {'playback': 'file decode adapter; no device playback'}
+    prior = (sys.argv, tts.play_audio_file, tts.play_sapi_fallback, tts.get_default_cache_dir, tts.synthesize_edge_segment)
+    try:
+        for lang, text, voice in [('en', 'Toolbox local validation, one two three.', 'Microsoft Zira'),
+                                  ('zh', '工具箱本地语音验证，一二三。', 'Microsoft Yaoyao')]:
+            path = output/f'{lang}.wav'
+            ok = asyncio.run(asyncio.wait_for(tts.synthesize_sapi_segment(
+                voice, text, lang, '+0%', '+0Hz', '+0%', str(path)), 20))
+            duration = audio_length(path) if ok else 0
+            results[lang] = {'status': 'passed' if duration > 0 else 'failed', 'durationMs': duration}
+        adjusted = output/'adjusted.wav'
+        ok = asyncio.run(asyncio.wait_for(tts.synthesize_sapi_segment('Microsoft Zira',
+            'This fixed text includes <markup> & quotes.', 'en', '-10%', '+10Hz', '-20%', str(adjusted)), 20))
+        results['prosodyAndEscaping'] = {'status': 'passed' if ok and audio_length(adjusted) > 0 else 'failed'}
+        cache = output/'cache'; cache.mkdir()
+        config = output/'config.toml'; config.write_text('engine="auto"\nconcurrency=1\n', encoding='ascii')
+        report = output/'result.txt'
+        tts.synthesize_edge_segment = denied
+        tts.play_audio_file = lambda path: audio_length(Path(path)) > 0
+        tts.play_sapi_fallback = lambda *args, **kwargs: False
+        tts.get_default_cache_dir = lambda: str(cache)
+        sys.argv = ['tts_player.py', '--text', 'Local pipeline validation. 本地流水线验证。',
+            '--config', str(config), '--request-id', 'local-pipeline', '--result-file', str(report)]
+        code = tts.main()
+        terminal = dict(line.split('=', 1) for line in report.read_text('utf-8').splitlines())
+        files = list(cache.iterdir())
+        results['autoPipeline'] = {'status': 'passed' if code == 0 and terminal.get('status') == 'success'
+            and len(files) == 2 and all(path.suffix == '.wav' for path in files) and not calls else 'failed',
+            'exitCode': code, 'onlineCalls': len(calls), 'wavFiles': len(files)}
+        results['status'] = 'passed' if all(results[key]['status'] == 'passed'
+            for key in ('en', 'zh', 'prosodyAndEscaping', 'autoPipeline')) else 'failed'
+    finally:
+        sys.argv, tts.play_audio_file, tts.play_sapi_fallback, tts.get_default_cache_dir, tts.synthesize_edge_segment = prior
+        tts._TASK = None
+        tts.close_logger(logger)
+    return results
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('component', choices=['ocr', 'tts', 'playback'])
+    parser.add_argument('component', choices=['ocr', 'tts', 'playback', 'local-tts'])
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     output = (args.output or ROOT / '.tmp/integration' / uuid.uuid4().hex).resolve()
@@ -247,7 +293,7 @@ def main() -> int:
     result = {'component': args.component, 'python': sys.version, 'executable': sys.executable,
               'scope': 'synthetic fixture; no UI, clipboard, playback or device-state changes'}
     try:
-        probes = {'ocr': ocr_probe, 'tts': tts_probe, 'playback': playback_probe}
+        probes = {'ocr': ocr_probe, 'tts': tts_probe, 'playback': playback_probe, 'local-tts': local_tts_probe}
         if args.component == 'playback':
             result['scope'] = 'real MCI playback/cancellation with silent PCM; no speech or device setting changes'
         result.update(probes[args.component](output))

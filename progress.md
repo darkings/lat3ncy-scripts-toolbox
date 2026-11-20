@@ -311,3 +311,45 @@
 
 ---
 *每个阶段完成后或遇到错误时更新此文件*
+
+## 会话：2026-11-20 真实验收与 TTS 依赖闭合
+
+- 按用户“开始/继续”执行真机可自动部分、干净 clone 与模块提交整理；本地语音失败后在线回退获用户明确授权。
+- 新增 clean_checkout.py，导出当前候选但使用 HEAD 配置，在独立本地仓库提交快照后 clone 到带空格目录。原仓库 Git 状态不变，旧产物/venv/日志不带入。离线、助手构建、WinUI 源码构建与 AHK 全量套件通过。
+- 捕获并修复：旧核心测试错误要求生产 out 存在；Python 启动 PS5.1 时应隔离 PS7 模块路径并使用规范化的环境变量名。
+- 真实 RapidOCR 文字及空白图片通过；真实 Edge 7.2.8 403，7.3.1 MP3 合成通过。建立独立 .venv 和带哈希的完整依赖锁；AHK 优先该环境，安装器 --check 不再依赖全局包。
+- 进程令牌对照确认 venv 是 low/4096、全局解释器是 medium/8192；同一 SAPI 探针分别失败/成功，低完整性 TEMP 写入被拒绝。非 AppContainer，非 restricted token，均 STA/FullLanguage。保留本地 SAPI 失败事实，未改 ACL/注册表或提权。
+- TTS auto 从本地失败恢复到独立 MP3 缓存，中英文真实文件可解码；显式 winrt 无在线请求。缓存写入探针失败回退模块 .cache；MCI/SAPI/顶层失败不再伪报成功。
+- 独立 Build-ImeHud.ps1 及 CI WinUI job 已补，构建逻辑与主套件共用 BuildSupport；validation 来源/排除/原 Git 状态保护纳入离线和全量回归。
+- 新证据位于 .tmp/integration/20261120-* 与 .tmp/validation/20261120-release-candidate/。音频未播放，剪贴板/电源/设备状态未改；总体 TTS smoke 仍为 partial。
+
+## 会话：2026-11-19 二次评审修复部署与下一步分析
+
+- 用户授权替换并重载后，检查 test-out 源码戳及 self-test，备份生产差异文件后替换 `.source-stamp` / `ImeHudWinUi.dll` / `resources.pri`。
+- AHK 40516 → 28080；WinUI 31344 → 5168；PowerPolicy 13340 → 44404。只针对当前仓库实例操作，PowerPolicy 通过 stop 文件正常退出后由原有提权任务重新启动，没有重装任务。
+- 生产 WinUI self-test 和 PING 通过，DLL 与 test-out SHA-256 一致；AHK 实例标记存在，光标助手仅一个且属于 PID 28080；电源心跳有效、四路注册错误码 0、Caffeine 请求余额 1。
+- RGB Ambient 当时未运行，因此未额外启动；OCR/TTS 为按需进程，后续调用读取新源码。
+- 部署备份和机器可读证据：`.tmp/deploy-review-20261119/`；源码戳 `f11e37c285750855545c1b8200d82147711c55dae3ece036afd768f7a2d2388b`。
+- 巡检发现：普通权限看护无法读取提权 PowerPolicy 命令行，健康业务实例仍被报 query-failed；列为下一阶段首项，计划用带仓库身份及进程创建时间的心跳识别。
+- 更新 task_plan.md 最新阶段，规划发布回滚、稳定引擎定位、真机矩阵、提交基线与依赖/协议维护。仅形成计划，未开始新一轮实现，未 git commit。
+
+## 会话：2026-11-19 执行下一步
+
+- 执行前保存 402 个文件的内容/哈希基线；保留此前混合修改和个人配置，未 stage/commit/push。
+- 新增 PowerPolicy 身份心跳及启动时源码/配置指纹；看门狗验证路径、PID 创建 FILETIME、新鲜度，区分 running/outdated/not-running/query-failed。新增隔离边界测试并纳入正式入口。
+- 最终 PS7 交叉检查捕获 ConvertFrom-Json 自动日期转换导致的时区丢失：改为分别处理 string/DateTime/DateTimeOffset，补 UTC/本地/实际 JSON 日期回归，PS5.1 与 PS7 均通过；CI 增加 PS7 对应步骤。
+- 将任务宿主迁移到系统 Windows PowerShell 5.1。普通终端修改 Highest 任务被 Windows 拒绝后，由原有提权常驻启动检查修复本仓库 action；没有提权看门狗或改变任务 principal/settings/triggers。实际新实例已从系统路径启动。
+- 固化 HUD 发布事务、manifest、SHA-256 备份、预览、幂等、精确停止、原子替换、自检、AHK/HUD/光标助手健康检查、失败恢复及显式回滚；源码回退不在产物回滚范围。部署互斥体阻止看门狗在维护期间重拉，崩溃后自动释放。
+- 真实 ForceReload：AHK 28080 → 16800，HUD 5168 → 49024，助手 33392；PING 与归属检查通过。连续两次普通部署 unchanged 且 PID 不变。
+- PowerPolicy 受控正常停止后，看门狗确认缺失并恢复到 PID 21376；普通权限健康轮询两次不追加日志，原生注册四路错误 0，Caffeine=true、requestBalance=1。未强杀提权进程或发送合盖/睡眠命令。
+- 新增本机已验证的离线 Windows runner/Actions workflow（55 个 Python 行为测试、PowerShell AST/BOM 和电源/启动/发布桩）；完整正式套件也通过。未推送，远端 Actions 尚未运行。
+- `tools/startup/README.md` 补齐发布说明、待执行设备矩阵、模块提交边界。阶段 1/当前发布范围阶段 2 完成；阶段 3 待真实设备，阶段 4 提交/远端 CI 待办，阶段 5 不做无依据升级。证据位于 `.tmp/next-step-20261119/`。
+
+## 会话：2026-11-19 继续执行发布边界与构建追溯
+
+- 保存本轮涉及的 11 个既有文件基线。隔离复现准备备份后发生的目标更新被候选覆盖，修复部署前/停进程后/逐文件写入前的哈希预检。
+- 自动恢复改为仅检查并恢复本次写入列表，遇到后续写入/删除报告冲突并保留现场；增加真实文件变更与故障注入测试，明确不承诺任意外部写入下的原子 CAS。manifest 改用原子替换。
+- 新增 `tools/build/` 隔离编译与来源验证：两个 C# 助手实际编译，锚点 self-test 和来源核对通过；生成编译器/引用/源码/产物哈希 manifest。未覆盖生产 exe。来源故障桩加入两种测试入口，Windows Actions 增加实际编译步骤。
+- 真实只读音频检查：生产/候选 --get/--list 一致，1 个活动设备，默认输出前后均 Realtek 扬声器；没有运行任何切换、恢复或建链命令。
+- 全量与离线回归通过，64 个 PowerShell AST/BOM 检查、55 个 Python 行为测试，以及新增部署和来源故障测试通过。既有未提交修改/个人配置保留，未 stage/commit/push，远端 CI 尚未运行。
+- 构建日志、只读音频 JSON、复现和测试日志在 `.tmp/continue-20261119/`。操作说明分别为 `tools/build/README.md`、`tools/startup/README.md`；真实设备矩阵仅增加已实测的只读部分。

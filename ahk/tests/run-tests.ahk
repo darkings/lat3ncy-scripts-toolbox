@@ -58,6 +58,22 @@ EventSequence(events) {
     return sequence
 }
 
+global AsyncTimerTicks := 0
+AsyncTimerTick() {
+    global AsyncTimerTicks
+    AsyncTimerTicks += 1
+}
+
+; 非阻塞轮询到任务完成；测试里用 Sleep 让 AHK 定时器有机会运行。
+WaitAsyncJob(job, timeoutMs := 10000) {
+    deadline := A_TickCount + timeoutMs
+    while (!job.Done && A_TickCount < deadline) {
+        job.Poll()
+        Sleep 25
+    }
+    return job
+}
+
 class FakeSmartPasteCopyRecorder {
     __New(events) {
         this.events := events
@@ -110,6 +126,101 @@ class FakeSmartPasteClipboard {
     }
 }
 
+; 翻译轮询测试替身：完成状态只由 Poll() 推进，复现真实 ProcessNoWindowJob 的契约。
+class FakeTranslationJob {
+    __New(finalStatus := "exited", completeOnPoll := true) {
+        this.Status := "running"
+        this.FinalStatus := finalStatus
+        this.CompleteOnPoll := completeOnPoll
+        this.Done := false
+        this.PollCount := 0
+        this.CancelCount := 0
+        this.Cancelled := false
+        this.Pid := 999999
+        this.HandlesClosed := false
+    }
+
+    Poll() {
+        this.PollCount += 1
+        if this.CompleteOnPoll {
+            this.Done := true
+            this.Status := this.FinalStatus
+        } else if (this.CancelCount > 0) {
+            this.Done := true
+            this.Status := "cancelled"
+            this.Cancelled := true
+        }
+        return this.Status
+    }
+
+    Cancel() {
+        this.CancelCount += 1
+    }
+
+    Dispose() {
+        this.Done := true
+        this.HandlesClosed := true
+    }
+}
+
+; 构造翻译任务并复位模块静态状态；返回清理用的快照。
+PrepareTranslationPollState(gate, task) {
+    saved := {
+        tasks: TranslateSelectedText.Tasks,
+        current: TranslateSelectedText.CurrentTask,
+        gate: TranslateSelectedText.RequestGate,
+        hooks: TranslateSelectedText.Hooks,
+        timer: TranslateSelectedText.PollTimer
+    }
+    TranslateSelectedText.Tasks := [task]
+    TranslateSelectedText.CurrentTask := task
+    TranslateSelectedText.RequestGate := gate
+    TranslateSelectedText.PollTimer := ""
+    TranslateSelectedText.Hooks := 0
+    return saved
+}
+
+RestoreTranslationPollState(saved) {
+    TranslateSelectedText.Tasks := saved.tasks
+    TranslateSelectedText.CurrentTask := saved.current
+    TranslateSelectedText.RequestGate := saved.gate
+    TranslateSelectedText.Hooks := saved.hooks
+    TranslateSelectedText.PollTimer := saved.timer
+}
+
+global PollHookCaptured := 0
+PollHookPopup(text) {
+    global PollHookCaptured
+    PollHookCaptured.popup := text
+}
+PollHookError(message) {
+    global PollHookCaptured
+    PollHookCaptured.error := message
+}
+PollHookResult(text) {
+    global PollHookCaptured
+    PollHookCaptured.result := text
+}
+PollHookClose() {
+    global PollHookCaptured
+    PollHookCaptured.close += 1
+}
+PollHookPanelOpen() {
+    global PollHookCaptured
+    return PollHookCaptured.panelOpen
+}
+NewTranslationHooks() {
+    global PollHookCaptured
+    PollHookCaptured := { popup: "", error: "", result: "", close: 0, panelOpen: true }
+    return Map(
+        "popup", PollHookPopup,
+        "error", PollHookError,
+        "result", PollHookResult,
+        "close", PollHookClose,
+        "panelOpen", PollHookPanelOpen
+    )
+}
+
 mainSource := FileRead(A_ScriptDir "\..\main.ahk", "UTF-8")
 startupTruePosition := InStr(mainSource, "global ToolboxStarting := true")
 startupHandlerPosition := InStr(mainSource, "OnError ToolboxStartupErrorHandler")
@@ -117,10 +228,12 @@ rendererIncludePosition := InStr(mainSource, "#Include ..\shared\notify\renderer
 notifyIncludePosition := InStr(mainSource, "#Include ..\shared\notify\notify.ahk")
 panelIncludePosition := InStr(mainSource, "#Include ..\shared\notify\translation-panel.ahk")
 imeHudIncludePosition := InStr(mainSource, "#Include ..\shared\notify\ime-hud.ahk")
+toolboxInstanceIncludePosition := InStr(mainSource, "#Include ..\shared\notify\toolbox-instance.ahk")
 pythonIncludePosition := InStr(mainSource, "#Include ..\shared\python.ahk")
 firstFeatureIncludePosition := InStr(mainSource, "#Include features\caps-lock-ime.ahk")
 lastFeatureIncludePosition := InStr(mainSource, "#Include features\foreground-process.ahk")
 routerIncludePosition := InStr(mainSource, "#Include hotkey-router.ahk")
+markerInitPosition := InStr(mainSource, "ToolboxInstance.Init(toolboxRepoDir)")
 startupFalsePosition := InStr(mainSource, "`nToolboxStarting := false")
 AssertEqual(true, startupTruePosition > 0, "startup flag exists")
 AssertEqual(true, startupHandlerPosition > startupTruePosition, "startup handler follows flag")
@@ -128,6 +241,10 @@ AssertEqual(true, rendererIncludePosition > startupHandlerPosition, "renderer lo
 AssertEqual(true, notifyIncludePosition > rendererIncludePosition, "notify API loads after renderer")
 AssertEqual(true, panelIncludePosition > notifyIncludePosition, "translation panel client loads after notify")
 AssertEqual(true, imeHudIncludePosition > panelIncludePosition, "ImeHud client loads after translation panel client")
+AssertEqual(true, toolboxInstanceIncludePosition > imeHudIncludePosition, "instance marker loads after ImeHud client")
+AssertEqual(true, pythonIncludePosition > toolboxInstanceIncludePosition, "python helper loads after instance marker")
+AssertEqual(true, markerInitPosition > routerIncludePosition, "instance marker is created after the router")
+AssertEqual(true, markerInitPosition < startupFalsePosition, "instance marker is created before startup success")
 AssertEqual(true, pythonIncludePosition > imeHudIncludePosition, "python helper loads after ImeHud client")
 AssertEqual(true, firstFeatureIncludePosition > pythonIncludePosition, "features load after python helper")
 AssertEqual(true, startupHandlerPosition < firstFeatureIncludePosition, "startup handler precedes feature includes")
@@ -337,7 +454,9 @@ AssertEqual(true, HasMethod(TranslationPanel, "SetResult"), "translation panel c
 AssertEqual(true, HasMethod(TranslationPanel, "Close"), "translation panel can CLOSE")
 AssertEqual(true, HasMethod(TranslationPanel, "SendCopyData"), "translation panel sends WM_COPYDATA")
 AssertEqual(true, HasMethod(NotifyPaths, "ImeHudWinUiExe"), "path resolver exposes ImeHudWinUi.exe")
-AssertEqual(true, NotifyPaths.ImeHudWinUiExe() != "", "published ImeHudWinUi.exe is resolvable from tests")
+productionHudPath := NotifyPaths.Expand(A_ScriptDir "\..\..\tools\ime-hud-winui\out\ImeHudWinUi.exe")
+AssertEqual(FileExist(productionHudPath) ? productionHudPath : "", NotifyPaths.ImeHudWinUiExe(), "renderer resolver uses production output only when published")
+AssertEqual(true, FileExist(A_ScriptDir "\..\..\tools\ime-hud-winui\test-out\ImeHudWinUi.exe") != "", "source-built test renderer exists independently of production output")
 AssertEqual(
     "PANEL|OPEN|12|34|0|mouse-at-hotkey|explicit|hello|world",
     TranslationPanel.BuildOpenCommand("hello|world", 12, 34, 0),
@@ -617,6 +736,18 @@ AssertEqual(false, SpeakSelectedText.HasSpeakableText("123456"), "speak rejects 
 AssertEqual(false, SpeakSelectedText.HasSpeakableText("!@#$%^&*()"), "speak rejects pure symbols")
 AssertEqual(false, SpeakSelectedText.HasSpeakableText("   "), "speak rejects whitespace")
 AssertEqual("hello world", SpeakSelectedText.Normalize("  hello world  "), "speak normalizes whitespace")
+ttsRuntimeFixture := A_Temp "\lat3ncy-tts-runtime-" A_TickCount
+try {
+    DirCreate ttsRuntimeFixture "\.venv\Scripts"
+    runtimeCandidate := ttsRuntimeFixture "\.venv\Scripts\pythonw.exe"
+    FileAppend "fixture; never executed", runtimeCandidate
+    AssertEqual(runtimeCandidate, SpeakSelectedText.ResolvePython(ttsRuntimeFixture "\tts_player.py"), "speak prefers its module environment")
+    FileDelete runtimeCandidate
+    AssertEqual(ToolboxPython.ResolveW(), SpeakSelectedText.ResolvePython(ttsRuntimeFixture "\tts_player.py"), "speak retains global fallback when module environment is absent")
+} finally {
+    if DirExist(ttsRuntimeFixture)
+        DirDelete ttsRuntimeFixture, true
+}
 AssertEqual(true, TranslateSelectedText.HasTranslatableText("hello"), "translate accepts English")
 AssertEqual(true, TranslateSelectedText.HasTranslatableText("今天学习"), "translate accepts Chinese")
 AssertEqual(true, TranslateSelectedText.HasTranslatableText("Windows 11"), "translate accepts mixed English and numbers")
@@ -738,6 +869,7 @@ themeLightSource := FileRead(A_ScriptDir "\..\..\tools\theme-scheduler\Set-Theme
 themeDarkSource := FileRead(A_ScriptDir "\..\..\tools\theme-scheduler\Set-Theme-Dark.ps1", "UTF-8")
 themeApplySource := FileRead(A_ScriptDir "\..\..\tools\theme-scheduler\Apply-ThemeNow.ps1", "UTF-8")
 themeCursorsSource := FileRead(A_ScriptDir "\..\..\tools\theme-scheduler\Apply-CursorsNow.ps1", "UTF-8")
+themeTailSource := FileRead(A_ScriptDir "\..\..\tools\theme-scheduler\Set-Theme-Tail.ps1", "UTF-8")
 themeInstallSource := FileRead(A_ScriptDir "\..\..\tools\theme-scheduler\Install-ThemeScheduler.ps1", "UTF-8")
 themeUninstallSource := FileRead(A_ScriptDir "\..\..\tools\theme-scheduler\Uninstall-ThemeScheduler.ps1", "UTF-8")
 themeConfigSource := FileRead(A_ScriptDir "\..\..\tools\theme-scheduler\config.toml", "UTF-8")
@@ -805,8 +937,283 @@ try {
         try ProcessClose(noWaitPid)
     }
 }
-AssertContains(audioSwitcherSource, "ProcessNoWindow.RunWait(", "audio switcher waits without allocating a console")
-AssertContains(audioSwitcherSource, "ChildTimeoutMs := 18000", "audio switcher parent timeout exceeds C# 12s wait")
+
+; --- 异步子进程：等待期间热键线程已返回，AHK 定时器仍能运行 ---
+AsyncTimerTicks := 0
+SetTimer(AsyncTimerTick, 50)
+asyncJob := ProcessNoWindow.StartAsync("cmd.exe /c ping 127.0.0.1 -n 4 >nul", "", 10000)
+try {
+    Sleep 400
+    AssertEqual(false, asyncJob.Done, "async job keeps running after the start call returned")
+    AssertEqual(true, AsyncTimerTicks > 0, "AHK timer keeps firing while the async job runs")
+    WaitAsyncJob(asyncJob)
+    AssertEqual("exited", asyncJob.Status, "async job reports natural exit")
+    AssertEqual(true, asyncJob.HandlesClosed, "async job closes process and job handles")
+} finally {
+    SetTimer(AsyncTimerTick, 0)
+    if (!asyncJob.Done)
+        asyncJob.Dispose()
+}
+AssertEqual(true, AsyncTimerTicks > 0, "timer ticks are observable after the async job finishes")
+
+; --- 异步 stdout 重定向：Done 之后再读文件，内容完整可解析 ---
+asyncOutFile := A_Temp "\lat3ncy-async-out-" A_TickCount "-" Random(1000, 9999) ".txt"
+asyncOutJob := ProcessNoWindow.StartAsync("cmd.exe /c echo async-ok", asyncOutFile, 10000)
+try {
+    WaitAsyncJob(asyncOutJob)
+    AssertEqual("exited", asyncOutJob.Status, "async stdout job completes normally")
+    AssertEqual("async-ok", Trim(FileRead(asyncOutFile, "UTF-8"), "`r`n"), "async stdout file is complete after Done")
+} finally {
+    if (!asyncOutJob.Done)
+        asyncOutJob.Dispose()
+    if FileExist(asyncOutFile)
+        FileDelete asyncOutFile
+}
+
+; --- 异步超时：杀进程树并回收句柄，不能留下后台子进程 ---
+timeoutJob := ProcessNoWindow.StartAsync("cmd.exe /c ping 127.0.0.1 -n 8 >nul", "", 200)
+WaitAsyncJob(timeoutJob, 6000)
+AssertEqual("timedout", timeoutJob.Status, "async job reports timeout")
+AssertEqual(true, timeoutJob.TimedOut, "async job marks timeout")
+AssertEqual(true, timeoutJob.HandlesClosed, "timed out async job closes handles")
+AssertEqual(0, timeoutJob.hProcess, "timed out async job drops the process handle")
+AssertEqual(0, timeoutJob.hJob, "timed out async job drops the job handle")
+timeoutDeadline := A_TickCount + 3000
+while (ProcessExist(timeoutJob.Pid) && A_TickCount < timeoutDeadline)
+    Sleep 50
+AssertEqual(0, ProcessExist(timeoutJob.Pid), "timed out async job terminates the child process tree")
+
+; --- 取消：立即标记 cancelled，完成轮询后句柄和进程都被清理 ---
+cancelJob := ProcessNoWindow.StartAsync("cmd.exe /c ping 127.0.0.1 -n 8 >nul", "", 10000)
+Sleep 100
+cancelJob.Cancel()
+WaitAsyncJob(cancelJob, 6000)
+AssertEqual("cancelled", cancelJob.Status, "async cancel reports cancelled")
+AssertEqual(true, cancelJob.Cancelled, "async cancel marks the job")
+AssertEqual(true, cancelJob.HandlesClosed, "cancelled async job closes handles")
+cancelDeadline := A_TickCount + 3000
+while (ProcessExist(cancelJob.Pid) && A_TickCount < cancelDeadline)
+    Sleep 50
+AssertEqual(0, ProcessExist(cancelJob.Pid), "cancelled async job terminates the child process tree")
+
+; --- 乱序完成：快任务先完成，gate 只允许最新请求落到面板 ---
+slowJob := ProcessNoWindow.StartAsync("cmd.exe /c ping 127.0.0.1 -n 4 >nul", "", 10000)
+fastJob := ProcessNoWindow.StartAsync("cmd.exe /c ping 127.0.0.1 -n 1 >nul", "", 10000)
+completionOrder := []
+fastSeen := false
+slowSeen := false
+orderDeadline := A_TickCount + 8000
+while ((!slowJob.Done || !fastJob.Done) && A_TickCount < orderDeadline) {
+    slowJob.Poll()
+    fastJob.Poll()
+    if (fastJob.Done && !fastSeen) {
+        completionOrder.Push("fast")
+        fastSeen := true
+    }
+    if (slowJob.Done && !slowSeen) {
+        completionOrder.Push("slow")
+        slowSeen := true
+    }
+    Sleep 25
+}
+AssertEqual("fast->slow", EventSequence(completionOrder), "async completions are observed in finish order")
+AssertEqual(true, slowJob.Done && fastJob.Done, "both async ordering jobs completed")
+if (!slowJob.Done)
+    slowJob.Dispose()
+if (!fastJob.Done)
+    fastJob.Dispose()
+
+requestGate := TranslationRequestGate()
+requestOne := requestGate.Begin()
+requestTwo := requestGate.Begin()
+AssertEqual("discard-stale", TranslationCompletionPolicy.Decide(requestGate, requestOne, "exited", false, true, true), "stale request is discarded after a new trigger")
+AssertEqual("apply", TranslationCompletionPolicy.Decide(requestGate, requestTwo, "exited", false, true, true), "latest request fills the panel")
+AssertEqual("discard-dismissed", TranslationCompletionPolicy.Decide(requestGate, requestTwo, "exited", false, true, false), "user-closed panel discards the late result")
+AssertEqual("timeout", TranslationCompletionPolicy.Decide(requestGate, requestTwo, "timedout", false, true, false), "timed out request maps to timeout")
+AssertEqual("error", TranslationCompletionPolicy.Decide(requestGate, requestTwo, "error", false, true, true), "failed request maps to error")
+AssertEqual("apply-fallback", TranslationCompletionPolicy.Decide(requestGate, requestTwo, "exited", false, false, false), "missing panel falls back to a popup")
+AssertEqual("discard", requestGate.Complete(requestOne), "old request cannot complete the gate")
+AssertEqual("apply", requestGate.Complete(requestTwo), "current request completes the gate once")
+AssertEqual("discard", requestGate.Complete(requestTwo), "duplicate completion is discarded")
+AssertEqual("文本过长（12 字符，上限 10）", TranslateSelectedText.MessageForError("too_long", "", "12", "10"), "too_long message includes both lengths")
+AssertEqual("文本过长（12 字符，上限 10）", TranslateSelectedText.MessageForError("too_long", "文本过长（上限 10 字符）", "12", "10"), "too_long UI keeps the actual text length")
+AssertEqual("翻译超时", TranslateSelectedText.MessageForError("timeout", "", "", ""), "timeout has a stable user message")
+AssertEqual("翻译配置错误", TranslateSelectedText.MessageForError("config", "", "", ""), "config errors are not reported as network failures")
+AssertEqual("自定义错误", TranslateSelectedText.MessageForError("auth", "自定义错误"), "explicit provider message wins")
+AssertEqual("A`nB`nengine=google", TranslateSelectedText.ParseField("status=ok`ntext=A`nB`nengine=google", "text"), "text keeps the remaining protocol payload")
+
+; 实例标记哈希必须与 PowerShell 侧 Get-ToolboxInstanceHash 完全一致。
+AssertEqual("811c9dc5", ToolboxInstance.Hash(""), "instance hash FNV empty")
+AssertEqual("e40c292c", ToolboxInstance.Hash("a"), "instance hash FNV a")
+AssertEqual("e40c292c", ToolboxInstance.Hash("A"), "instance hash lower-cases input")
+AssertEqual("1a47e90b", ToolboxInstance.Hash("abc"), "instance hash FNV abc")
+AssertEqual(ToolboxInstance.Hash("C:\Repo\"), ToolboxInstance.Hash("c:\repo"), "instance hash trims slash and case")
+AssertEqual(true, InStr(ToolboxInstance.MutexName("C:\Repo"), "Local\Lat3ncyToolboxInstance-") = 1, "instance mutex name stays namespaced")
+markerTestRepo := A_Temp "\lat3ncy-marker-test-" A_TickCount "-" Random(1000, 9999)
+markerHandle := ToolboxInstance.Init(markerTestRepo)
+AssertEqual(true, markerHandle != 0, "instance marker creates a named mutex")
+openedMarker := DllCall("OpenMutexW", "UInt", 0x00100000, "Int", 0, "WStr", ToolboxInstance.MutexName(markerTestRepo), "Ptr")
+AssertEqual(true, openedMarker != 0, "instance marker mutex is openable by name")
+if openedMarker
+    DllCall("CloseHandle", "Ptr", openedMarker)
+
+; --- 翻译模块实际 Poll() 入口：完成 / 超时 / 取消 / 用户关面板 ---
+pollDir := A_Temp "\lat3ncy-translate-poll-" A_TickCount "-" Random(1000, 9999)
+DirCreate pollDir
+try {
+    ; 完成：定时器必须先 Poll() 子进程，再读结果并填面板。
+    completionGate := TranslationRequestGate()
+    completionId := completionGate.Begin()
+    completionJob := FakeTranslationJob("exited", true)
+    completionOut := pollDir "\ok.txt"
+    FileAppend "status=ok`ndirection=en-zh`nengine=google_gtx`ncached=0`ntext=translated-result`n", completionOut, "UTF-8"
+    completionTask := {id: completionId, job: completionJob, inputFile: "", outputFile: completionOut, panelOpened: true, dismissed: false}
+    completionHooks := NewTranslationHooks()
+    completionSaved := PrepareTranslationPollState(completionGate, completionTask)
+    try {
+        TranslateSelectedText.Hooks := completionHooks
+        TranslateSelectedText.Poll()
+        AssertEqual(1, completionJob.PollCount, "translate Poll drives job.Poll")
+        AssertEqual(true, completionJob.Done, "translate Poll observes job completion")
+        AssertEqual("translated-result", PollHookCaptured.result, "translate Poll applies the completed result")
+        AssertEqual(0, TranslateSelectedText.Tasks.Length, "completed translation task is removed")
+        AssertEqual("", TranslateSelectedText.CurrentTask, "completed translation clears the current task")
+        AssertEqual(false, FileExist(completionOut) != "", "completed translation deletes the output file")
+    } finally {
+        RestoreTranslationPollState(completionSaved)
+    }
+
+    ; 超时：同一个真实入口必须把 timedout 映射成用户提示并关面板。
+    timeoutGate := TranslationRequestGate()
+    timeoutId := timeoutGate.Begin()
+    timeoutJob := FakeTranslationJob("timedout", true)
+    timeoutTask := {id: timeoutId, job: timeoutJob, inputFile: "", outputFile: "", panelOpened: true, dismissed: false}
+    timeoutHooks := NewTranslationHooks()
+    timeoutSaved := PrepareTranslationPollState(timeoutGate, timeoutTask)
+    try {
+        TranslateSelectedText.Hooks := timeoutHooks
+        TranslateSelectedText.Poll()
+        AssertEqual(1, timeoutJob.PollCount, "translate Poll polls a timed out job")
+        AssertEqual("翻译超时", PollHookCaptured.error, "translate Poll reports timeout")
+        AssertEqual(1, PollHookCaptured.close, "translate Poll closes the panel on timeout")
+        AssertEqual(0, TranslateSelectedText.Tasks.Length, "timed out translation task is removed")
+    } finally {
+        RestoreTranslationPollState(timeoutSaved)
+    }
+
+    ; 取消：新请求 CancelCurrent() 后，旧任务仍要被 Poll 推进并清理。
+    cancelGate := TranslationRequestGate()
+    cancelId := cancelGate.Begin()
+    cancelJob := FakeTranslationJob("exited", false)
+    cancelTask := {id: cancelId, job: cancelJob, inputFile: "", outputFile: "", panelOpened: false, dismissed: false}
+    cancelHooks := NewTranslationHooks()
+    cancelSaved := PrepareTranslationPollState(cancelGate, cancelTask)
+    try {
+        TranslateSelectedText.Hooks := cancelHooks
+        TranslateSelectedText.Poll()
+        AssertEqual(1, cancelJob.PollCount, "running translation job is polled before cancellation")
+        AssertEqual(1, TranslateSelectedText.Tasks.Length, "running translation task stays queued")
+        TranslateSelectedText.CancelCurrent()
+        AssertEqual(1, cancelJob.CancelCount, "CancelCurrent cancels the child job")
+        TranslateSelectedText.Poll()
+        AssertEqual(2, cancelJob.PollCount, "cancelled task is polled again to reap it")
+        AssertEqual(0, TranslateSelectedText.Tasks.Length, "cancelled translation task is removed")
+        AssertEqual("", PollHookCaptured.error, "cancelled translation does not show an error")
+        AssertEqual("", PollHookCaptured.popup, "cancelled translation does not show a popup")
+    } finally {
+        RestoreTranslationPollState(cancelSaved)
+    }
+
+    ; 用户关面板：Poll 必须取消子进程，完成后不能再写结果。
+    dismissGate := TranslationRequestGate()
+    dismissId := dismissGate.Begin()
+    dismissJob := FakeTranslationJob("exited", false)
+    dismissTask := {id: dismissId, job: dismissJob, inputFile: "", outputFile: "", panelOpened: true, dismissed: false}
+    dismissHooks := NewTranslationHooks()
+    PollHookCaptured.panelOpen := false
+    dismissSaved := PrepareTranslationPollState(dismissGate, dismissTask)
+    try {
+        TranslateSelectedText.Hooks := dismissHooks
+        TranslateSelectedText.Poll()
+        AssertEqual(1, dismissJob.PollCount, "dismissed request is polled before cancel")
+        AssertEqual(1, dismissJob.CancelCount, "closing the panel cancels the child job")
+        AssertEqual(true, dismissTask.dismissed, "closing the panel marks the task dismissed")
+        TranslateSelectedText.Poll()
+        AssertEqual(2, dismissJob.PollCount, "dismissed job is polled again to reap it")
+        AssertEqual(0, TranslateSelectedText.Tasks.Length, "dismissed translation task is removed")
+        AssertEqual("", PollHookCaptured.result, "dismissed translation does not write a result")
+        AssertEqual("", PollHookCaptured.error, "dismissed translation does not show an error")
+    } finally {
+        RestoreTranslationPollState(dismissSaved)
+    }
+
+    ; 真实子进程：cmd 已退出但 Job.Done 仍为 false，必须由翻译模块 Poll() 推进。
+    realOut := pollDir "\real.txt"
+    FileAppend "status=ok`ndirection=en-zh`nengine=google_gtx`ncached=0`ntext=real-poll-result`n", realOut, "UTF-8"
+    realJob := ProcessNoWindow.StartAsync("cmd.exe /c exit 0", "", 10000)
+    realGate := TranslationRequestGate()
+    realId := realGate.Begin()
+    realTask := {id: realId, job: realJob, inputFile: "", outputFile: realOut, panelOpened: true, dismissed: false}
+    realHooks := NewTranslationHooks()
+    realSaved := PrepareTranslationPollState(realGate, realTask)
+    try {
+        realDeadline := A_TickCount + 3000
+        while (ProcessExist(realJob.Pid) && A_TickCount < realDeadline)
+            Sleep 20
+        AssertEqual(0, ProcessExist(realJob.Pid), "real translation child has exited")
+        AssertEqual(false, realJob.Done, "real child exit is invisible before Job.Poll")
+        TranslateSelectedText.Hooks := realHooks
+        realDeadline := A_TickCount + 5000
+        while (TranslateSelectedText.Tasks.Length > 0 && A_TickCount < realDeadline) {
+            TranslateSelectedText.Poll()
+            Sleep 30
+        }
+        AssertEqual(true, realJob.Done, "translate Poll advances a real child job to Done")
+        AssertEqual("real-poll-result", PollHookCaptured.result, "translate Poll applies a real exited job result")
+        AssertEqual(0, TranslateSelectedText.Tasks.Length, "real completed task is removed")
+    } finally {
+        RestoreTranslationPollState(realSaved)
+        if (!realJob.Done)
+            realJob.Dispose()
+    }
+
+    ; 真实超时：timedout 也必须经过模块 Poll() 才终止并弹提示。
+    realTimeoutJob := ProcessNoWindow.StartAsync("cmd.exe /c ping 127.0.0.1 -n 8 >nul", "", 300)
+    realTimeoutGate := TranslationRequestGate()
+    realTimeoutId := realTimeoutGate.Begin()
+    realTimeoutTask := {id: realTimeoutId, job: realTimeoutJob, inputFile: "", outputFile: "", panelOpened: true, dismissed: false}
+    realTimeoutHooks := NewTranslationHooks()
+    realTimeoutSaved := PrepareTranslationPollState(realTimeoutGate, realTimeoutTask)
+    try {
+        Sleep 500
+        AssertEqual(false, realTimeoutJob.Done, "real timeout job is not done before Poll")
+        TranslateSelectedText.Hooks := realTimeoutHooks
+        realTimeoutDeadline := A_TickCount + 8000
+        while (TranslateSelectedText.Tasks.Length > 0 && A_TickCount < realTimeoutDeadline) {
+            TranslateSelectedText.Poll()
+            Sleep 30
+        }
+        AssertEqual("timedout", realTimeoutJob.Status, "real timeout is reported by the module poll")
+        AssertEqual(true, realTimeoutJob.HandlesClosed, "real timeout closes the job handles")
+        AssertEqual("翻译超时", PollHookCaptured.error, "real timeout shows the timeout message")
+        AssertEqual(0, TranslateSelectedText.Tasks.Length, "real timed out task is removed")
+    } finally {
+        RestoreTranslationPollState(realTimeoutSaved)
+        if (!realTimeoutJob.Done)
+            realTimeoutJob.Dispose()
+    }
+} finally {
+    DirDelete pollDir, true
+}
+
+AssertContains(audioSwitcherSource, "ProcessNoWindow.StartAsync(", "audio switcher starts the slow exe without blocking the hotkey thread")
+AssertNotContains(audioSwitcherSource, "ProcessNoWindow.RunWait(", "audio switcher no longer synchronously waits on the exe")
+AssertEqual(true, HasMethod(AudioSwitcher, "Poll"), "audio switcher completes through a timer poll")
+AssertEqual('"C:\Tools\audio.exe" --toggle', AudioSwitcher.BuildToggleCommand("C:\Tools\audio.exe"), "audio switcher command stays quoted")
+AssertEqual("SWITCHED", AudioSwitcher.ParseProtocol("SWITCHED|G27Q2").status, "audio switcher parses protocol status")
+AssertEqual("G27Q2", AudioSwitcher.ParseProtocol("SWITCHED|G27Q2").detail, "audio switcher parses protocol detail")
+AssertContains(audioSwitcherSource, "ChildTimeoutMs := 48000", "audio switcher parent timeout covers slow A2DP renegotiation")
+AssertContains(audioSwitcherSource, "正在唤醒耳机", "audio switcher shows a slow-path HUD while waking the headset")
 AssertContains(audioSwitcherSource, "this.ChildTimeoutMs", "audio switcher passes timeout to ProcessNoWindow")
 AssertNotContains(audioSwitcherSource, "cmd.exe /c", "audio switcher no longer wraps exe with cmd")
 AssertContains(audioSwitcherSource, "耳机未就绪", "audio switcher HUD keeps headset-not-ready text")
@@ -817,6 +1224,15 @@ AssertContains(audioSwitcherSource, "蓝牙已连但立体声未就绪", "audio 
 AssertContains(audioSwitcherSource, "ShouldAutoElevate", "audio switcher gates sudo behind an explicit helper")
 AssertContains(audioSwitcherSource, "IsPermissionError", "audio switcher only auto-elevates permission errors")
 AssertContains(audioSwitcherSource, "RemainingTimeout", "elevated retry shares the original timeout budget")
+; Finish() 丢弃未完成任务时必须 Dispose：否则 hProcess/hJob 泄漏，且 KILL_ON_JOB_CLOSE 不触发。
+leakJob := FakeTranslationJob()
+AudioSwitcher.Job := leakJob
+AudioSwitcher.Task := ""
+AudioSwitcher.Busy := true
+AudioSwitcher.Finish()
+AssertEqual(true, leakJob.HandlesClosed, "audio switcher disposes an unfinished job instead of leaking handles")
+AssertEqual("", AudioSwitcher.Job, "audio switcher clears the job reference on finish")
+AssertEqual(false, AudioSwitcher.Busy, "audio switcher releases the busy flag on finish")
 audioSwitcherCs := FileRead(A_ScriptDir "\..\..\tools\audio-switcher\AudioSwitcher.cs", "UTF-8")
 audioSwitcherCfg := FileRead(A_ScriptDir "\..\..\tools\audio-switcher\config.toml", "UTF-8")
 AssertContains(audioSwitcherCs, "TogglePreferredOutputs()", "audio switcher toggle uses preferred G27Q2/AirPods pair")
@@ -825,20 +1241,25 @@ AssertContains(audioSwitcherCs, "Hands-Free", "audio switcher excludes Hands-Fre
 AssertContains(audioSwitcherCs, "BluetoothSetServiceState", "audio switcher can enable AirPods A2DP")
 AssertContains(audioSwitcherCs, "BluetoothGetDeviceInfo", "audio switcher refreshes device info before enabling A2DP")
 AssertContains(audioSwitcherCs, "BluetoothServiceEnable", "audio switcher only enables Bluetooth audio sink")
-AssertNotContains(audioSwitcherCs, "BluetoothServiceDisable", "audio switcher never disconnects AirPods")
-AssertNotContains(audioSwitcherCs, "BluetoothSetServiceState A2DP Disable", "audio switcher no longer bounce-disables A2DP")
+AssertContains(audioSwitcherCs, "TryRecoverA2dpLink", "audio switcher can recover a stuck A2DP link")
+AssertContains(audioSwitcherCs, "BluetoothServiceDisable", "audio switcher uses A2DP disable only inside stuck-link recovery")
+AssertContains(audioSwitcherCs, "recover A2DP disable", "audio switcher re-negotiates A2DP disable/enable in recovery")
+AssertContains(audioSwitcherCs, "recover skip not-paired", "audio switcher never bounces A2DP for an unpaired headset")
+AssertNotContains(audioSwitcherCs, "BluetoothRemoveDevice", "audio switcher never unpairs the headset")
 AssertContains(audioSwitcherCs, "PnpFallbackEnabled = false", "audio switcher disables PNP fallback by default")
 AssertContains(audioSwitcherCs, "skip Pnp fallback", "audio switcher can skip Enable-PnpDevice")
 AssertContains(audioSwitcherCs, "PreferredHeadsetBluetoothConnected()", "audio switcher still inspects Bluetooth connected state")
 AssertContains(audioSwitcherCs, "HeadsetConnectAttempt", "audio switcher separates link success from Bluetooth connected")
 AssertContains(audioSwitcherCs, "FinishHeadsetConnect(", "audio switcher classifies headset connect failures")
-AssertContains(audioSwitcherCs, "LinkActionSucceeded", "audio switcher waits for ACTIVE only after a real link action")
-AssertContains(audioSwitcherCs, "ERROR|蓝牙已连但立体声未就绪", "audio switcher fail-fast when Bluetooth is up but stereo is not ACTIVE")
+AssertContains(audioSwitcherCs, "LinkActionSucceeded", "audio switcher waits the full budget after a real link action")
+AssertContains(audioSwitcherCs, "StuckWaitMs", "audio switcher waits before declaring stereo not ready")
+AssertContains(audioSwitcherCs, "ERROR|蓝牙已连但立体声未就绪", "audio switcher reports stereo-not-ready after wait and recovery")
 AssertContains(audioSwitcherCs, "ERROR|连接超时", "audio switcher reports wait timeout separately")
 AssertContains(audioSwitcherCs, "ERROR|耳机未取出或不在附近", "audio switcher reports remembered-but-disconnected headset")
 AssertContains(audioSwitcherCs, "ERROR|设备节点不存在", "audio switcher maps missing PnP node separately")
 AssertContains(audioSwitcherCs, "ERROR|耳机未激活", "audio switcher refuses SetDefault on non-ACTIVE endpoints")
 AssertContains(audioSwitcherCs, "--debug-dump", "audio switcher exposes read-only debug dump")
+AssertContains(audioSwitcherCs, "--recover", "audio switcher exposes manual A2DP recovery")
 AssertContains(audioSwitcherCfg, "pnp_fallback = false", "audio switcher config keeps PNP fallback off")
 AssertContains(audioSwitcherCfg, "auto_elevate = false", "audio switcher config keeps auto elevate off")
 AssertContains(audioSwitcherCfg, "connect_wait_ms = 12000", "audio switcher config wait stays 12s")
@@ -862,6 +1283,24 @@ AssertNotContains(screenshotSource, "Start-Sleep -Milliseconds 700", "screenshot
 AssertNotContains(screenshotSource, "Get-Process -Name 'SnippingTool'", "screenshot no longer probes SnippingTool before exiting")
 AssertContains(screenshotOcrSource, "ms-screenclip:", "screenshot OCR opens the overlay before starting Python")
 AssertContains(screenshotOcrSource, "--no-screenshot", "screenshot OCR tells RapidOCR not to inject Win+Shift+S again")
+; 失败透传契约：ocr.py 把 "ERROR: <原因>" 写进 result 文件（诊断证据保留）。
+AssertContains(ocrPySource, 'write_result(result_file, f"ERROR: {error_message}")', "ocr.py writes ERROR: line to result file on failure")
+; detached 契约：Raycast host 对 runScript 有 30s IPC 硬超时（@raycast.timeout 管不到），
+; 引擎冷启动可能超时 → ps1 只负责启动，绝不 WaitForExit；结果 Toast 由 ocr.py 自己弹。
+AssertNotContains(screenshotOcrSource, "WaitForExit", "screenshot OCR never blocks on the Python process (Raycast 30s IPC timeout)")
+AssertContains(screenshotOcrSource, "--notify-on-done", "screenshot OCR lets ocr.py raise the result toast itself")
+AssertContains(ocrPySource, "notify_on_done", "ocr.py supports --notify-on-done for detached mode")
+; 进程树契约：-WindowStyle 会强制 UseShellExecute=false，pythonw 继承 stdout 管道，
+; Raycast 要等整棵树结束才认为脚本完成 → 30s IPC 超时。WMI 优先，普通 Start-Process
+; 仅作兜底（实测 6-11s 退出，仍 < 30s），但绝不能带 -WindowStyle。
+AssertContains(screenshotOcrSource, "Invoke-CimMethod", "screenshot OCR spawns pythonw detached via WMI")
+AssertNotContains(screenshotOcrSource, "-WindowStyle Hidden", "screenshot OCR never spawns pythonw with inherited pipes (-WindowStyle)")
+; 剪贴板序列号守护：只识别本次框选产生的新图，不吞剪贴板里的旧截图。
+AssertContains(ocrPySource, "_clipboard_sequence", "ocr.py ignores stale clipboard images")
+; RapidOCR 回归：专用 3.14 venv 优先于全局 pythonw（onnxruntime wheel 滞后最新 Python）。
+AssertContains(screenshotOcrSource, 'ocr\.venv314\Scripts\pythonw.exe', "screenshot OCR prefers the pinned 3.14 venv for RapidOCR")
+AssertContains(screenshotOcrSource, "Get-Command pythonw.exe", "screenshot OCR still falls back to global pythonw")
+AssertContains(screenshotOcrSource, "$pythonExe", "screenshot OCR launches through the resolved python path")
 AssertContains(ocrPySource, "if inject_screenshot:", "ocr can still inject Win+Shift+S when launched directly")
 AssertEqual(true, InStr(ocrPySource, "if inject_screenshot:") < InStr(ocrPySource, "engine = load_engine()"), "ocr injects screenshot before loading RapidOCR")
 restartAhkSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\restart-autohotkey.ps1", "UTF-8")
@@ -897,7 +1336,7 @@ AssertContains(nextWallpaperSource, "Get-DesktopWallpaperPath", "next wallpaper 
 AssertContains(nextWallpaperSource, "Set-DesktopWallpaper", "next wallpaper sets the desktop image")
 AssertContains(nextWallpaperSource, "Sync-LockScreenWallpaper", "next wallpaper syncs the same image to the lock screen")
 AssertNotContains(nextWallpaperSource, "Show-SystemToast -Title 'Wallpaper and lock screen updated'", "next wallpaper success stays silent")
-AssertContains(screenshotOcrSource, "Show-SystemToast -Title '✓ OCR 文本已复制'", "screenshot OCR success uses system toast")
+AssertContains(ocrPySource, "✓ OCR 文本已复制", "ocr.py reports the copied text through the system toast")
 AssertNotContains(screenshotOcrSource, "Show-ToolboxNotify", "screenshot OCR no longer uses shared HUD")
 AssertNotContains(ocrPySource, "Show-ToolboxNotify", "ocr.py comments no longer mention shared HUD adapter")
 AssertNotContains(ocrPySource, "notify-cli.ahk", "ocr.py no longer launches notify-cli")
@@ -947,14 +1386,15 @@ AssertContains(themeUtilsSource, "function Sync-ThemeFileCursors", "cursor switc
 AssertContains(themeUtilsSource, "MSFT_TaskSessionStateChangeTrigger", "cursor restore uses a session-state scheduled task")
 AssertContains(themeUtilsSource, "SessionUnlock", "cursor restore fires on unlock")
 AssertContains(themeCursorsSource, "Set-WindowsCursorScheme -Mode $desired", "unlock restore reapplies the current cursor scheme")
-AssertContains(themeCursorsSource, "$offsets = @(0, 1, 3, 8)", "unlock restore retries after Windows 11 delayed default pointers")
+AssertContains(themeCursorsSource, "$offsets = @(0, 1.5, 4)", "unlock restore retries after Windows 11 delayed default pointers")
 AssertContains(themeInstallSource, "Theme-Apply-Cursors", "installer registers the unlock cursor task")
 AssertContains(themeUninstallSource, "Theme-Apply-Cursors", "uninstaller removes the unlock cursor task")
 AssertContains(themeUpdateSource, "Theme-Apply-Cursors", "schedule updater keeps the unlock cursor task")
 AssertContains(themeUtilsSource, "HKCU:\Control Panel\Cursors", "cursor switch writes the current-user cursor key")
 AssertContains(themeUtilsSource, "resources\cursors\", "cursor switch defaults to repo resources/cursors")
-AssertContains(themeLightSource, "Set-WindowsCursorScheme -Mode 'light'", "light theme applies the light cursor scheme")
-AssertContains(themeDarkSource, "Set-WindowsCursorScheme -Mode 'dark'", "dark theme applies the dark cursor scheme")
+AssertContains(themeLightSource, "Start-ThemeTail -Mode 'light'", "light theme dispatches the independent tail process")
+AssertContains(themeDarkSource, "Start-ThemeTail -Mode 'dark'", "dark theme dispatches the independent tail process")
+AssertContains(themeTailSource, "Set-WindowsCursorScheme -Mode $Mode", "tail applies the cursor scheme for the new mode")
 AssertContains(themeApplySource, "Set-WindowsCursorScheme -Mode `$desired", "login align still applies cursor when color is already correct")
 AssertContains(themeConfigSource, "[cursor]", "theme config exposes an independent cursor section")
 AssertContains(themeConfigSource, "切深浅色时同步换鼠标", "cursor switch is documented independently from wallpaper")
@@ -969,8 +1409,8 @@ AssertEqual(true, FileExist(A_ScriptDir "\..\..\resources\cursors\dark\arrow.cur
 AssertContains(themeConfigSource, "[keyboard_backlight]", "theme config exposes keyboard_backlight section")
 AssertContains(themeUtilsSource, "function Set-ThinkPadKeyboardBacklight", "theme utils defines keyboard backlight setter")
 AssertContains(themeUtilsSource, "function Test-ThinkPadCapability", "theme utils defines ThinkPad capability test")
-AssertContains(themeLightSource, "Set-ThinkPadKeyboardBacklight -Mode 'light'", "light theme sets light backlight")
-AssertContains(themeDarkSource, "Set-ThinkPadKeyboardBacklight -Mode 'dark'", "dark theme sets dark backlight")
+AssertContains(themeTailSource, "Set-ThinkPadKeyboardBacklight", "tail aligns the keyboard backlight")
+AssertContains(themeTailSource, "Sync-LockScreenWallpaper", "tail syncs the lock screen wallpaper")
 AssertContains(themeApplySource, "Set-ThinkPadKeyboardBacklight -Mode `$desired", "theme apply aligns backlight on logon")
 AssertContains(themeUpdateSource, "Repair-ThemeScheduledTaskWindow", "theme schedule updater keeps hidden actions")
 AssertContains(foregroundSource, "return this.Restart(_hotkeyName)", "explorer Caps+Q reuses Caps+R entry")
@@ -1002,6 +1442,10 @@ AssertNotContains(speakSource, "Shortcuts.", "speak is independent from shortcut
 AssertContains(speakSource, "Caps+S", "speak log uses Caps+S")
 AssertNotContains(speakSource, "Ctrl+Alt+S", "speak log no longer mentions Ctrl+Alt+S")
 AssertContains(speakSource, "18000", "speak headset warmup timeout exceeds C# 12s wait")
+AssertContains(speakSource, "ProcessNoWindow.StartAsync(", "speak warmup no longer blocks the hotkey thread")
+AssertNotContains(speakSource, "ProcessNoWindow.RunWait(", "speak warmup has no synchronous wait")
+AssertEqual(true, HasMethod(SpeakSelectedText, "PollWarmup"), "speak completes headset warmup through a timer poll")
+AssertNotContains(speakSource, "ShortText(raw", "speak never logs the selected text")
 AssertContains(speakSource, "lat3ncy-tts-in-", "speak uses unique TTS input files")
 AssertNotContains(speakSource, "lat3ncy-tts-input.txt", "speak no longer reuses a fixed TTS input file")
 AssertContains(speakSource, "WatchPid", "speak watches the TTS pid to delete temp input")
@@ -1016,13 +1460,18 @@ AssertContains(translateSource, 'CoordMode "Mouse", "Screen"', "translate MouseG
 AssertContains(translateSource, "TranslationPanel.OpenText(", "translate opens WinUI panel with explicit source")
 AssertContains(translateSource, "TranslationPanel.SetResult(", "translate success fills explicit RESULT")
 AssertContains(translateSource, "TranslationPanel.Close()", "translate failure closes the WinUI panel")
-AssertNotContains(translateSource, "Notify.Popup(", "translate no longer uses AHK popup HUD for success")
-AssertContains(translateSource, 'if (code = "auth"', "translate treats cloud auth as a dedicated failure")
+AssertNotContains(translateSource, "RunWait(", "translate no longer blocks the hotkey thread")
+AssertContains(translateSource, "Notify.Popup(text, 8000)", "translate uses a popup only when the panel is unavailable")
+AssertEqual(true, HasMethod(TranslateSelectedText, "Poll"), "translate completes through a timer poll")
+AssertEqual(true, HasMethod(TranslateSelectedText, "CancelCurrent"), "translate can cancel the previous request")
+AssertContains(translateSource, 'case "auth":', "translate maps cloud auth to a dedicated failure")
 AssertContains(translateSource, "翻译密钥无效", "translate auth failure has a stable toast fallback")
 AssertContains(translateSource, 'Notify.Error("×", message)', "translate failures use system toast, not HUD")
 AssertContains(translateSource, "lat3ncy-translate-in-", "translate uses unique input files")
-AssertContains(translateSource, "ProcessNoWindow.RunWait(", "translate waits without a console")
+AssertContains(translateSource, "ProcessNoWindow.StartAsync(", "translate starts the helper without a console or blocking wait")
 AssertContains(translateSource, "14000", "translate parent timeout covers tencent plus fallbacks")
+panelOpenProbe := TranslationPanel.IsOpen()
+AssertEqual(true, panelOpenProbe = 0 || panelOpenProbe = 1, "translation panel visibility probe returns 0/1")
 translatePySource := FileRead(A_ScriptDir "\\..\\..\\tools\\translate\\translate.py", "UTF-8")
 translateCfgSource := FileRead(A_ScriptDir "\\..\\..\\tools\\translate\\config.toml", "UTF-8")
 AssertContains(translatePySource, "def translate_tencent(", "translate helper implements Tencent TMT")
@@ -1030,7 +1479,7 @@ AssertContains(translatePySource, "TextTranslate", "translate uses Tencent TextT
 AssertContains(translatePySource, "TENCENTCLOUD_SECRET_ID", "translate reads Tencent env keys")
 AssertContains(translatePySource, "read_user_env", "translate can read HKCU user env without restarting AHK")
 AssertContains(translatePySource, "class AuthError", "cloud auth errors are typed")
-AssertContains(translatePySource, 'code="auth"', "cloud auth writes auth status for AHK")
+AssertContains(translatePySource, '"auth",', "cloud auth writes auth status for AHK")
 AssertContains(translatePySource, "except AuthError:", "cloud auth does not fall back to Google")
 AssertContains(translatePySource, "腾讯云密钥无效", "Tencent auth toast text is stable")
 AssertContains(translateCfgSource, 'engine = "tencent"', "translate config defaults to Tencent")
@@ -1255,6 +1704,11 @@ AssertContains(findMouseSource, "IdleResetMs", "shake-to-find drops stale travel
 AssertContains(findMouseSource, "MaxSpanPx", "shake-to-find caps the arena of one streak")
 AssertContains(findMouseSource, "GetAsyncKeyState", "shake-to-find suppresses detection while a mouse button is held")
 AssertContains(findMouseSource, "static IsMouseButtonDown", "shake-to-find checks button state outside the sample loop")
+AssertContains(findMouseSource, "MinStreakSpeedPxPerMs", "shake-to-find rejects slow aim corrections over the whole gesture")
+AssertContains(findMouseSource, "MinSpanPx", "shake-to-find rejects small-amplitude jitter")
+AssertContains(findMouseSource, "MaxStreakMs", "shake-to-find bounds the whole gesture duration")
+AssertContains(findMouseSource, "WriteTriggerTrace", "shake-to-find records each trigger geometry")
+AssertContains(findMouseSource, "LastButtonUpTick", "shake-to-find notes when the last click ended")
 AssertContains(findMouseSource, "ApplySocketTimeout", "shake-to-find bounds helper socket waits")
 AssertContains(findMouseSource, "ReapOrphanSizer", "shake-to-find reclaims an orphaned helper")
 AssertContains(findMouseSource, "GetCurrentProcessId", "shake-to-find hands its pid to the helper")
@@ -1267,13 +1721,16 @@ AssertContains(cursorSizeSource, "SPI_SETCURSORS", "cursor helper reloads the sc
 AssertContains(cursorSizeSource, "ReceiveTimeout", "cursor helper survives a dead client")
 AssertContains(cursorSizeSource, "OpenMutex", "cursor helper watches the parent mutex")
 AssertEqual(3, FindMouse.ReverseCount, "shake-to-find needs three reversals")
-AssertEqual(30, FindMouse.MinDistance, "shake-to-find needs a real leg length")
+AssertEqual(40, FindMouse.MinDistance, "shake-to-find needs a real leg length")
 AssertEqual(320, FindMouse.LegMaxMs, "shake-to-find requires a fast leg")
 AssertEqual(500, FindMouse.IdleResetMs, "shake-to-find treats a pause as the end of a gesture")
 AssertEqual(400, FindMouse.MaxIntervalMs, "shake-to-find allows a natural shake cadence")
 AssertEqual(600, FindMouse.MaxSpanPx, "shake-to-find rejects cross-screen travel")
+AssertEqual(100, FindMouse.MinSpanPx, "shake-to-find requires a real shake amplitude")
 AssertEqual(8, FindMouse.AxisMinPx, "shake-to-find classifies the axis from the whole leg")
 AssertEqual(0.75, FindMouse.MaxNetRatio, "shake-to-find tolerates drifting toward the target")
+AssertEqual(0.5, FindMouse.MinStreakSpeedPxPerMs, "shake-to-find requires the whole gesture to be fast")
+AssertEqual(1000, FindMouse.MaxStreakMs, "shake-to-find must finish the shake quickly")
 AssertEqual(false, FindMouse.Hook != 0, "test mode does not install the mouse hook")
 savedFindMouse := {
     enabled: FindMouse.Enabled,
@@ -1305,24 +1762,24 @@ try {
     ; 真摇动：带垂直漂移的水平甩动，两个来回必须触发。
     FindMouse.ResetMotion()
     AssertEqual(false, FindMouse.Observe(0, 0, 1000), "shake starts a fresh sample")
-    AssertEqual(false, FindMouse.Observe(40, 5, 1040), "first leg opens with a diagonal drift")
+    AssertEqual(false, FindMouse.Observe(110, 5, 1040), "first leg opens with a diagonal drift")
     AssertEqual(false, FindMouse.Observe(0, 9, 1080), "the first reversal counts")
-    AssertEqual(false, FindMouse.Observe(40, 13, 1120), "the second leg opens")
+    AssertEqual(false, FindMouse.Observe(110, 13, 1120), "the second leg opens")
     AssertEqual(false, FindMouse.Observe(0, 17, 1160), "the second reversal counts")
     AssertEqual(2, FindMouse.ReverseStreak, "two reversals are still below the threshold")
-    AssertEqual(false, FindMouse.Observe(40, 21, 1200), "the third leg opens")
+    AssertEqual(false, FindMouse.Observe(110, 21, 1200), "the third leg opens")
     AssertEqual(true, FindMouse.Observe(0, 25, 1240), "a deliberate two-cycle shake enlarges the pointer")
     AssertEqual(0, FindMouse.ReverseStreak, "the trigger resets the streak for the next gesture")
 
     ; 随意一晃：先移到 400px 外，再在旁边抖两下。净位移远大于总行程，不能触发。
     FindMouse.ResetMotion()
     AssertEqual(false, FindMouse.Observe(0, 0, 2000), "travel sample starts clean")
-    AssertEqual(false, FindMouse.Observe(400, 0, 2040), "a cross-window move opens a long leg")
-    AssertEqual(false, FindMouse.Observe(370, 0, 2080), "the first correction counts")
-    AssertEqual(false, FindMouse.Observe(400, 0, 2120), "the second correction leg opens")
-    AssertEqual(false, FindMouse.Observe(370, 0, 2160), "the second correction counts")
-    AssertEqual(false, FindMouse.Observe(400, 0, 2200), "the third correction leg opens")
-    AssertEqual(false, FindMouse.Observe(370, 0, 2240), "a move plus jitter must not enlarge")
+    AssertEqual(false, FindMouse.Observe(300, 0, 2040), "a cross-window move opens a long leg")
+    AssertEqual(false, FindMouse.Observe(276, 0, 2080), "the first correction counts")
+    AssertEqual(false, FindMouse.Observe(380, 0, 2120), "the second correction leg opens")
+    AssertEqual(false, FindMouse.Observe(356, 0, 2160), "the second correction counts")
+    AssertEqual(false, FindMouse.Observe(460, 0, 2200), "the third correction leg opens")
+    AssertEqual(false, FindMouse.Observe(436, 0, 2240), "a move plus jitter must not enlarge")
     AssertEqual(0, FindMouse.ReverseStreak, "the net-displacement guard clears the streak")
 
     ; 慢速来回是日常瞄准修正，不是甩动。
@@ -1357,26 +1814,38 @@ try {
     ; 竖直甩动同样有效：轴不是写死的。
     FindMouse.ResetMotion()
     AssertEqual(false, FindMouse.Observe(0, 0, 7000), "vertical sample starts clean")
-    AssertEqual(false, FindMouse.Observe(3, 40, 7040), "vertical leg opens")
-    AssertEqual(false, FindMouse.Observe(6, -5, 7080), "vertical reversal one")
-    AssertEqual(false, FindMouse.Observe(9, 38, 7120), "vertical leg two opens")
-    AssertEqual(false, FindMouse.Observe(12, -6, 7160), "vertical reversal two")
-    AssertEqual(false, FindMouse.Observe(15, 38, 7200), "vertical leg three opens")
-    AssertEqual(true, FindMouse.Observe(18, -6, 7240), "a vertical shake also triggers")
+    AssertEqual(false, FindMouse.Observe(6, 120, 7040), "vertical leg opens")
+    AssertEqual(false, FindMouse.Observe(12, -6, 7080), "vertical reversal one")
+    AssertEqual(false, FindMouse.Observe(18, 120, 7120), "vertical leg two opens")
+    AssertEqual(false, FindMouse.Observe(24, -6, 7160), "vertical reversal two")
+    AssertEqual(false, FindMouse.Observe(30, 120, 7200), "vertical leg three opens")
+    AssertEqual(true, FindMouse.Observe(36, -6, 7240), "a vertical shake also triggers")
 
     ; 直线快摇：峰值在两次采样之间被跳过，回程首点已离峰值 20px，
     ; 60px 腿的回摆按峰值算只剩 60+20，按 0.6 折算 30px 门槛仍可满足。
     ; 峰值补偿缺失时（按足额 30px 判），这里只回摆 30px 起步会被吞掉一次反向。
     FindMouse.ResetMotion()
     AssertEqual(false, FindMouse.Observe(0, 0, 8000), "fast straight sample starts clean")
-    AssertEqual(false, FindMouse.Observe(60, 0, 8032), "a fast leg opens without the far peak being sampled")
+    AssertEqual(false, FindMouse.Observe(110, 0, 8032), "a fast leg opens without the far peak being sampled")
     AssertEqual(false, FindMouse.Observe(10, 2, 8064), "the return leg counts despite the skipped peak")
     AssertEqual(1, FindMouse.ReverseStreak, "peak overshoot does not swallow the first reversal")
-    AssertEqual(false, FindMouse.Observe(70, 0, 8096), "the second leg opens")
+    AssertEqual(false, FindMouse.Observe(120, 0, 8096), "the second leg opens")
     AssertEqual(false, FindMouse.Observe(20, 2, 8128), "the second reversal counts")
     AssertEqual(2, FindMouse.ReverseStreak, "two reversals survive fast straight shaking")
-    AssertEqual(false, FindMouse.Observe(80, 0, 8160), "the third leg opens")
+    AssertEqual(false, FindMouse.Observe(130, 0, 8160), "the third leg opens")
     AssertEqual(true, FindMouse.Observe(30, 2, 8192), "a fast straight shake triggers")
+
+    ; 小幅度快速抖动（手抖/触摸板漂移/犹豫微调）：三次反向都能凑够，
+    ; 但峰峰值只有 40px，必须被幅度下限拦下——这是"正常使用中变大"的回归用例。
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 13000), "small jitter sample starts clean")
+    AssertEqual(false, FindMouse.Observe(40, 0, 13032), "a small fast leg opens")
+    AssertEqual(false, FindMouse.Observe(0, 0, 13064), "small jitter reversal one counts")
+    AssertEqual(false, FindMouse.Observe(40, 0, 13096), "small jitter leg two opens")
+    AssertEqual(false, FindMouse.Observe(0, 0, 13128), "small jitter reversal two counts")
+    AssertEqual(false, FindMouse.Observe(40, 0, 13160), "small jitter leg three opens")
+    AssertEqual(false, FindMouse.Observe(0, 0, 13192), "small fast jitter must not enlarge")
+    AssertEqual(0, FindMouse.ReverseStreak, "the amplitude floor clears the small jitter streak")
 
     ; 摇动前正常移动过 550px，不该把包围盒预算吃光。旧实现里边界从上次采样
     ; 起算，0..620 直接超窗清空连击；现在只量本次摇动的 400..620。
@@ -1392,6 +1861,38 @@ try {
     AssertEqual(false, FindMouse.Observe(560, 0, 9320), "the swing keeps going right")
     AssertEqual(false, FindMouse.Observe(620, 0, 9360), "the shake reaches its right end")
     AssertEqual(true, FindMouse.Observe(590, 0, 9400), "a shake after ordinary travel still enlarges")
+
+    ; 同样的 40px 幅度，慢慢来回（窗口均速 200 px/s < 500 px/s）：每次反向
+    ; 都能攒上（折返减速不再连坐），但整窗速度闸门在触发评估时拦下。
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 11000), "hesitant sample starts clean")
+    AssertEqual(false, FindMouse.Observe(40, 0, 11100), "a hesitant forward leg opens")
+    AssertEqual(false, FindMouse.Observe(0, 0, 11250), "a slow reversal still counts")
+    AssertEqual(1, FindMouse.ReverseStreak, "the window gate has not fired yet")
+    AssertEqual(false, FindMouse.Observe(40, 0, 11400), "the hesitant leg two opens")
+    AssertEqual(false, FindMouse.Observe(0, 0, 11550), "the hesitant reversal two counts")
+    AssertEqual(2, FindMouse.ReverseStreak, "two slow reversals build a streak")
+    AssertEqual(false, FindMouse.Observe(40, 0, 11700), "the hesitant leg three opens")
+    AssertEqual(false, FindMouse.Observe(0, 0, 11850), "a slow gesture must not enlarge")
+    AssertEqual(0, FindMouse.ReverseStreak, "the window speed gate clears the slow streak")
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 12000), "fast small shake starts clean")
+    AssertEqual(false, FindMouse.Observe(40, 0, 12040), "a fast forward leg opens")
+    AssertEqual(false, FindMouse.Observe(0, 0, 12080), "a fast return counts as a reversal")
+    AssertEqual(1, FindMouse.ReverseStreak, "a fast 40px leg still counts")
+
+    ; 真摇动里折返点必然减速：一条慢折返腿（150px 走了 320ms）不能把整个
+    ; 连击清零——速度判据必须按整个手势窗口算，不按单腿算。
+    FindMouse.ResetMotion()
+    AssertEqual(false, FindMouse.Observe(0, 0, 14000), "turn-decel sample starts clean")
+    AssertEqual(false, FindMouse.Observe(150, 0, 14040), "a fast outbound leg opens")
+    AssertEqual(false, FindMouse.Observe(0, 0, 14360), "a slow turn-around leg completes")
+    AssertEqual(1, FindMouse.ReverseStreak, "a slow turn-around leg still counts as a reversal")
+    AssertEqual(false, FindMouse.Observe(150, 0, 14400), "the swing back is fast")
+    AssertEqual(false, FindMouse.Observe(0, 0, 14440), "the second reversal counts")
+    AssertEqual(2, FindMouse.ReverseStreak, "the streak survives a decelerated turn")
+    AssertEqual(false, FindMouse.Observe(60, 0, 14480), "the third leg opens")
+    AssertEqual(true, FindMouse.Observe(0, 0, 14520), "a shake with one slow turn still triggers")
 } finally {
     FindMouse.Enabled := savedFindMouse.enabled
     FindMouse.HasAnchor := savedFindMouse.hasAnchor
@@ -1446,7 +1947,7 @@ AssertContains(smartPasteSource, "finally", "VS Code probe restores clipboard in
 AssertContains(smartPasteSource, 'Send "^v"', "smart paste keeps ordinary paste fallback")
 AssertContains(smartPasteSource, 'ObjBindMethod(SmartPaste, "Paste")', "smart paste binds hotkey callback")
 AssertContains(smartPasteSource, "#Include ..\..\..\shared\notify\run-nowindow.ahk", "smart paste loads no-window helper")
-AssertContains(smartPasteSource, "ProcessNoWindow.RunWait(command)", "smart paste waits without allocating a console")
+AssertContains(smartPasteSource, 'RunWait(command, "", this.HelperTimeoutMs)', "smart paste runs the helper with a hard timeout instead of INFINITE")
 AssertNotContains(smartPasteSource, 'RunWait(command, , "Hide")', "smart paste no longer uses RunWait Hide")
 AssertContains(smartPasteSource, 'Notify.State("✓"', "smart paste uses lightweight state notification")
 startupConfigurePosition := InStr(routerSource, "SmartPaste.Configure(")
@@ -1465,6 +1966,8 @@ AssertContains(smartPasteHelperSource, "GetDataPresent('PNG')", "image helper de
 AssertContains(smartPasteHelperSource, "GetData('PNG')", "image helper reads registered PNG data")
 AssertContains(smartPasteHelperSource, '[Drawing.Image]::FromStream', "image helper decodes registered PNG stream")
 AssertNotContains(smartPasteHelperSource, 'Remove-Item -LiteralPath $outputPath', "image helper never removes published output")
+
+#Include review-regressions.ahk
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

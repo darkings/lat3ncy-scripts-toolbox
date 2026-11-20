@@ -1,4 +1,11 @@
+﻿param(
+  # Build tools/ime-hud-winui from source into test-out and then run the full suite.
+  # Without this switch the suite refuses a missing/stale test-out build.
+  [switch]$BuildImeHud
+)
+
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '..\..\tools\ime-hud-winui\BuildSupport.ps1')
 
 # Task 1 test entry point. Each invocation owns a unique result file and waits for
 # the real AHK v2 engine so concurrent runs and parse failures cannot reuse PASS.
@@ -9,6 +16,83 @@ $vsCodeTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
   'lat3ncy-copy-path-folder-{0}' -f [guid]::NewGuid().ToString('N')
 )
 $testScript = Join-Path $PSScriptRoot 'run-tests.ahk'
+
+function Invoke-CheckedProcess
+{
+  param(
+    [Parameter(Mandatory = $true)]
+    [string] $FilePath,
+    [string[]] $Arguments = @(),
+    [Parameter(Mandatory = $true)]
+    [string] $Label,
+    [int] $TimeoutSeconds = 180
+  )
+
+  $argumentLine = (@($Arguments) | ForEach-Object {
+      if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+    }) -join ' '
+
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $FilePath
+  $startInfo.Arguments = $argumentLine
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $process = [System.Diagnostics.Process]::Start($startInfo)
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+  $stderrTask = $process.StandardError.ReadToEndAsync()
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000))
+  {
+    try { $process.Kill() } catch {}
+    throw "$Label timed out after $TimeoutSeconds seconds"
+  }
+  $stdout = $stdoutTask.Result
+  $stderr = $stderrTask.Result
+  if ($stdout) { [Console]::Out.Write($stdout) }
+  if ($stderr) { [Console]::Error.Write($stderr) }
+  if ($process.ExitCode -ne 0)
+  {
+    throw "$Label failed with exit code $($process.ExitCode)"
+  }
+  [Console]::Out.WriteLine("PASS: $Label")
+}
+
+function Assert-ImeHudBuildFresh
+{
+  param(
+    [Parameter(Mandatory = $true)]
+    [string] $ProjectDir,
+    [Parameter(Mandatory = $true)]
+    [string] $OutDir,
+    [switch] $Build
+  )
+
+  if ($Build)
+  {
+    Invoke-ImeHudBuild -ProjectDir $ProjectDir -OutDir $OutDir
+    return
+  }
+
+  $exe = Join-Path $OutDir 'ImeHudWinUi.exe'
+  if (-not (Test-Path -LiteralPath $exe -PathType Leaf))
+  {
+    throw "ImeHudWinUi.exe is missing under $OutDir; run 'ahk\tests\run-tests.ps1 -BuildImeHud'"
+  }
+  $stampPath = Join-Path $OutDir '.source-stamp'
+  if (-not (Test-Path -LiteralPath $stampPath -PathType Leaf))
+  {
+    throw "ImeHudWinUi build stamp is missing under $OutDir; run 'ahk\tests\run-tests.ps1 -BuildImeHud'"
+  }
+  $expected = Get-ImeHudSourceHash -ProjectDir $ProjectDir
+  $actual = (Get-Content -Raw -LiteralPath $stampPath).Trim()
+  if ($actual -ne $expected)
+  {
+    throw "ImeHudWinUi test-out was built from different sources (stamp mismatch); rerun with -BuildImeHud"
+  }
+  [Console]::Out.WriteLine('PASS: ImeHudWinUi test build matches current sources')
+}
+
 
 function Resolve-AutoHotkeyV2Executable
 {
@@ -170,6 +254,7 @@ try
     (Join-Path $notifyRoot 'run-nowindow.ahk'),
     (Join-Path $notifyRoot 'ime-hud.ahk'),
     (Join-Path $notifyRoot 'translation-panel.ahk'),
+    (Join-Path $notifyRoot 'toolbox-instance.ahk'),
     (Join-Path (Split-Path $notifyRoot -Parent) 'python.ahk')
   )
   foreach ($featurePath in $independentFeatures)
@@ -181,42 +266,74 @@ try
   $rgbRoot = Join-Path (Join-Path $repoRoot 'tools') 'rgb'
   $themeRoot = Join-Path (Join-Path $repoRoot 'tools') 'theme-scheduler'
   $startupRoot = Join-Path (Join-Path $repoRoot 'tools') 'startup'
-  # 只做 AST 解析，绝不执行 install.ps1 / Install-*：那些脚本会改服务、计划任务和硬件。
-  $powerShellScripts = @(
-    (Join-Path (Join-Path $featureRoot 'smart-paste') 'save-clipboard-image.ps1'),
-    (Join-Path (Join-Path $raycastRoot '_lib') 'notify.ps1'),
-    (Join-Path $raycastRoot 'screenshot.ps1'),
-    (Join-Path $raycastRoot 'screenshot-ocr.ps1'),
-    (Join-Path $raycastRoot 'record-screen.ps1'),
-    (Join-Path (Join-Path $raycastRoot 'capture') 'watch-save.ps1'),
-    (Join-Path $raycastRoot 'restart-autohotkey.ps1'),
-    (Join-Path $raycastRoot 'reload-ime-hud.ps1'),
-    (Join-Path $raycastRoot 'diagnose-ime-hud-anchor.ps1'),
-    (Join-Path $raycastRoot 'toggle-rgb.ps1'),
-    (Join-Path $raycastRoot 'next-wallpaper.ps1'),
-    (Join-Path $raycastRoot 'force-dark-titlebar.ps1'),
-    (Join-Path $notifyRoot 'build-anchor-locator.ps1'),
-    (Join-Path $notifyRoot 'caret-uia.ps1'),
-    (Join-Path (Join-Path $featureRoot 'find-mouse') 'build-cursor-size.ps1'),
-    (Join-Path $themeRoot 'ThemeUtils.ps1'),
-    (Join-Path $themeRoot 'Update-ThemeSchedule.ps1'),
-    (Join-Path $themeRoot 'Install-ThemeScheduler.ps1'),
-    (Join-Path $themeRoot 'Uninstall-ThemeScheduler.ps1'),
-    (Join-Path $themeRoot 'Set-Theme-Light.ps1'),
-    (Join-Path $themeRoot 'Set-Theme-Dark.ps1'),
-    (Join-Path $themeRoot 'Apply-ThemeNow.ps1'),
-    (Join-Path $themeRoot 'Apply-CursorsNow.ps1'),
-    (Join-Path $themeRoot 'Set-LockScreenFromWallpaper.ps1'),
-    (Join-Path $startupRoot 'Start-Toolbox.ps1'),
-    (Join-Path $rgbRoot 'install.ps1'),
-    (Join-Path $rgbRoot 'Start-OpenRGB.ps1'),
-    (Join-Path $rgbRoot 'Stop-OpenRGB.ps1'),
-    (Join-Path $rgbRoot 'Start-Ambient.ps1'),
-    (Join-Path $rgbRoot 'Stop-Ambient.ps1'),
-    (Join-Path $rgbRoot 'Install-Ambient.ps1'),
-    (Join-Path $rgbRoot 'build_hi75.ps1')
+
+  # Cross-language check: AHK and PowerShell must produce the same per-repo
+  # instance marker name, otherwise the watchdog can never see a live toolbox.
+  . (Join-Path $startupRoot 'ToolboxProcess.ps1')
+  $mainScriptForMarker = Join-Path $repoRoot 'ahk\main.ahk'
+  $expectedMarkerName = Get-ToolboxInstanceName -MainScript $mainScriptForMarker
+  $markerStubPath = Join-Path ([System.IO.Path]::GetTempPath()) (
+    'lat3ncy-toolbox-marker-{0}.ahk' -f [guid]::NewGuid().ToString('N')
   )
+  $markerNameFile = Join-Path ([System.IO.Path]::GetTempPath()) (
+    'lat3ncy-toolbox-marker-{0}.txt' -f [guid]::NewGuid().ToString('N')
+  )
+  try
+  {
+    $markerStub = @"
+#Requires AutoHotkey v2.0
+#SingleInstance Off
+#NoTrayIcon
+OnError (*) => ExitApp(1)
+#Include "$repoRoot\shared\notify\toolbox-instance.ahk"
+FileAppend ToolboxInstance.MutexName("$repoRoot"), "$markerNameFile", "UTF-8"
+ExitApp 0
+"@
+    $markerEncoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($markerStubPath, $markerStub, $markerEncoding)
+
+    $markerInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $markerInfo.FileName = $autoHotkey
+    $markerInfo.Arguments = '/ErrorStdOut=UTF-8 "{0}"' -f $markerStubPath
+    $markerInfo.UseShellExecute = $false
+    $markerInfo.CreateNoWindow = $true
+    $markerInfo.RedirectStandardOutput = $true
+    $markerInfo.RedirectStandardError = $true
+    $markerProcess = [System.Diagnostics.Process]::Start($markerInfo)
+    $markerOutTask = $markerProcess.StandardOutput.ReadToEndAsync()
+    $markerErrTask = $markerProcess.StandardError.ReadToEndAsync()
+    if (-not $markerProcess.WaitForExit(15000))
+    {
+      try { $markerProcess.Kill() } catch {}
+      throw 'toolbox instance marker AHK check timed out'
+    }
+    $markerEngineOutput = $markerOutTask.Result + "`n" + $markerErrTask.Result
+    if ($markerProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $markerNameFile -PathType Leaf))
+    {
+      throw ("toolbox instance marker AHK check failed: " + $markerEngineOutput.Trim())
+    }
+    $actualMarkerName = (Get-Content -Raw -LiteralPath $markerNameFile).Trim()
+    if ($actualMarkerName -ne $expectedMarkerName)
+    {
+      throw ("toolbox instance marker mismatch: AHK='{0}' PowerShell='{1}'" -f $actualMarkerName, $expectedMarkerName)
+    }
+    [Console]::Out.WriteLine('PASS: toolbox instance marker name matches PowerShell')
+  }
+  finally
+  {
+    Remove-Item -LiteralPath $markerStubPath -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $markerNameFile -ErrorAction SilentlyContinue
+  }
+
+  # 只做 AST 解析，绝不执行 install.ps1 / Install-*：那些脚本会改服务、计划任务和硬件。
   $legacyImeHudDir = Join-Path (Join-Path $repoRoot 'tools') 'ime-hud'
+  # Include newly added modules/tests automatically; do not let a hand-written
+  # list silently exclude PowerPolicy or future helpers from AST/BOM checks.
+  $powerShellScripts = @(Get-ChildItem -LiteralPath @(
+      (Join-Path $repoRoot 'ahk'), (Join-Path $repoRoot 'shared'), (Join-Path $repoRoot 'tools')
+    ) -Filter '*.ps1' -Recurse -File | Where-Object {
+      $_.FullName -notmatch '\\(bin|obj|out|test-out|dist|\.venv[^\\]*|__pycache__)\\'
+    } | Select-Object -ExpandProperty FullName | Sort-Object -Unique)
   if (Test-Path -LiteralPath $legacyImeHudDir)
   {
     throw "legacy tools/ime-hud still exists; only tools/ime-hud-winui is allowed"
@@ -239,11 +356,10 @@ try
     throw "legacy tools/raycast-scripts/codex-switch.ps1 still exists; use the codex-switch-raycast extension instead"
   }
 
-  $imeHudWinUiExe = Join-Path (Join-Path (Join-Path (Join-Path $repoRoot 'tools') 'ime-hud-winui') 'out') 'ImeHudWinUi.exe'
-  if (-not (Test-Path -LiteralPath $imeHudWinUiExe -PathType Leaf))
-  {
-    throw "ImeHudWinUi.exe is missing; publish tools/ime-hud-winui before running tests"
-  }
+  $imeHudProjectDir = Join-Path (Join-Path $repoRoot 'tools') 'ime-hud-winui'
+  $imeHudOutDir = Join-Path $imeHudProjectDir 'test-out'
+  Assert-ImeHudBuildFresh -ProjectDir $imeHudProjectDir -OutDir $imeHudOutDir -Build:$BuildImeHud
+  $imeHudWinUiExe = Join-Path $imeHudOutDir 'ImeHudWinUi.exe'
   # WinUI 是 WinExe，直接 & 调用时 5.1 经常不填 $LASTEXITCODE。
   # 用 Process 读 ExitCode，避免把 0 误判成失败。
   $selfTestInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -268,6 +384,9 @@ try
     throw ("ImeHudWinUi --self-test failed with exit code {0}" -f $selfTestProcess.ExitCode)
   }
   [Console]::Out.WriteLine('PASS: ImeHudWinUi --self-test')
+  Invoke-CheckedProcess -FilePath (Join-Path $notifyRoot 'anchor-locator.exe') -Arguments @(
+    '--self-test'
+  ) -Label 'anchor-locator geometry and protocol self-test'
 
   foreach ($scriptPath in $powerShellScripts)
   {
@@ -282,6 +401,95 @@ try
       throw ('PowerShell AST parse failed for {0}: {1}' -f $scriptPath, ($parseErrors.Message -join '; '))
     }
     [Console]::Out.WriteLine('PASS: PowerShell AST parse {0}' -f [System.IO.Path]::GetFileName($scriptPath))
+  }
+
+  # ---- 编码约定（README「已知坑」）----
+  # 非 ASCII 的 .ps1 必须带 UTF-8 BOM：Windows PowerShell 5.1 按 ANSI 解析无 BOM 文件，
+  # 中文会变成乱码甚至语法错误（2026-11 连续踩了两次）。以前只写在文档里，没人校验。
+  $encodingTargets = @($powerShellScripts) + @($PSCommandPath)
+  foreach ($scriptPath in $encodingTargets)
+  {
+    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { continue }
+    $bytes = [IO.File]::ReadAllBytes($scriptPath)
+    $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+    $hasNonAscii = $false
+    foreach ($b in $bytes) { if ($b -ge 0x80) { $hasNonAscii = $true; break } }
+    if ($hasNonAscii -and -not $hasBom)
+    {
+      throw ('{0} has non-ASCII bytes but no UTF-8 BOM; PowerShell 5.1 reads BOM-less files as ANSI' -f $scriptPath)
+    }
+    [Console]::Out.WriteLine('PASS: UTF-8 BOM {0}' -f [System.IO.Path]::GetFileName($scriptPath))
+  }
+
+  # run-tests.ps1 自身必须保持 CRLF（README 约定）。
+  $selfBytes = [IO.File]::ReadAllBytes($PSCommandPath)
+  $bareLf = 0
+  for ($i = 0; $i -lt $selfBytes.Length; $i++)
+  {
+    if ($selfBytes[$i] -eq 0x0A -and ($i -eq 0 -or $selfBytes[$i - 1] -ne 0x0D)) { $bareLf++ }
+  }
+  if ($bareLf -gt 0) { throw ('run-tests.ps1 has {0} bare LF line endings; it must stay CRLF' -f $bareLf) }
+  [Console]::Out.WriteLine('PASS: run-tests.ps1 keeps CRLF line endings')
+  # Python helper self-tests + behavior tests belong to the same check entry.
+  $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
+  if (-not $pythonCommand)
+  {
+    throw 'python.exe not found; Python 3.11+ is required for translate/tts tests'
+  }
+  $translateRoot = Join-Path (Join-Path $repoRoot 'tools') 'translate'
+  $ttsRoot = Join-Path (Join-Path $repoRoot 'tools') 'tts'
+  $translatePy = Join-Path $translateRoot 'translate.py'
+  $ttsPy = Join-Path $ttsRoot 'tts_player.py'
+  Invoke-CheckedProcess -FilePath $pythonCommand.Source -Arguments @(
+    '-m', 'py_compile', $translatePy, $ttsPy
+  ) -Label 'Python compile translate/tts'
+  Invoke-CheckedProcess -FilePath $pythonCommand.Source -Arguments @(
+    $translatePy, '--self-test'
+  ) -Label 'translate self-test'
+  Invoke-CheckedProcess -FilePath $pythonCommand.Source -Arguments @(
+    $ttsPy, '--self-test'
+  ) -Label 'tts self-test'
+  Invoke-CheckedProcess -FilePath $pythonCommand.Source -Arguments @(
+    '-m', 'unittest', 'discover', '-s', $translateRoot, '-p', 'test_*.py', '-v'
+  ) -Label 'translate behavior tests'
+  Invoke-CheckedProcess -FilePath $pythonCommand.Source -Arguments @(
+    '-m', 'unittest', 'discover', '-s', $ttsRoot, '-p', 'test_*.py', '-v'
+  ) -Label 'tts behavior tests'
+
+  # Isolated behavior tests for the watchdog matcher (no real task, no CIM query).
+  $startupTests = Join-Path (Join-Path $startupRoot 'tests') 'ToolboxProcess.Tests.ps1'
+  Invoke-CheckedProcess -FilePath 'powershell.exe' -Arguments @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $startupTests, '-AutoHotkeyPath', $autoHotkey
+  ) -Label 'startup process isolation tests'
+  Invoke-CheckedProcess -FilePath 'powershell.exe' -Arguments @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    (Join-Path $startupRoot 'tests\PowerPolicyHeartbeat.Tests.ps1')
+  ) -Label 'PowerPolicy heartbeat identity tests'
+  Invoke-CheckedProcess -FilePath 'powershell.exe' -Arguments @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    (Join-Path $startupRoot 'tests\Deployment.Tests.ps1')
+  ) -Label 'release transaction rollback tests'
+  Invoke-CheckedProcess -FilePath 'powershell.exe' -Arguments @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    (Join-Path $startupRoot 'tests\DeploymentLease.Tests.ps1')
+  ) -Label 'deployment lease isolation tests'
+  Invoke-CheckedProcess -FilePath 'powershell.exe' -Arguments @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    (Join-Path $repoRoot 'tools\build\tests\ManagedBuild.Tests.ps1')
+  ) -Label 'managed build provenance tests'
+
+  Invoke-CheckedProcess -FilePath 'powershell.exe' -Arguments @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    (Join-Path $repoRoot 'tools\power-policy\tests\Recovery.Tests.ps1')
+  ) -Label 'offline power recovery tests'
+  foreach ($module in @(
+    @{ Dir = (Join-Path $raycastRoot 'ocr'); Pattern = 'test_ocr.py'; Label = 'OCR offline behavior tests' },
+    @{ Dir = $rgbRoot; Pattern = 'test_protocols.py'; Label = 'RGB offline protocol tests' }
+    @{ Dir = (Join-Path $repoRoot 'tools\validation'); Pattern = 'test_*.py'; Label = 'clean snapshot isolation tests' }
+  )) {
+    Invoke-CheckedProcess -FilePath $pythonCommand.Source -Arguments @(
+      '-m', 'unittest', 'discover', '-s', $module.Dir, '-p', $module.Pattern, '-v'
+    ) -Label $module.Label
   }
 
   $startInfo = [System.Diagnostics.ProcessStartInfo]::new()

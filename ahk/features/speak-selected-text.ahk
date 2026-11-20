@@ -5,6 +5,13 @@ class SpeakSelectedText {
     static TtsPid := 0
     static LastInputFile := ""
     static WatchBound := ""
+    ; 与 C# connect_wait_ms(12s) + 蓝牙枚举余量对齐；异步等待，不堵 AHK。
+    static HeadsetTimeoutMs := 18000
+    static PollIntervalMs := 100
+    static WarmupJob := ""
+    static WarmupTimer := ""
+    static PendingText := ""
+    static Generation := 0
 
     static LogPath() {
         SplitPath A_LineFile, , &featuresDir
@@ -13,6 +20,7 @@ class SpeakSelectedText {
         return repoDir "\tools\tts\tts.log"
     }
 
+    ; 默认只记长度/状态/PID；不要把原文或片段写进日志。
     static Log(msg) {
         try {
             timeStr := FormatTime(, "yyyy-MM-dd HH:mm:ss")
@@ -28,7 +36,13 @@ class SpeakSelectedText {
         return RegExMatch(value, "[\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{F900}-\x{FAFF}A-Za-z]") > 0
     }
 
-    static ResolvePython() {
+    static ResolvePython(scriptPath := "") {
+        if (scriptPath = "")
+            scriptPath := this.ResolveScript()
+        SplitPath scriptPath, , &scriptDir
+        candidate := scriptDir "\.venv\Scripts\pythonw.exe"
+        if FileExist(candidate)
+            return candidate
         return ToolboxPython.ResolveW()
     }
 
@@ -61,7 +75,23 @@ class SpeakSelectedText {
         this.ClearPidWatch()
     }
 
+    static StopWarmup() {
+        if (this.WarmupTimer != "") {
+            try SetTimer(this.WarmupTimer, 0)
+            this.WarmupTimer := ""
+        }
+        if IsObject(this.WarmupJob) {
+            try this.WarmupJob.job.Dispose()
+            if (this.WarmupJob.outputFile != "")
+                try FileDelete this.WarmupJob.outputFile
+            this.WarmupJob := ""
+        }
+        this.PendingText := ""
+    }
+
     static StopCurrent() {
+        this.Generation += 1
+        this.StopWarmup()
         DllCall("winmm\mciSendStringW", "Str", "close all", "Ptr", 0, "UInt", 0, "Ptr", 0)
         DllCall("winmm\PlaySoundW", "Ptr", 0, "Ptr", 0, "UInt", 0)
         this.ClearPidWatch()
@@ -101,38 +131,113 @@ class SpeakSelectedText {
         return false
     }
 
-    static EnsureHeadset() {
+    ; 异步预热耳机：先让 Caps+S 线程返回，连上（或失败/超时）后再启动 TTS。
+    static StartHeadsetWarmup(raw) {
+        gen := this.Generation
+        this.PendingText := raw
         exe := this.AudioSwitcherExe()
         if !FileExist(exe) {
             this.Log("预热跳过：audio-switcher.exe 未找到")
+            this.LaunchTts(raw, gen)
             return
         }
-        temp := A_Temp "\lat3ncy-audio-ensure-" A_TickCount "-" Random(1000, 9999) ".txt"
-        try FileDelete A_Temp "\lat3ncy-audio-ensure.txt"
+        outputFile := A_Temp "\lat3ncy-audio-ensure-" A_TickCount "-" Random(1000, 9999) ".txt"
+        try FileDelete outputFile
+        command := '"' exe '" --ensure-headset'
         try {
-            try FileDelete temp
             try {
-                ; 预热失败不阻塞朗读；超时略大于 C# 12s 等待，避免父进程先杀子进程。
-                ProcessNoWindow.RunWait('"' exe '" --ensure-headset', temp, 18000)
+                job := ProcessNoWindow.StartAsync(command, outputFile, this.HeadsetTimeoutMs)
             } catch as runErr {
-                if InStr(runErr.Message, "无法创建输出文件") {
-                    this.Log("预热耳机输出文件失败，fallback 直接执行: " runErr.Message)
-                    ProcessNoWindow.RunWait('"' exe '" --ensure-headset', "", 18000)
-                    this.Log("预热耳机: 已执行 fallback（无输出）")
-                    return
-                }
-                throw runErr
+                if !InStr(runErr.Message, "无法创建输出文件")
+                    throw runErr
+                this.Log("预热耳机输出文件失败，fallback 无输出执行: " runErr.Message)
+                outputFile := ""
+                job := ProcessNoWindow.StartAsync(command, "", this.HeadsetTimeoutMs)
             }
-            out := ""
-            try out := Trim(FileRead(temp, "UTF-8"))
-            if (out != "")
-                this.Log("预热耳机: " out)
-            else
-                this.Log("预热耳机: 无输出")
         } catch as err {
-            this.Log("预热耳机异常: " err.Message)
-        } finally {
-            try FileDelete temp
+            this.Log("预热耳机启动异常: " err.Message)
+            try FileDelete outputFile
+            this.LaunchTts(raw, gen)
+            return
+        }
+        this.WarmupJob := { job: job, outputFile: outputFile, generation: gen }
+        this.WarmupTimer := ObjBindMethod(this, "PollWarmup")
+        SetTimer(this.WarmupTimer, this.PollIntervalMs)
+    }
+
+    static PollWarmup(*) {
+        try {
+            if !IsObject(this.WarmupJob) {
+                this.StopWarmup()
+                return
+            }
+            job := this.WarmupJob.job
+            job.Poll()
+            if !job.Done
+                return
+
+            info := this.WarmupJob
+            this.WarmupJob := ""
+            if (this.WarmupTimer != "") {
+                try SetTimer(this.WarmupTimer, 0)
+                this.WarmupTimer := ""
+            }
+
+            output := ""
+            if (info.outputFile != "") {
+                try output := Trim(FileRead(info.outputFile, "UTF-8"))
+                try FileDelete info.outputFile
+            }
+            if (job.Status = "timedout") {
+                this.Log("预热耳机超时（继续进行朗读）")
+            } else if (job.Status != "exited") {
+                this.Log("预热耳机失败: " job.Status)
+            } else if (output != "") {
+                this.Log("预热耳机: " output)
+            } else {
+                this.Log("预热耳机: 无输出")
+            }
+
+            if (info.generation != this.Generation) {
+                this.Log("预热结果已过期，丢弃")
+                return
+            }
+            raw := this.PendingText
+            this.PendingText := ""
+            this.LaunchTts(raw, info.generation)
+        } catch as err {
+            raw := this.PendingText
+            gen := this.Generation
+            this.Log("预热耳机轮询异常: " err.Message)
+            this.StopWarmup()
+            this.LaunchTts(raw, gen)
+        }
+    }
+
+    static LaunchTts(raw, generation) {
+        if (generation != this.Generation)
+            return
+        inputFile := this.NewInputFile()
+        try {
+            try FileDelete inputFile
+            FileAppend raw, inputFile, "UTF-8"
+
+            pythonExe := this.ResolvePython()
+            scriptPath := this.ResolveScript()
+            cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '"'
+            this.Log("启动朗读 (长度: " StrLen(raw) ")")
+
+            ; 非等待启动：CREATE_NO_WINDOW，不建 Job，返回 PID 给 WatchPid 清临时文件。
+            pid := ProcessNoWindow.Run(cmd)
+            this.TtsPid := pid
+            this.LastInputFile := inputFile
+            this.WatchBound := ObjBindMethod(this, "WatchPid")
+            SetTimer(this.WatchBound, 400)
+            this.Log("启动成功, PID: " pid)
+        } catch as err {
+            this.Log("启动朗读异常: " err.Message)
+            try FileDelete inputFile
+            Notify.Error("×", "朗读失败")
         }
     }
 
@@ -152,7 +257,7 @@ class SpeakSelectedText {
             }
 
             raw := this.Normalize(A_Clipboard)
-            this.Log("获取到剪贴板文本 (长度: " StrLen(raw) "): " this.ShortText(raw, 50))
+            this.Log("获取到剪贴板文本 (长度: " StrLen(raw) ")")
             if (raw = "") {
                 Notify.Error("!", "未选中文字")
                 return
@@ -165,33 +270,13 @@ class SpeakSelectedText {
             }
 
             this.StopCurrent()
+            gen := this.Generation
             if (this.IsAutoSwitchEnabled()) {
-                this.Log("检测到 tts.auto_switch_before_play=true，尝试预热 AirPods")
-                this.EnsureHeadset()
+                this.Log("检测到 tts.auto_switch_before_play=true，异步预热 AirPods")
+                this.StartHeadsetWarmup(raw)
+                return
             }
-
-            inputFile := this.NewInputFile()
-            try {
-                try FileDelete inputFile
-                FileAppend raw, inputFile, "UTF-8"
-
-                pythonExe := this.ResolvePython()
-                scriptPath := this.ResolveScript()
-                cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '"'
-                this.Log("执行命令: " cmd)
-
-                ; 非等待启动：CREATE_NO_WINDOW，不建 Job，返回 PID 给 WatchPid 清临时文件。
-                pid := ProcessNoWindow.Run(cmd)
-                this.TtsPid := pid
-                this.LastInputFile := inputFile
-                this.WatchBound := ObjBindMethod(this, "WatchPid")
-                SetTimer(this.WatchBound, 400)
-                this.Log("启动成功, PID: " pid)
-            } catch as err {
-                this.Log("启动朗读异常: " err.Message)
-                try FileDelete inputFile
-                Notify.Error("×", "朗读失败")
-            }
+            this.LaunchTts(raw, gen)
         } finally {
             A_Clipboard := savedClipboard
         }

@@ -61,18 +61,46 @@ internal static class HudLog
         Line("start pid=" + Environment.ProcessId + " t=" + DateTime.Now.ToString("O"));
     }
 
+    static int _writeCount;
+    const int RotateCheckEvery = 200;
+    const long MaxFileBytes = 1024 * 1024;
+
     public static void Line(string text)
     {
         string payload = Sanitize(text) + Environment.NewLine;
+        bool checkRotation = (++_writeCount % RotateCheckEvery) == 0;
         foreach (string path in Paths)
         {
             try
             {
                 File.AppendAllText(path, payload, Encoding.UTF8);
+                if (checkRotation)
+                    TryRotate(path);
             }
             catch
             {
             }
+        }
+    }
+
+    /// <summary>
+    /// 超过 1 MiB 就转成 .1（只留一份备份）。HUD 每按键要写几十行，不轮转就是无界增长；
+    /// 轮转失败（另一进程占着句柄）直接忽略，绝不能影响 HUD。
+    /// </summary>
+    static void TryRotate(string path)
+    {
+        try
+        {
+            var info = new System.IO.FileInfo(path);
+            if (!info.Exists || info.Length <= MaxFileBytes)
+                return;
+            string backup = path + ".1";
+            if (System.IO.File.Exists(backup))
+                System.IO.File.Delete(backup);
+            System.IO.File.Move(path, backup);
+        }
+        catch
+        {
         }
     }
 
@@ -89,6 +117,7 @@ internal static class HudLog
     {
         if (string.IsNullOrEmpty(text))
             return "";
-        return text.Replace("\0", "").TrimEnd();
+        // 换行必须拍平：日志按行解析，payload 里的 \n 能伪造任意日志行。
+        return text.Replace("\0", "").Replace('\r', ' ').Replace('\n', ' ').TrimEnd();
     }
 }

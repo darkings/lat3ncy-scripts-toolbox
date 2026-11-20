@@ -843,7 +843,8 @@ internal sealed class HudHost : IDisposable
     void HandleCopyData(IntPtr lParam)
     {
         string? text = Native.ReadCopyData(lParam);
-        HudLog.Line("copydata=" + (text ?? ""));
+        // 不落原文 / 译文：面板数据显示的就是整段翻译内容，而这行会写三个位置。
+        HudLog.Line("copydata=" + Protocol.Describe(text));
         // 部署自检：新协议一定带第 8 段来源；这里只观测，不参与决策。
         Protocol.Message observed = Protocol.Parse(text);
         HudLog.Info(

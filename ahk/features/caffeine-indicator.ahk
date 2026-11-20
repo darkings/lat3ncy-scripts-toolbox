@@ -7,8 +7,7 @@
 ;       不占托盘位、不留幽灵图标。
 ;
 ; 判定方式与 tools/power-policy/PowerPolicy.ps1 完全一致：
-;   %LOCALAPPDATA%\coffee\state.json 存在，且其中 pid 指向的进程仍存活。
-;   （Coffee 扩展 worker 启动时写该文件，停止时删除；pid 校验防 PID 复用误判）
+;   使用 PowerPolicy 配置的目录；校验 PID + FILETIME、到期时间和停止信号。
 ;
 ; 图标来源 resources/icons：
 ;   coffee_power_black.ico —— 放浅色任务栏
@@ -24,6 +23,9 @@ class CaffeineIndicator {
     static PollMs := 2000
     static Showing := false
     static Started := false
+    static ConfigPath := ""
+    static PollCallback := 0
+    static SettingCallback := 0
 
     ; ---------------- 生命周期 ----------------
     static Start() {
@@ -32,38 +34,112 @@ class CaffeineIndicator {
         this.Started := true
 
         this.Poll()
-        SetTimer(ObjBindMethod(this, "Poll"), this.PollMs)
+        this.PollCallback := ObjBindMethod(this, "Poll")
+        SetTimer(this.PollCallback, this.PollMs)
         ; WM_SETTINGCHANGE：主题/个性化变化后换图标
-        OnMessage(0x001A, ObjBindMethod(this, "OnSettingChange"))
+        this.SettingCallback := ObjBindMethod(this, "OnSettingChange")
+        OnMessage(0x001A, this.SettingCallback)
         this.Log("started (active=" (this.Showing ? "1" : "0") ")")
     }
 
     static Stop() {
         if !this.Started
             return
-        SetTimer(ObjBindMethod(this, "Poll"), 0)
+        SetTimer(this.PollCallback, 0)
+        OnMessage(0x001A, this.SettingCallback, 0)
         if this.Showing
             this.Hide()
+        this.Showing := false
         this.Started := false
     }
 
     ; ---------------- 状态判定 ----------------
+    static CoffeeDirectory() {
+        dir := EnvGet("LOCALAPPDATA") "\coffee"
+        path := this.ConfigPath
+        if (path = "") {
+            SplitPath A_LineFile, , &featureDir
+            path := featureDir "\..\..\tools\power-policy\config.toml"
+        }
+        try {
+            section := ""
+            for raw in StrSplit(FileRead(path, "UTF-8"), "`n", "`r") {
+                line := Trim(raw)
+                if RegExMatch(line, "^\[(.+)\]$", &m)
+                    section := m[1]
+                else if (section = "caffeine") {
+                    if RegExMatch(line, '^coffee_dir\s*=\s*"([^"]*)"\s*(?:#.*)?$', &m)
+                        || RegExMatch(line, "^coffee_dir\s*=\s*'([^']*)'\s*(?:#.*)?$", &m)
+                        dir := m[1]
+                }
+            }
+        }
+        size := DllCall("ExpandEnvironmentStringsW", "WStr", dir, "Ptr", 0, "UInt", 0, "UInt")
+        expanded := Buffer(size * 2, 0)
+        if !size || !DllCall("ExpandEnvironmentStringsW", "WStr", dir, "Ptr", expanded, "UInt", size, "UInt")
+            return dir
+        return StrGet(expanded, "UTF-16")
+    }
+
     static StateFile() {
-        return EnvGet("LOCALAPPDATA") "\coffee\state.json"
+        return this.CoffeeDirectory() "\state.json"
+    }
+
+    ; Coffee's state is a flat JSON object of scalar fields. Validate the whole
+    ; document before using any field, so a partial write cannot look active.
+    static ReadState(text) {
+        values := Map()
+        text := Trim(text, " `t`r`n" Chr(0xFEFF))
+        if (SubStr(text, 1, 1) != "{" || SubStr(text, -1) != "}")
+            throw Error("Invalid Coffee state")
+        rest := Trim(SubStr(text, 2, -1))
+        pattern := '^"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*("(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)\s*(,|$)'
+        while (rest != "") {
+            if !RegExMatch(rest, pattern, &m) || values.Has(m[1])
+                throw Error("Invalid Coffee state")
+            values[m[1]] := Trim(m[2], '"')
+            rest := LTrim(SubStr(rest, m.Len + 1))
+            if (m[3] = "," && rest = "")
+                throw Error("Invalid Coffee state")
+        }
+        return values
+    }
+
+    static ProcessStartTicks(pid) {
+        process := DllCall("OpenProcess", "UInt", 0x1000, "Int", 0, "UInt", pid, "Ptr")
+        if !process
+            return 0
+        try {
+            created := Buffer(8), exited := Buffer(8), kernel := Buffer(8), user := Buffer(8)
+            if !DllCall("GetProcessTimes", "Ptr", process, "Ptr", created, "Ptr", exited, "Ptr", kernel, "Ptr", user)
+                return 0
+            return NumGet(created, 0, "Int64")
+        } finally {
+            DllCall("CloseHandle", "Ptr", process)
+        }
     }
 
     static IsActive() {
-        f := this.StateFile()
-        if !FileExist(f)
-            return false
         try {
-            txt := FileRead(f, "UTF-8")
+            dir := this.CoffeeDirectory()
+            if FileExist(dir "\stop.flag") || !FileExist(dir "\state.json")
+                return false
+            state := this.ReadState(FileRead(dir "\state.json", "UTF-8"))
+            pid := Integer(state["pid"])
+            started := this.ProcessStartTicks(pid)
+            if !started || !ProcessExist(pid) || Abs(started - Integer(state["startTicks"])) > 10000
+                return false
+            if state.Has("durationSeconds") && state["durationSeconds"] != "null" && Number(state["durationSeconds"]) > 0 {
+                now := Buffer(8)
+                DllCall("GetSystemTimeAsFileTime", "Ptr", now)
+                unixSeconds := (NumGet(now, 0, "Int64") - 116444736000000000) / 10000000
+                if unixSeconds >= Number(state["startTime"]) + Number(state["durationSeconds"])
+                    return false
+            }
+            return true
         } catch {
             return false
         }
-        if !RegExMatch(txt, '"pid"\s*:\s*(\d+)', &m)
-            return false
-        return ProcessExist(Integer(m[1])) != 0
     }
 
     ; ---------------- 轮询 ----------------
@@ -71,12 +147,13 @@ class CaffeineIndicator {
         active := this.IsActive()
         if (active = this.Showing)
             return
-        this.Showing := active
         if (active) {
             ok := this.Show()
+            this.Showing := ok
             this.Log("show -> " (ok ? "OK" : "FAIL"))
         } else {
             ok := this.Hide()
+            this.Showing := false
             this.Log("hide -> " (ok ? "OK" : "FAIL"))
         }
     }
@@ -91,7 +168,7 @@ class CaffeineIndicator {
     }
 
     static TipText() {
-        return "Caffeine 开 · 合盖不会睡眠"
+        return "Caffeine 已启用"
     }
 
     ; ---------------- 图标与主题 ----------------

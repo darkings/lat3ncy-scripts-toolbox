@@ -20,6 +20,8 @@
 class TranslationPanel {
     static WindowClass := "Lat3ncyImeHudWinUi"
     static WindowTitle := "Lat3ncyImeHudWinUi"
+    static PanelClass := "Lat3ncyImeHudWinUiPanel"
+    static PanelTitle := "Lat3ncyImeHudWinUiPanel"
     static CopyDataId := 1
     static WM_COPYDATA := 0x004A
     static SMTO_ABORTIFHUNG := 0x0002
@@ -40,6 +42,24 @@ class TranslationPanel {
     ; 只关闭已有面板。找不到 HWND 就当作已经关上，不冷启动。
     static Close() {
         return this.SendExisting(this.BuildCloseCommand())
+    }
+
+    ; 面板是独立顶层窗口：进程常驻但窗口隐藏时 IsWindowVisible=false。
+    ; 用于翻译请求完成时判断用户是否已经关掉面板。
+    static IsOpen() {
+        try {
+            hwnd := DllCall(
+                "User32\FindWindowW",
+                "WStr", this.PanelClass,
+                "Ptr", 0,
+                "Ptr"
+            )
+            if !hwnd
+                return false
+            return DllCall("User32\IsWindowVisible", "Ptr", hwnd, "Int") != 0
+        } catch {
+            return false
+        }
     }
 
     static BuildOpenCommand(text, x := 0, y := 0, dpi := 0) {

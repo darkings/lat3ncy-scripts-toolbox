@@ -42,7 +42,7 @@ internal static class Program
 
         HudLog.Line("options self-test=" + selfTest
             + " cycle=" + cycleRounds
-            + " command=" + (startupCommand ?? "")
+            + " command=" + Protocol.Describe(startupCommand)
             + " transparency=" + Native.TransparencyEnabled()
             + " high-contrast=" + Native.HighContrastEnabled());
         // 部署标记：日志里没有这一行，说明跑的还是旧 exe（旧进程没被杀掉）。
@@ -123,7 +123,7 @@ internal static class Program
 
         bool forwarded = Protocol.TryForwardToExisting(startupCommand);
         HudLog.Line("resident-mutex=existing forwarded=" + forwarded
-            + " command=" + (startupCommand ?? ""));
+            + " command=" + Protocol.Describe(startupCommand));
         // 空命令或转发失败都退出。调用方会再等 HWND；不要在这里抢 mutex。
         return false;
     }

@@ -26,7 +26,10 @@ param(
   [int]$IntervalMs = 150,
   [int]$DurationMs = 1200,
   [int]$ServeMs = 900000,
-  [int]$MaxAttempts = 5
+  [int]$MaxAttempts = 5,
+  # Owner process id (the AHK script). When the owner is gone this helper must exit;
+  # otherwise every AHK reload leaves an orphan polling UIA for the full ServeMs.
+  [int]$OwnerPid = 0
 )
 
 $ErrorActionPreference = 'Continue'
@@ -196,6 +199,10 @@ function Get-CaretOnce($hwnd) {
 
 # Serve mode publishes one line atomically. Use pure .NET: PowerShell cmdlets
 # leak error text into redirected stdout, and Move-Item -Force cannot overwrite.
+function Get-BootTick {
+  return ([int64][Environment]::TickCount -band [int64]4294967295)
+}
+
 function Write-Atom([string]$path, [string]$line) {
   try {
     $tmp = $path + '.tmp'
@@ -231,6 +238,12 @@ if ($Serve) {
   $serveDeadline = (Get-Date).AddMilliseconds($ServeMs)
   $lastLine = ''
   while ((Get-Date) -lt $serveDeadline) {
+    # Owner gone -> publish END and exit instead of lingering for the whole ServeMs.
+    if ($OwnerPid -gt 0 -and -not (Get-Process -Id $OwnerPid -ErrorAction SilentlyContinue)) {
+      Write-Diag ("serve stop: owner gone pid=" + $OwnerPid)
+      Write-Atom $OutPath ("T|" + (Get-BootTick) + "|END|owner-gone")
+      exit 0
+    }
     $caret = $null
     # 
     $target = $Hwnd
@@ -241,7 +254,7 @@ if ($Serve) {
       if (-not $caret -and $attempt -lt $MaxAttempts) { Start-Sleep -Milliseconds $DelayMs }
     }
     #  AHK/PowerShell  ""TickCount A_TickCount 
-    $stamp = [Environment]::TickCount
+    $stamp = Get-BootTick
     if ($caret) {
       $line = ("T|{0}|CARET|{1}|{2}|{3}|{4}" -f $stamp, $caret.X, $caret.Y, $caret.H, $caret.Source)
     } else {
@@ -250,7 +263,7 @@ if ($Serve) {
     Write-Atom $OutPath $line
     Start-Sleep -Milliseconds $IntervalMs
   }
-  Write-Atom $OutPath ("T|" + [Environment]::TickCount + "|END|serve-timeout")
+  Write-Atom $OutPath ("T|" + (Get-BootTick) + "|END|serve-timeout")
   exit 0
 }
 

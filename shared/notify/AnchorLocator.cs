@@ -438,12 +438,6 @@ namespace Lat3ncyToolbox
 
             RECT windowRect;
             bool hasWindowRect = GetWindowRect(target, out windowRect);
-            int maxInset = 200;
-            if (hasWindowRect)
-            {
-                int windowHeight = windowRect.Bottom - windowRect.Top;
-                maxInset = Math.Max(120, Math.Min(windowHeight / 3, 600));
-            }
 
             AutomationElement element = null;
             try
@@ -458,7 +452,15 @@ namespace Lat3ncyToolbox
                 if (element == null)
                     element = FindTextFocusedElement(root);
                 if (element == null)
-                    element = AutomationElement.FocusedElement;
+                {
+                    // 全局焦点可能属于别的窗口（悬浮面板、输入法候选窗）。
+                    // 只在能「证明」它属于别人时才拒绝：Chromium 的节点常常读不到
+                    // NativeWindowHandle，那种情况下保持原行为，交给下面的几何校验，
+                    // 否则会把这条兜底路径本身关掉。
+                    AutomationElement focused = AutomationElement.FocusedElement;
+                    if (focused != null && !ProvablyForeign(focused, target))
+                        element = focused;
+                }
             }
             catch (Exception ex)
             {
@@ -490,7 +492,7 @@ namespace Lat3ncyToolbox
             // 防误判：退化的“整窗前 N 像素”结果必须丢掉。
             if (hasWindowRect)
             {
-                if (caret.Top - windowRect.Top > maxInset || windowRect.Bottom - caret.Bottom > maxInset)
+                if (!CaretVerticallyInside(caret, windowRect))
                 {
                     s_textCaretReason = "caret-far-from-window";
                     return none;
@@ -515,6 +517,12 @@ namespace Lat3ncyToolbox
             probe.CaretHeight = caretHeight;
             probe.Source = "text-caret";
             return probe;
+        }
+
+        private static bool CaretVerticallyInside(Rect caret, RECT window)
+        {
+            return !caret.IsEmpty && caret.Height > 0
+                && caret.Top >= window.Top - 2 && caret.Bottom <= window.Bottom + 2;
         }
 
         /// <summary>给诊断用：焦点元素长什么样。</summary>
@@ -597,14 +605,19 @@ namespace Lat3ncyToolbox
         {
             if (root == null)
                 return null;
-            return FindEditElementCore(root, 0, 64, null);
+            // 整个遍历共用一份节点预算（安全阀）：旧实现每层各拿 64，深层树的最坏情况
+            // 是 64×64×…，而 UIA 跨进程每节点是 ms 级 —— 卡住调用方的风险没有上界。
+            // 512 远高于「找到文本控件」的实际规模，只在病态树上才会触发。
+            int budget = 512;
+            return FindEditElementCore(root, 0, ref budget, null);
         }
 
         private static AutomationElement FindEditElementCore(
-            AutomationElement element, int depth, int budget, AutomationElement first)
+            AutomationElement element, int depth, ref int budget, AutomationElement first)
         {
             if (element == null || depth > 8 || budget <= 0)
                 return first;
+            budget--;
             try
             {
                 if (SupportsTextPattern(element))
@@ -633,10 +646,9 @@ namespace Lat3ncyToolbox
                 return first;
             }
 
-            int remaining = budget;
-            while (child != null && remaining > 0)
+            while (child != null && budget > 0)
             {
-                AutomationElement hit = FindEditElementCore(child, depth + 1, remaining - 1, first);
+                AutomationElement hit = FindEditElementCore(child, depth + 1, ref budget, first);
                 if (hit != null && hit != first)
                     return hit;
                 first = hit ?? first;
@@ -648,7 +660,6 @@ namespace Lat3ncyToolbox
                 {
                     break;
                 }
-                remaining--;
             }
             return first;
         }
@@ -955,6 +966,37 @@ namespace Lat3ncyToolbox
             return probe;
         }
 
+        /// <summary>
+        /// 能不能证明这个元素属于「别的」窗口：见过 NativeWindowHandle，但没有一个是目标的。
+        /// 读不到句柄、或能走到目标窗口时都返回 false（= 无法证明是外人，保持原行为）。
+        /// </summary>
+        private static bool ProvablyForeign(AutomationElement element, IntPtr target)
+        {
+            if (element == null || target == IntPtr.Zero)
+                return false;
+            try
+            {
+                bool sawWindow = false;
+                AutomationElement walker = element;
+                for (int i = 0; i < 12 && walker != null; i++)
+                {
+                    int handle = walker.Current.NativeWindowHandle;
+                    if (handle != 0)
+                    {
+                        sawWindow = true;
+                        if (BelongsTo(new IntPtr(handle), target))
+                            return false;
+                    }
+                    walker = TreeWalker.ControlViewWalker.GetParent(walker);
+                }
+                return sawWindow;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
         private static bool ElementBelongsTo(AutomationElement element, IntPtr target)
         {
             if (target == IntPtr.Zero)
@@ -1088,6 +1130,15 @@ namespace Lat3ncyToolbox
                 return 9;
             if (FormatLine(missing, false) != "1|1|no-target-window")
                 return 10;
+
+            RECT window = new RECT();
+            window.Top = 100; window.Bottom = 1100;
+            foreach (int y in new int[] { 100, 590, 1080 })
+                if (!CaretVerticallyInside(new Rect(20, y, 2, 20), window))
+                    return 11;
+            if (CaretVerticallyInside(new Rect(20, 70, 2, 20), window)
+                || CaretVerticallyInside(new Rect(20, 1090, 2, 20), window))
+                return 12;
 
             Console.WriteLine("anchor-locator self-test ok");
             return 0;

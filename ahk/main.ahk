@@ -96,11 +96,17 @@ IsToolboxTestMode() {
 ; CapsLock STATE 坐标由 ImeHud.Show → InputAnchor.Get() 在热键瞬间采集。
 #Include ..\shared\notify\ime-hud.ahk
 
+; 本仓库实例标记：看护用它确认运行中的 main.ahk 属于当前 checkout。
+#Include ..\shared\notify\toolbox-instance.ahk
+
 ; 本机 pythonw 解析：朗读 / 翻译共用，由入口统一加载，避免两个 feature 各自 include
 #Include ..\shared\python.ahk
 
 ; 无控制台启动子进程。摇动放大用它拉起 DPI 感知的换尺寸进程。
 #Include ..\shared\notify\run-nowindow.ahk
+
+; 多托盘图标宿主。AHK 一个脚本只有 1 个原生托盘图标，额外图标靠 Shell_NotifyIcon 自注册。
+#Include ..\shared\tray\tray.ahk
 
 ; ============================================================
 ; 功能实现层：只加载功能，不在模块内部注册快捷键
@@ -152,10 +158,14 @@ IsToolboxTestMode() {
 #Include features\foreground-process.ahk
 
 ; 摇动定位指针：快速左右反向时临时放大箭头，停下后交回当前光标方案。无快捷键。
+; 2026-11-06 暂时停用：FindMouse.Enabled = false，恢复改回 true 即可。
 #Include features\find-mouse.ahk
 
 ; ThinkPad 键盘背光：夜间敲击/点击唤醒、超时自动熄灭、晃动鼠标不唤醒。非 ThinkPad 自动跳过。
 #Include features\thinkpad-backlight.ahk
+
+; Caffeine 状态托盘指示：Coffee 扩展激活时才显示咖啡杯，未激活彻底移除。无快捷键。
+#Include features\caffeine-indicator.ahk
 
 ; 统一路由层必须在全部 feature 之后加载。
 #Include hotkey-router.ahk
@@ -164,5 +174,21 @@ IsToolboxTestMode() {
 try NotifyRenderer.CloseOrphans()
 ; 预热 WinUI，避免第一次 CapsLock 冷启动 1–2 秒。测试入口 Warm() 自己会退出。
 try ImeHud.Warm()
+
+; Caffeine 状态托盘指示：仅在有 Coffee 扩展运行且激活时占一个托盘位。
+; 测试模式不注册托盘图标，避免测试进程污染真实托盘。
+if !IsToolboxTestMode()
+    try CaffeineIndicator.Start()
+
+; 启动成功后才创建实例标记；启动失败/错误框阶段不应让看护误以为工具箱已正常。
+; 测试运行不创建，避免测试进程被看护当成生产实例。
+if !IsToolboxTestMode() {
+    try {
+        SplitPath A_ScriptFullPath, , &toolboxAhkDir
+        SplitPath toolboxAhkDir, , &toolboxRepoDir
+        ToolboxInstance.Init(toolboxRepoDir)
+    } catch {
+    }
+}
 
 ToolboxStarting := false

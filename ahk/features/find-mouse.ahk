@@ -10,7 +10,13 @@ class FindMouse {
     ; 日常瞄准的"过头再修正"通常只有一次反向，够不到三次。
     static ReverseCount := 3
     ; 一条腿至少要走这么远才算"在找指针"而不是手抖/瞄准修正。
-    static MinDistance := 30
+    static MinDistance := 40
+    ; 整个手势窗口的平均速度下限（像素/毫秒），参考 0cch/ShakeToFindCursor：
+    ; 速度按整个窗口算，不按单腿算——真摇动在折返点必然减速，一条慢的
+    ; 折返腿会把整个连击清零（和"越直线越难触发"同病根）。
+    static MinStreakSpeedPxPerMs := 0.5
+    ; 三次反向必须在这个总时长内完成，防止慢慢蹭也能攒够次数。
+    static MaxStreakMs := 1000
     ; 单条腿的时限：超过就是日常慢速修正，不计反向。
     static LegMaxMs := 320
     static MaxIntervalMs := 400
@@ -24,6 +30,9 @@ class FindMouse {
     static MaxNetRatio := 0.75
     ; 连击期间包围盒任一轴超过该值，视为跨屏正常移动，不触发。
     static MaxSpanPx := 600
+    ; 连击峰峰值的下限。手抖、触摸板/小红点漂移、犹豫式微调都是小幅度高频抖动；
+    ; 刻意找指针会明显扫过一段距离。这条是"正常使用中时不时变大"的主拦网。
+    static MinSpanPx := 100
     ; 方向未定时累计到这个位移再定轴。逐样本判轴会把带弧度的甩动全部丢掉。
     static AxisMinPx := 8
     static SampleMinPx := 2
@@ -68,15 +77,22 @@ class FindMouse {
     static StreakMinY := 0
     static StreakMaxX := 0
     static StreakMaxY := 0
+    ; 本次连击的轨迹留痕：每条腿的行程/耗时；触发时连同幅度、净位移一起记账。
+    static StreakFirstTick := 0
+    static TraceLegs := ""
+    ; 最近一次松开鼠标键的时刻，用来判断触发是不是紧跟在点击之后。
+    static LastButtonUpTick := 0
     ; 现场计数：状态文件里能看出到底是哪一道闸门把它拦了。
     static CountButtonBlocks := 0
     static CountIdleResets := 0
     static CountSpanResets := 0
     static CountShortLegs := 0
     static CountSlowLegs := 0
+    static CountSlowStreaks := 0
     static CountReversals := 0
     static CountTriggers := 0
     static CountNetRejects := 0
+    static CountSmallSpanRejects := 0
     ; 连击最高攒到几次：判断摇动是死在第一次反向还是差一点点。
     static MaxStreakReached := 0
     static ButtonHeld := false
@@ -90,6 +106,7 @@ class FindMouse {
     static MutexName := ""
     static MutexHandle := 0
     static StatusPath := A_Temp "\lat3ncy-find-mouse-status.txt"
+    static TriggerTracePath := A_Temp "\lat3ncy-find-mouse-triggers.txt"
 
     static __New() {
         this.RestoreCallback := ObjBindMethod(this, "Restore")
@@ -153,6 +170,8 @@ class FindMouse {
         this.StreakStartX := 0
         this.StreakStartY := 0
         this.StreakTravel := 0
+        this.TraceLegs := ""
+        this.StreakFirstTick := 0
         this.StartLeg(0, 0, 0)
     }
 
@@ -183,6 +202,8 @@ class FindMouse {
         this.StreakStartY := y
         this.StreakTravel := 0
         this.LastMoveTick := tick
+        this.TraceLegs := ""
+        this.StreakFirstTick := 0
         this.StartLeg(x, y, tick)
     }
 
@@ -285,6 +306,7 @@ class FindMouse {
             this.StartLeg(x, y, tick)
             return false
         }
+        ; 太慢的腿：超过单腿时限（日常瞄准修正）。速度判据挪到整个手势上。
         if (legMs > this.LegMaxMs || legMs < 0) {
             this.CountSlowLegs += 1
             this.ReverseStreak := 0
@@ -297,10 +319,17 @@ class FindMouse {
         this.LastReverseTick := tick
         if (this.ReverseStreak > 0 && (gap > this.MaxIntervalMs || gap < 0))
             this.ReverseStreak := 0
+        ; 三次反向要连着完成：拖太久说明是在慢慢蹭，不是摇动。
+        if (this.ReverseStreak > 0 && tick - this.StreakFirstTick > this.MaxStreakMs)
+            this.ReverseStreak := 0
         ; 连击从这里起算时，包围盒也重新量：只衡量本次摇动的幅度。
-        if (this.ReverseStreak = 0)
+        if (this.ReverseStreak = 0) {
             this.ResetStreakBox(x, y)
+            this.TraceLegs := ""
+            this.StreakFirstTick := tick
+        }
         this.ReverseStreak += 1
+        this.TraceLegs .= Format("{1}/{2} ", Round(this.LegTravel), legMs)
         if (this.ReverseStreak > this.MaxStreakReached)
             this.MaxStreakReached := this.ReverseStreak
         this.CountReversals += 1
@@ -308,19 +337,39 @@ class FindMouse {
         this.StartLeg(x, y, tick)
         if (this.ReverseStreak < this.ReverseCount)
             return false
+        ; 整窗平均速度：犹豫式慢来回（有反向但整体很慢）在这里拦下，
+        ; 而折返点的自然减速不再连坐整条连击。
+        streakMs := tick - this.StreakFirstTick
+        if (streakMs > 0 && this.StreakTravel / streakMs < this.MinStreakSpeedPxPerMs) {
+            this.CountSlowStreaks += 1
+            this.WriteTriggerTrace(tick, "slow", 0, this.StreakFirstTick)
+            this.StartSample(x, y, tick)
+            return false
+        }
         ; "原地摇"绕着自己的起点来回，净位移远小于总行程；移到别处顺手抖两下
         ; 则离起点很远。这条判据专门掐掉"随意一晃就放大"。
+        netRatio := 0
         if (this.StreakTravel > 0) {
             netX := x - this.StreakStartX
             netY := y - this.StreakStartY
             net := Sqrt(netX * netX + netY * netY)
-            if (net > this.MaxNetRatio * this.StreakTravel) {
-                this.CountNetRejects += 1
-                this.StartSample(x, y, tick)
-                return false
-            }
+            netRatio := net / this.StreakTravel
+        }
+        span := Max(this.StreakMaxX - this.StreakMinX, this.StreakMaxY - this.StreakMinY)
+        if (span < this.MinSpanPx) {
+            this.CountSmallSpanRejects += 1
+            this.WriteTriggerTrace(tick, "small", netRatio, this.StreakFirstTick)
+            this.StartSample(x, y, tick)
+            return false
+        }
+        if (netRatio > this.MaxNetRatio) {
+            this.CountNetRejects += 1
+            this.WriteTriggerTrace(tick, "net", netRatio, this.StreakFirstTick)
+            this.StartSample(x, y, tick)
+            return false
         }
         this.CountTriggers += 1
+        this.WriteTriggerTrace(tick, "hit", netRatio, this.StreakFirstTick)
         this.StartSample(x, y, tick)
         return true
     }
@@ -348,6 +397,9 @@ class FindMouse {
             this.ResetMotion()
             return
         }
+        ; 记下松键时刻：触发若紧跟点击，说明是点选后的移动，不是找指针。
+        if (this.ButtonHeld)
+            this.LastButtonUpTick := A_TickCount
         this.ButtonHeld := false
         this.HandleMove(NumGet(point, 0, "Int"), NumGet(point, 4, "Int"), A_TickCount)
     }
@@ -581,6 +633,34 @@ class FindMouse {
         return text = "" ? "empty" : text
     }
 
+    ; 每次触发/拒绝都记一条几何：以后偶发误触发可以直接回看当时的幅度、
+    ; 速度、净位移和距上次点击多久，不必靠猜。只保留最近 40 条。
+    static WriteTriggerTrace(tick, kind, netRatio, firstTick) {
+        if !this.Enabled
+            return
+        try {
+            btnAgo := this.LastButtonUpTick ? tick - this.LastButtonUpTick : -1
+            span := Max(this.StreakMaxX - this.StreakMinX, this.StreakMaxY - this.StreakMinY)
+            line := FormatTime(A_Now, "yyyy-MM-dd HH:mm:ss")
+                . Format(" kind={1} t={2:.1f}s legs=[{3}] span={4} net={5:.2f} btnAgo={6} streakMs={7}"
+                    , kind, tick / 1000, this.TraceLegs, Round(span), netRatio, btnAgo, tick - firstTick)
+            old := ""
+            try old := FileRead(this.TriggerTracePath, "UTF-8")
+            out := line
+            kept := 0
+            if (old != "") {
+                for entry in StrSplit(Trim(old, "`r`n"), "`n") {
+                    if (entry = "" || kept >= 39)
+                        continue
+                    out .= "`n" entry
+                    kept += 1
+                }
+            }
+            try FileDelete(this.TriggerTracePath)
+            FileAppend(out "`n", this.TriggerTracePath, "UTF-8")
+        }
+    }
+
     static WriteStatus(*) {
         try {
             content := "Hook=" (this.Hook ? 1 : 0)
@@ -600,9 +680,11 @@ class FindMouse {
                 . "`nSpanResets=" this.CountSpanResets
                 . "`nShortLegs=" this.CountShortLegs
                 . "`nSlowLegs=" this.CountSlowLegs
+                . "`nSlowStreaks=" this.CountSlowStreaks
                 . "`nReversals=" this.CountReversals
                 . "`nNetRejects=" this.CountNetRejects
                 . "`nMaxStreak=" this.MaxStreakReached
+                . "`nSmallSpanRejects=" this.CountSmallSpanRejects
                 . "`nStreakTravel=" this.StreakTravel
                 . "`nTriggers=" this.CountTriggers
             temp := this.StatusPath ".tmp"

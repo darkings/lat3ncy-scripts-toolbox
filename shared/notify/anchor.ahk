@@ -58,6 +58,13 @@ class InputAnchor {
         return false
     }
 
+    ; Object adapter for renderers; keep the ByRef API for existing callers.
+    static Resolve(targetHwnd := 0) {
+        x := 0, y := 0
+        found := this.Get(&x, &y, targetHwnd)
+        return { found: found, x: x, y: y, h: 0, source: this.LastSource }
+    }
+
     static GetRootHwnd(hwnd) {
         hwnd := this.NormalizeHwnd(hwnd)
         if !hwnd || !WinExist("ahk_id " hwnd)

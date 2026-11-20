@@ -220,6 +220,8 @@ dotnet publish .\tools\ime-hud-winui\ImeHudWinUi.csproj `
 * Esc：关闭面板。不经过 AHK
 * 未钉住失焦：点其他窗口或同一窗口别处关闭；钉住后保持。打开瞬间编辑器仍前台不算失焦
 
+测试入口不会直接跑旧的 `out\ImeHudWinUi.exe`。`ahk\tests\run-tests.ps1 -BuildImeHud` 会先发布到隔离的 `test-out\` 并写入 `.source-stamp`（源码哈希），之后不带开关运行时必须命中同一哈希，否则报 stale。这样改了 C# / XAML 却忘了重编译时，测试不会拿旧 exe 假通过；也不会因为运行中的 `out\ImeHudWinUi.exe` 被占用而构建失败。
+
 日志：`%TEMP%\ImeHudWinUi.log`
 
 看 `place source=`、`anchor=`、`real=`、`anchor-degraded`、`move source=`、`island-backdrop-controller-ok=` 的 `recipe=Acrylic.Default input-active=True`、`stole-focus=`、`pass=1`、`hide-begin` / `hide-now generation=`。`island-site-chrome` 只是可选尝试日志，站点 `corner=0` 不算失败。发布目录必须有 `resources.pri`。

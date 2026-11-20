@@ -18,13 +18,19 @@ class ImeHud {
     static ProcessName := "ImeHudWinUi.exe"
     static CopyDataId := 1
     static MessageTimeout := 600
+    ; QUIT 会在 HUD 里同步拆 Island + 销毁窗口 + 退出 XAML 应用，比 STATE 慢一个量级。
+    ; 给足预算，避免「停止」被判成卡死、进而冷启动出一个新实例。
+    static QuitTimeoutMs := 3000
     static LaunchWaitMs := 2500
     ; 单次 SendMessageTimeout 失败不立刻杀进程：HUD 刚冷启动时窗口已建但消息循环
     ; 还没开始泵，这时超时是暂时的。短超时 + 多试几次比 2.5s 一次要快得多。
     static SendAttempts := 3
     static SendRetryDelayMs := 80
     ; 文本光标探测预算。偏小会让 Chromium 直接落到退化来源，偏大会拖慢芯片出现。
-    static LocatorTimeoutMs := 500
+    ; 必须大于 anchor-locator 自身的重试预算（最多 3 次探测，间隔 250ms）。
+    ; 500ms 时第 1 次没命中真光标就必然在写 ERR 之前被 TerminateJobObject 杀掉，
+    ; 于是退化锚点以外什么都拿不到（--diagnose 也拿不到诊断行）。
+    static LocatorTimeoutMs := 1200
     ; true 时芯片显示期间跟随光标（额外起一个短命 anchor-locator --watch）。
     ; 退化锚点也起：Chromium 的无障碍树延迟建立，反复探测可能升级成真光标。
     static FollowEnabled := true
@@ -192,7 +198,18 @@ class ImeHud {
 
     static Stop() {
         this.StopFollow()
-        return this.Send("QUIT")
+        ; QUIT 走同步收尾（拆面板 Island、DestroyWindow、Application.Exit），比 STATE 慢得多。
+        ; 这里直接发、用长超时，且**不重试、不杀进程**：Send() 失败时会杀进程并冷启动，
+        ; 结果就是按「停止」反而拉起一个新 HUD。
+        hwnd := this.FindWindow()
+        if !hwnd
+            return true
+        if this.SendCopyData(hwnd, "QUIT", this.QuitTimeoutMs)
+            return true
+        this.LastCommand := "QUIT"
+        this.LastError := "quit-failed"
+        this.Log("quit-failed hwnd=" hwnd)
+        return false
     }
 
     static BuildStateCommand(state, x := 0, y := 0, dpi := 0, durationMs := 0, targetHwnd := 0, source := "") {
@@ -325,12 +342,15 @@ class ImeHud {
         ; 用它当数据文件的话，AHK 这边读这个文件会拿到"被占用"。
         stdoutFile := A_Temp "\lat3ncy-uia-serve-stdout-" DllCall("GetCurrentProcessId") ".txt"
         try FileDelete(stdoutFile)
+        ; -OwnerPid：AHK 退出后助手必须自己退。否则每次重载都会留下一个跑满
+        ; 12 小时、每 180ms 轮询一次 UIA 的孤儿 PowerShell（旧实例的 out 文件还没人读）。
         command := Format(
-            'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}" -Serve -Hwnd 0 -OutPath "{2}" -ServeMs {3} -IntervalMs {4} -Attempts 1 -DelayMs 60',
+            'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}" -Serve -Hwnd 0 -OutPath "{2}" -ServeMs {3} -IntervalMs {4} -Attempts 1 -DelayMs 60 -OwnerPid {5}',
             helper,
             outputFile,
             this.CaretServerMs,
-            this.CaretServerIntervalMs
+            this.CaretServerIntervalMs,
+            DllCall("GetCurrentProcessId")
         )
         pid := 0
         try {
@@ -349,7 +369,9 @@ class ImeHud {
     }
 
     ; 读常驻助手写的文件。返回 {Ok, X, Y, Source, AgeMs}。
-    static ReadCaretServer() {
+    static ReadCaretServer(now := unset) {
+        if !IsSet(now)
+            now := A_TickCount
         ; Known = 助手在新鲜窗口内给过明确答案（有光标 或 明确没有光标）。
         result := { Ok: false, Known: false, X: 0, Y: 0, Source: "", AgeMs: 999999 }
         file := this._caretServerFile != "" ? this._caretServerFile : this.CaretServerFile()
@@ -364,10 +386,8 @@ class ImeHud {
         }
         ; 行格式：T|<ahk-tick>|CARET|x|y|h|source  或  T|<ahk-tick>|NOCARET|reason
         ; 用 AHK 自己的 A_TickCount 判新鲜度，避免 unix 时间换算。
-        if RegExMatch(text, "T\|(\d+)\|CARET\|(-?\d+)\|(-?\d+)\|(-?\d+)\|([A-Za-z0-9_-]+)", &match) {
-            age := A_TickCount - Integer(match[1])
-            if (age < 0)
-                age := 0
+        if RegExMatch(text, "^T\|(-?\d+)\|CARET\|(-?\d+)\|(-?\d+)\|(-?\d+)\|([A-Za-z0-9_-]+)", &match) {
+            age := this.TickAge(Integer(match[1]), now)
             result.AgeMs := age
             if (age > this.CaretFreshMs)
                 return result
@@ -378,15 +398,18 @@ class ImeHud {
             result.Ok := InputAnchor.IsRealCaretSource(result.Source)
             return result
         }
-        if RegExMatch(text, "T\|(\d+)\|NOCARET\|([A-Za-z0-9_-]+)", &miss) {
-            age := A_TickCount - Integer(miss[1])
-            if (age < 0)
-                age := 0
+        if RegExMatch(text, "^T\|(-?\d+)\|NOCARET\|([A-Za-z0-9_-]+)", &miss) {
+            age := this.TickAge(Integer(miss[1]), now)
             result.AgeMs := age
             if (age <= this.CaretFreshMs)
                 result.Known := true
         }
         return result
+    }
+
+    ; Both sides use the low 32 bits of the boot clock. Accept older signed helpers too.
+    static TickAge(stamp, now) {
+        return ((now & 0xFFFFFFFF) - (stamp & 0xFFFFFFFF)) & 0xFFFFFFFF
     }
 
     static StartCaretHelper(state, targetHwnd) {
@@ -654,7 +677,7 @@ class ImeHud {
         this.KillHudProcess(hwnd)
     }
 
-    static SendCopyData(hwnd, command) {
+    static SendCopyData(hwnd, command, timeoutMs := 0) {
         data := Buffer(StrPut(command, "UTF-16") * 2, 0)
         StrPut(command, data, "UTF-16")
         copy := Buffer(A_PtrSize = 8 ? 24 : 12, 0)
@@ -669,7 +692,7 @@ class ImeHud {
             "Ptr", 0,
             "Ptr", copy,
             "UInt", 0x0002,
-            "UInt", this.MessageTimeout,
+            "UInt", (timeoutMs > 0 ? timeoutMs : this.MessageTimeout),
             "Ptr*", &result,
             "Ptr"
         )

@@ -591,7 +591,7 @@ class NotifyRenderer {
 
             anchor := 0
             if (isTextOnly || type == "state" || isPopup) {
-                anchor := InputAnchor.Get()
+                anchor := InputAnchor.Resolve()
             }
 
             _preResolved := 0
@@ -652,7 +652,7 @@ class NotifyRenderer {
 
             anchorFound := false
             targetX := 0, targetY := 0
-            if (anchor && anchor.confidence >= 50 && (anchor.x != 0 || anchor.y != 0)) {
+            if (anchor && anchor.found) {
                 anchorFound := true
                 monitor := this.GetMonitorFromPoint(anchor.x, anchor.y)
                 MonitorGetWorkArea(monitor, &left, &top, &right, &bottom)

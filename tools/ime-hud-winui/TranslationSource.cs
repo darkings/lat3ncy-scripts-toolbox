@@ -20,8 +20,6 @@ internal static class TranslationSource
         Clipboard
     }
 
-    public const int MaxChars = 4000;
-
     public readonly struct Result
     {
         public Kind Kind { get; init; }
@@ -78,11 +76,10 @@ internal static class TranslationSource
 
     public static Result FromClipboard(IntPtr owner)
     {
-        string? raw = Native.TryReadClipboardUnicode(owner, MaxChars);
+        string? raw = Native.TryReadClipboardUnicode(owner);
         string text = Normalize(raw);
         HudLog.Line("translation-source=clipboard ok=" + (text.Length > 0)
-            + " chars=" + text.Length
-            + " truncated=" + (raw != null && raw.Length >= MaxChars));
+            + " chars=" + text.Length);
         return new Result
         {
             Kind = Kind.Clipboard,
@@ -144,6 +141,9 @@ internal static class TranslationSource
         Result inferred = Resolve("", "", IntPtr.Zero);
         if (inferred.Kind != Kind.Empty)
             return 310;
+        string longText = new string('x', 3999) + "😀" + new string('y', 2000);
+        if (FromExplicit(longText).Text != longText)
+            return 311;
         return 0;
     }
 
@@ -156,9 +156,6 @@ internal static class TranslationSource
     {
         if (string.IsNullOrWhiteSpace(text))
             return "";
-        string trimmed = text.Replace("\0", "").Trim();
-        if (trimmed.Length <= MaxChars)
-            return trimmed;
-        return trimmed[..MaxChars];
+        return text.Replace("\0", "").Trim();
     }
 }

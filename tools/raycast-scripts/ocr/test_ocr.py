@@ -65,6 +65,40 @@ class NotificationTests(unittest.TestCase):
         notify.assert_called_once()
         self.assertIn("model unavailable", notify.call_args.args[1])
 
+    def test_success_notification_follows_copy_even_when_diagnostic_write_fails(self):
+        events = []
+        image = types.SimpleNamespace(size=(320, 100))
+        engine = Mock(return_value=([([], "fixed OCR text", .99)], None))
+        def notify(title, message, **kwargs):
+            self.assertIn("已复制", title)
+            self.assertEqual(["copy"], events)
+            events.append("notify")
+        def write(*args):
+            events.append("write")
+            raise PermissionError("diagnostic path unavailable")
+        with patch.dict(sys.modules, {"numpy": types.SimpleNamespace(array=lambda value: value)}), \
+             patch.object(ocr, "copy_to_clipboard", side_effect=lambda text: events.append("copy")), \
+             patch.object(ocr, "notify", side_effect=notify), patch.object(ocr, "write_result", side_effect=write):
+            self.assertEqual(0, ocr.recognize(engine, image, "result.txt", notify_on_done=True))
+        self.assertEqual(["copy", "notify", "write"], events)
+
+    def test_copy_failure_reports_only_error_and_returns_nonzero(self):
+        image = types.SimpleNamespace(size=(320, 100))
+        engine = Mock(return_value=([([], "fixed OCR text", .99)], None))
+        result = Path(self.temp.name)/"result.txt"
+        def run(**kwargs):
+            return ocr.recognize(engine, image, kwargs["result_file"], notify_on_done=kwargs["notify_on_done"])
+        with patch.dict(sys.modules, {"numpy": types.SimpleNamespace(array=lambda value: value)}), \
+             patch.object(sys, "argv", ["ocr.py", "--no-screenshot", "--result-file", str(result), "--notify-on-done"]), \
+             patch.object(ocr, "run_ocr_from_clipboard", side_effect=run), \
+             patch.object(ocr, "copy_to_clipboard", side_effect=RuntimeError("clipboard unavailable")), \
+             patch.object(ocr, "notify") as notify:
+            self.assertEqual(1, ocr.main())
+        notify.assert_called_once()
+        self.assertNotIn("已复制", notify.call_args.args[0])
+        self.assertIn("clipboard unavailable", notify.call_args.args[1])
+        self.assertTrue(result.read_text("utf-8").startswith("ERROR:"))
+
 
 if __name__ == "__main__":
     unittest.main()

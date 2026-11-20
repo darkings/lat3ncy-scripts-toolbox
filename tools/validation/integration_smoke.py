@@ -2,7 +2,8 @@
 
 Run OCR with its dedicated interpreter. TTS writes files without audio playback;
 the separate playback mode explicitly exercises MCI using silent PCM fixtures.
-No clipboard, resident, task, power setting or device connection is changed.
+The guarded ocr-clipboard mode explicitly uses synthetic clipboard data.
+No resident, task, power setting or device connection is changed.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 import uuid
 import wave
@@ -71,6 +73,84 @@ def ocr_probe(output: Path) -> dict:
             'clipboard': 'adapter captured handoff; real clipboard not touched',
             'seconds': round(time.monotonic()-start, 2),
             'packages': versions(['rapidocr-onnxruntime', 'onnxruntime', 'Pillow', 'numpy', 'pyperclip'])}
+
+
+def ocr_clipboard_probe(output: Path) -> dict:
+    """Guarded opt-in: real clipboard image -> real OCR -> real copied text."""
+    from PIL import Image, ImageDraw, ImageFont
+    import pyperclip
+    from clipboard_fixture import copy_image, record_sequence, sequence
+    ocr = load_module('toolbox_clipboard_ocr', 'tools/raycast-scripts/ocr/ocr.py')
+    ocr._SILENT_MODE = True
+    lease = output/'clipboard-sequence.txt'
+    image = Image.new('RGB', (1100, 230), 'white')
+    font = ImageFont.truetype(str(Path(os.environ['SystemRoot'])/'Fonts/arial.ttf'), 48)
+    ImageDraw.Draw(image).multiline_text((35, 35), 'Toolbox OCR 2026\nLatency test 12345', font=font, fill='black', spacing=20)
+    image.save(output/'input.png')
+    ready, stopped = threading.Event(), threading.Event()
+    errors, notifications, copies, engines = [], [], [], []
+    real_copy = ocr.copy_to_clipboard
+    real_load = ocr.load_engine
+    real_grab = ocr.ImageGrab.grabclipboard
+    def fixed_image_only():
+        if not lease.exists():
+            return None
+        value = real_grab()
+        if isinstance(value, Image.Image) and (value.size != image.size or value.convert('RGB').tobytes() != image.tobytes()):
+            raise RuntimeError('Clipboard image no longer belongs to this fixture')
+        return value
+    ocr.ImageGrab.grabclipboard = fixed_image_only
+    def audited_load():
+        engine = real_load()
+        engines.append(engine)
+        return engine
+    ocr.load_engine = audited_load
+    def audited_copy(text):
+        if sequence() != int(lease.read_text('ascii')):
+            raise RuntimeError('Clipboard changed outside this fixture')
+        real_copy(text)
+        copies.append(text)
+        record_sequence(lease)
+    ocr.copy_to_clipboard = audited_copy
+    ocr._debug = lambda message: ready.set() if message.startswith('baseline_seq=') else None
+    def notification(title, message, **kwargs):
+        if '已复制' in title:
+            notifications.append(bool(copies) and pyperclip.paste() == copies[-1])
+    ocr.notify = notification
+    def inject():
+        while not ready.wait(.05):
+            if stopped.is_set():
+                return
+        if not stopped.is_set():
+            try:
+                copy_image(image, lease)
+            except Exception as error:
+                errors.append(type(error).__name__)
+    thread = threading.Thread(target=inject, daemon=True)
+    thread.start()
+    try:
+        code = ocr.run_ocr_from_clipboard(timeout_seconds=3, inject_screenshot=False,
+            result_file=str(output/'result.txt'), notify_on_done=True)
+    finally:
+        stopped.set()
+        thread.join(2)
+    text = (output/'result.txt').read_text('utf-8') if (output/'result.txt').exists() else ''
+    compact = ''.join(text.lower().split())
+    delivered = code == 0 and not errors and all(token in compact for token in ('toolbox', '2026', '12345')) and pyperclip.paste() == text
+    before = sequence()
+    engine = engines[0]
+    blank = ocr.recognize(engine, Image.new('RGB', (600, 200), 'white'), result_file=str(output/'blank.txt'))
+    blank_ok = blank == 0 and (output/'blank.txt').read_text('utf-8') == '' and sequence() == before
+    ocr.load_engine = lambda: engine
+    cancel = ocr.run_ocr_from_clipboard(timeout_seconds=.3, inject_screenshot=False,
+        result_file=str(output/'cancel.txt'))
+    cancelled = cancel == 0 and not (output/'cancel.txt').exists() and sequence() == before
+    notified = bool(notifications) and all(notifications)
+    ocr.ImageGrab.grabclipboard = real_grab
+    return {'status': 'passed' if delivered and blank_ok and cancelled and notified else 'failed',
+        'realClipboard': True, 'imageToText': delivered, 'blankPreservedClipboard': blank_ok,
+        'cancelPreservedClipboard': cancelled, 'completionAfterCopy': notified,
+        'workerRestore': 'external ClipboardAll guard required', 'errors': errors}
 
 
 def audio_length(path: Path) -> int:
@@ -285,15 +365,19 @@ def local_tts_probe(output: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('component', choices=['ocr', 'tts', 'playback', 'local-tts'])
+    parser.add_argument('component', choices=['ocr', 'ocr-clipboard', 'tts', 'playback', 'local-tts'])
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
+    if args.component == 'ocr-clipboard' and os.environ.get('TOOLBOX_CLIPBOARD_GUARD') != '1':
+        parser.error('Use desktop-fixture.ahk --ocr-clipboard-smoke to preserve the clipboard')
     output = (args.output or ROOT / '.tmp/integration' / uuid.uuid4().hex).resolve()
     output.mkdir(parents=True, exist_ok=False)
     result = {'component': args.component, 'python': sys.version, 'executable': sys.executable,
               'scope': 'synthetic fixture; no UI, clipboard, playback or device-state changes'}
     try:
-        probes = {'ocr': ocr_probe, 'tts': tts_probe, 'playback': playback_probe, 'local-tts': local_tts_probe}
+        probes = {'ocr': ocr_probe, 'ocr-clipboard': ocr_clipboard_probe, 'tts': tts_probe, 'playback': playback_probe, 'local-tts': local_tts_probe}
+        if args.component == 'ocr-clipboard':
+            result['scope'] = 'synthetic image and real clipboard; ClipboardAll guarded by the parent fixture'
         if args.component == 'playback':
             result['scope'] = 'real MCI playback/cancellation with silent PCM; no speech or device setting changes'
         result.update(probes[args.component](output))

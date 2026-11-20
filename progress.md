@@ -352,6 +352,14 @@
 - TTS 36 项行为测试通过；此前同一生产代码的全量及干净 clone 离线/助手/WinUI 构建/AHK 套件通过，追加两个安装失败测试后再执行最终离线套件。证据 `.tmp/integration/20261120-local-host/`、`.tmp/validation/20261120-local-host/`。
 - 最终离线全套 81 项 Python 行为测试、65 个 PowerShell AST/BOM 检查通过；安装查询失败撤销 ready 的补充回归通过。已 ForceReload：AHK 25052、HUD 52104、光标助手 34920，PING/实例/归属健康检查通过。HUD 无产物字节变化，个人配置四份哈希保持不变。
 
+## 会话：2026-11-20 OCR 通知顺序与真实剪贴板
+
+- 上轮新增剪贴板探针初测：真实图片→模型→复制、空白/无新图取消保护通过，但 completionAfterCopy=false；Computer Use 浏览器验收因无法可靠确认 URL 被停止，当轮未修复/提交，静态浏览器测试页保留待测。
+- 将 detached result-file 分支的复制提前到成功通知之前；补复制失败仅报错/nonzero，以及诊断文件写失败不吞成功交付的行为回归。OCR 6 项行为测试通过。
+- 完成显式 AHK 保护入口和原生 DIB/序列号探针：ClipboardAll 仅驻留父进程内存、工作进程必需 Job/90 秒预算，固定像素输入校验及复制前归属检查。重跑真实模型/系统剪贴板后，通知触发顺序、空白/取消保护、原 ClipboardAll 恢复全部通过，进程/Job 句柄关闭。观察通知调用边界，未声称实际 Toast 展示已验收。
+- 新增 DIB 内存转移/失败释放的离线回归；Windows 离线套件通过，总计 84 项 Python 行为测试。证据 `.tmp/integration/20261120-browser-ocr/`，修复前/后报告均保留。
+- 本轮不再操作浏览器；没有重载常驻、改配置或操作设备。OCR 为按需 Python 进程，下一次调用直接读取修复源码。
+
 ## 会话：2026-11-19 二次评审修复部署与下一步分析
 
 - 用户授权替换并重载后，检查 test-out 源码戳及 self-test，备份生产差异文件后替换 `.source-stamp` / `ImeHudWinUi.dll` / `resources.pri`。

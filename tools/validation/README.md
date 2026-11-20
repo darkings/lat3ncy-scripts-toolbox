@@ -23,7 +23,7 @@ $python = (python tools/tts/install-deps.py --check | ConvertFrom-Json).python
 
 这是本机新 clone 验证，仍使用本机已安装的 SDK、AHK、Python 及 NuGet 缓存；不是干净操作系统或远端 CI 的替代品。远端 workflow 分为 offline 和 winui 两个任务；WinUI 使用独立构建入口及已验证的 .NET 10.0.404。
 
-`integration_smoke.py` 是显式执行的集成探针，不在离线 CI 自动运行。OCR 需要已安装的 RapidOCR/Pillow；`tts` 需要锁定环境和网络，`local-tts` 禁止在线边界、要求当前上下文的 SAPI 可用。记录 passed/failed/partial，不会安装模型、切换音频、播放声音、操作用户桌面或改变电源/设备连接状态。
+`integration_smoke.py` 是显式执行的集成探针，不在离线 CI 自动运行。OCR 需要已安装的 RapidOCR/Pillow；`tts` 需要锁定环境和网络，`local-tts` 禁止在线边界、要求当前上下文的 SAPI 可用。记录 passed/failed/partial，不会安装模型、切换音频、操作用户桌面或改变电源/设备连接状态。`ocr-clipboard` 是下文单独提供保护入口的真实剪贴板例外；`playback` 是静音播放例外。
 
 `playback` 是单独的可选例外：真实调用 MCI 播放静音 WAV，验证正常完成以及播放中的进程取消，不朗读文字或改变音量/默认端点。TTS 探针还运行真实任务编排和终态协议，设备播放边界由文件解码器替代；其通过不等于听感验收。AHK 本机套件另覆盖实际父子进程取消、句柄关闭、归属校验及残片清理。
 
@@ -50,3 +50,25 @@ $ahk = 'C:\path\to\v2\AutoHotkey64.exe' # 替换为已安装的 v2 引擎路径
 探针只在内存保存原 ClipboardAll，日志仅记录布尔值和长度；正常结束时仅在剪贴板仍为本探针已知内容时恢复，避免覆盖期间无关的新复制内容。请正常退出可见窗口，强制结束无法执行恢复回调。
 
 2026-11-20 在单屏、HUD DPI 192 的环境实测：真实 Caps+S 连续三轮，前两轮播放中被替换且进程退出，第三轮两段 MCI 播放正常完成；任务目录/残片无遗留，完整剪贴板恢复通过。上述三个协议探针均通过，证据 `.tmp/integration/20261120-desktop/`。多屏、浏览器/终端选区、复制按钮点击和听感仍待验收。
+
+## OCR 真实剪贴板交付
+
+从仓库根目录运行，要求已有 `tools/raycast-scripts/ocr/.venv314` 及模型。使用 AHK v2 保护入口，不能直接运行 Python 的 `ocr-clipboard` 模式：
+
+```powershell
+New-Item -ItemType Directory -Force .tmp/integration/desktop | Out-Null
+$ahk = 'C:\path\to\v2\AutoHotkey64.exe'
+$fixture = (Resolve-Path tools/validation/desktop-fixture.ahk).Path
+$log = Join-Path (Resolve-Path .tmp/integration/desktop).Path 'ocr.log'
+$run = Start-Process -FilePath $ahk -ArgumentList @('/ErrorStdOut',('"'+$fixture+'"'),'--ocr-clipboard-smoke',('"'+$log+'"')) -WindowStyle Hidden -Wait -PassThru
+$run.ExitCode
+Get-Content $log
+```
+
+父进程仅在内存保存 ClipboardAll，工作进程绑定必需 Job、总预算 90 秒。工作进程在生产轮询函数取得序列号基线后，把生成的固定 DIB 图片写入真实剪贴板，由真实 RapidOCR 和生产复制函数交付文本；记录序列号归属，不存原剪贴板。实际图片必须与固定图像的像素一致才交给模型，复制前还核对归属。正常结束时只有当前序列号仍属于探针才恢复完整 ClipboardAll；无关的新复制保留并报告恢复未确认。这里的序列号检查不承诺跨进程原子事务。
+
+探针验证图片→文本、空白不覆盖、无新图片时取消不覆盖、完成通知函数在复制之后触发。通知边界用观察器代替实际 Toast，**不代表系统 Toast 展示、截图框选或 Raycast detached 入口已验收**。直接运行普通 `ocr` 探针仍不改剪贴板。DIB 内存只在成功 `SetClipboardData` 后交给系统；失败路径释放内存和隐藏 owner 窗口。[Windows 剪贴板内存约定](https://learn.microsoft.com/en-us/windows/win32/dataxchg/clipboard-operations)。
+
+2026-11-20 首次实测发现成功通知先于复制，`completionAfterCopy=false`；修复后所有子项与 ClipboardAll 恢复通过，Job/进程句柄已关闭。证据 `.tmp/integration/20261120-browser-ocr/ocr-guarded-final.log` 及该日志指向的 `report.json`。
+
+`browser-fixture.html` 仅提供手工可重复的固定中英文、换行、竖线和 emoji 选区，不访问网络或读取剪贴板。此前浏览器控制接口超时，Windows Computer Use 随后因无法可靠确认当前 URL 而停止；浏览器选区/锚点验收仍待执行，没有用 OCR 或静态页面测试代替。

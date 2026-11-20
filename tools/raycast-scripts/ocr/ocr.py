@@ -284,6 +284,9 @@ def recognize(
         # result 文件只是诊断副产物，写不进去绝不能再吞掉交付动作。
         # 2026-11-06 事故：WMI 创建的进程写 %TEMP% 抛 PermissionError，
         # 因为 write_result 排在复制/通知之前，识别成功却「长时间没反应」。
+        if text:
+            # 必须完成交付后才提示“已复制”；失败交给 main 的错误通知。
+            copy_to_clipboard(text)
         if notify_on_done:
             preview = text.replace("\r", " ").replace("\n", " ")
             if len(preview) > 90:
@@ -292,8 +295,6 @@ def recognize(
                 notify("✓ OCR 文本已复制", preview)
             else:
                 notify("! 未识别到文字", "所选区域内未检测到有效字符")
-        if text:
-            copy_to_clipboard(text)
         try:
             write_result(result_file, text)
         except OSError as error:

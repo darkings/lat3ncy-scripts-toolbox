@@ -6,11 +6,13 @@
 ; Opt-in visible fixture. Controls are operated by a person or Computer Use;
 ; this app does not inject keys, capture other windows, or call voice services.
 protocolMode := A_Args.Length = 2 && A_Args[1] = "--protocol-smoke"
-if (A_Args.Length != 1 && !protocolMode)
+ocrMode := A_Args.Length = 2 && A_Args[1] = "--ocr-clipboard-smoke"
+if (A_Args.Length != 1 && !protocolMode && !ocrMode)
     ExitApp 2
 
-global EvidenceFile := A_Args[protocolMode ? 2 : 1]
+global EvidenceFile := A_Args[(protocolMode || ocrMode) ? 2 : 1]
 global InitialClipboard := ClipboardAll()
+global ClipboardLease := ""
 global SourceText := "Toolbox speech validation. This is a fixed test sentence for checking interruption and recovery. "
     . "The second request should replace the first request and finish normally. "
     . "这里是固定测试文本，用于验证中英文朗读以及连续打断。"
@@ -21,6 +23,8 @@ LongResult .= "END-OF-FIXTURE-🙂"
 OnExit RestoreOwnedClipboard
 if protocolMode
     ExitApp RunPanelProtocolSmoke()
+if ocrMode
+    ExitApp RunOcrClipboardSmoke()
 
 global FixtureWindow := Gui(, "Toolbox desktop validation fixture")
 FixtureWindow.SetFont("s11", "Segoe UI")
@@ -65,11 +69,57 @@ CheckCopied(*) {
 }
 
 RestoreOwnedClipboard(*) {
-    global SourceText, LongResult, InitialClipboard
+    global SourceText, LongResult, InitialClipboard, ClipboardLease
+    if (ClipboardLease != "") {
+        try {
+            expected := Integer(Trim(FileRead(ClipboardLease)))
+            current := DllCall("GetClipboardSequenceNumber", "UInt")
+            if (expected && current = expected)
+                A_Clipboard := InitialClipboard
+        }
+        return
+    }
     ; Preserve unrelated clipboard changes made while the fixture was open.
     current := A_Clipboard
     if (current == SourceText || current == LongResult)
         A_Clipboard := InitialClipboard
+}
+
+RunOcrClipboardSmoke() {
+    global EvidenceFile, ClipboardLease, InitialClipboard
+    SplitPath EvidenceFile, , &evidenceRoot
+    SplitPath A_ScriptFullPath, , &validationDir
+    repo := validationDir "\..\.."
+    python := repo "\tools\raycast-scripts\ocr\.venv314\Scripts\python.exe"
+    output := evidenceRoot "\ocr-clipboard-" A_TickCount "-" Random(1000, 9999)
+    ClipboardLease := output "\clipboard-sequence.txt"
+    job := "", code := 1
+    oldGuard := EnvGet("TOOLBOX_CLIPBOARD_GUARD")
+    try {
+        EnvSet "TOOLBOX_CLIPBOARD_GUARD", "1"
+        command := '"' python '" "' validationDir '\integration_smoke.py" ocr-clipboard --output "' output '"'
+        job := ProcessNoWindow.StartAsync(command, evidenceRoot "\ocr-worker.log", 90000, true)
+        while !job.Done {
+            job.Poll()
+            Sleep 50
+        }
+        code := job.Status = "exited" ? job.ExitCode : 1
+        FileAppend "ocr-worker exit=" code " job=" job.AssignedToJob " handles_closed=" job.HandlesClosed "`nreport=" output "\report.json`n", EvidenceFile, "UTF-8-RAW"
+    } catch {
+        FileAppend "ocr-worker failed=true`n", EvidenceFile, "UTF-8-RAW"
+    } finally {
+        if IsObject(job)
+            job.Dispose()
+        EnvSet "TOOLBOX_CLIPBOARD_GUARD", oldGuard
+        RestoreOwnedClipboard()
+        current := ClipboardAll()
+        restored := current.Size = InitialClipboard.Size
+            && (!current.Size || DllCall("msvcrt\memcmp", "Ptr", current.Ptr, "Ptr", InitialClipboard.Ptr, "UPtr", current.Size, "CDecl Int") = 0)
+        FileAppend "clipboard-restored passed=" (restored ? "true" : "false") "`n", EvidenceFile, "UTF-8-RAW"
+        if !restored
+            code := 1
+    }
+    return code
 }
 
 RunPanelProtocolSmoke() {

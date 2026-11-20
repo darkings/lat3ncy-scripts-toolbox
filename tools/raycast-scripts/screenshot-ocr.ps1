@@ -17,6 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
+. (Join-Path $PSScriptRoot 'ocr\OcrHost.ps1')
 
 trap {
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
@@ -91,10 +92,12 @@ if ($mode -eq 'rapidocr')
   }
 
   # Python 解析顺序：
-  #   1. ocr\.venv314\Scripts\pythonw.exe —— 专用 3.14 venv（uv 管理）。
+  #   1. venv 声明的同版本基础 pythonw + -I -S/ocr_host.py；依赖仍只用该 venv。
+  #      基础宿主避免仓库 Low 标签导致通知 API 失败，不改 ACL/安装包。
+  #   2. ocr\.venv314\Scripts\pythonw.exe —— 基础宿主不可用时保留旧入口。
   #      RapidOCR 的 onnxruntime 只有 cp311-cp314 wheel，scoop 全局 Python 是 3.15
   #      时装不上；venv 自带 .gitignore（uv 生成），不入库。
-  #   2. 全局 pythonw / pyw —— venv 不存在时兜底（Python ≤3.14 的机器直接可用）。
+  #   3. 全局 pythonw / pyw —— venv 不存在时兜底（Python ≤3.14 的机器直接可用）。
   $pythonCandidates = @()
   $venvPythonw = Join-Path $PSScriptRoot 'ocr\.venv314\Scripts\pythonw.exe'
   if (Test-Path -LiteralPath $venvPythonw -PathType Leaf)
@@ -105,6 +108,7 @@ if ($mode -eq 'rapidocr')
   $pythonCandidates += Get-Command pyw.exe -ErrorAction SilentlyContinue
 
   $pythonExe = $null
+  $hostPrefix = @()
   foreach ($candidate in $pythonCandidates)
   {
     if ($candidate -is [string])
@@ -117,6 +121,12 @@ if ($mode -eq 'rapidocr')
       $pythonExe = $candidate.Source
       break
     }
+  }
+  $hostSpec = Get-OcrLaunchSpec -ModuleDirectory (Join-Path $PSScriptRoot 'ocr')
+  if ($hostSpec) {
+    $pythonExe = $hostSpec.Python
+    $ocrScript = $hostSpec.Script
+    $hostPrefix = $hostSpec.Prefix
   }
   if (-not $pythonExe)
   {
@@ -152,7 +162,8 @@ if ($mode -eq 'rapidocr')
   )
   Write-OcrDebug ('ps1 mode=rapidocr user={0} python={1} result={2}' -f $env:USERNAME, $pythonExe, $resultFile)
 
-  $cmdLine = '"{0}" "{1}" --no-screenshot --result-file "{2}" --notify-on-done' -f $pythonExe, $ocrScript, $resultFile
+  $prefixLine = if ($hostPrefix.Count) { ($hostPrefix -join ' ') + ' ' } else { '' }
+  $cmdLine = '"{0}" {1}"{2}" --no-screenshot --result-file "{3}" --notify-on-done' -f $pythonExe, $prefixLine, $ocrScript, $resultFile
   $spawned = $false
   try
   {
@@ -169,7 +180,7 @@ if ($mode -eq 'rapidocr')
     try
     {
       $started = Start-Process -FilePath $pythonExe `
-        -ArgumentList ('"{0}"' -f $ocrScript), '--no-screenshot', '--result-file', ('"{0}"' -f $resultFile), '--notify-on-done' `
+        -ArgumentList ($hostPrefix + @(('"{0}"' -f $ocrScript), '--no-screenshot', '--result-file', ('"{0}"' -f $resultFile), '--notify-on-done')) `
         -PassThru
       Write-OcrDebug ('fallback start-process pid={0}' -f $started.Id)
     } catch

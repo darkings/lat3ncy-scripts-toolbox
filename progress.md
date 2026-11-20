@@ -360,6 +360,15 @@
 - 新增 DIB 内存转移/失败释放的离线回归；Windows 离线套件通过，总计 84 项 Python 行为测试。证据 `.tmp/integration/20261120-browser-ocr/`，修复前/后报告均保留。
 - 本轮不再操作浏览器；没有重载常驻、改配置或操作设备。OCR 为按需 Python 进程，下一次调用直接读取修复源码。
 
+## 会话：2026-11-20 OCR 通知宿主与提交验证
+
+- 浏览器控制仍超时；Maestro 提供的 Chromium 条目未连接，未运行浏览器测试。转向真实通知交付，未绕过原浏览器 URL 校验。
+- 原 OCR Low/RID4096 在 CreateToastNotifier 阶段失败，内层 InvalidOperationException/HRESULT 0x80073D54；全局及同版基础 Medium/RID8192 均成功提交、读回并清理固定测试记录。未修改权限/ACL/包注册。
+- 新增 ocr_host.py 和纯 PowerShell 启动选择，RapidOCR 使用 venv 声明的同版基础 pythonw -I -S，仅加载既有 .venv314 依赖；验证版本和基础目录，保留声明/文件不可用时的旧入口回退，不安装新包、不动模型或个人配置。
+- 真实通知 runner 的同步/异步/异常/10 秒超时、中文/emoji/引号/换行参数与临时文件清理通过；实际选中 pythonw 的系统 Toast 提交/历史读取/清理通过，横幅被抑制未视觉验收。真实新宿主模型文字/空白通过。
+- 新宿主剪贴板保护探针在原始 ClipboardAll 备份阶段失败，原生 OpenClipboard 为 access denied，未写入剪贴板；旧后台错误窗口导致测试等待，已精确结束本次测试实例，并改为有界重试/元数据错误退出。新宿主完整剪贴板复测保持待办，没有记为通过。
+- OCR 新增 5 项宿主/启动选择行为回归，合计 11 项 OCR / 89 项全仓库 Python；离线套件通过。证据 `.tmp/integration/20261120-ocr-notify/`。无需重载常驻，后续 RapidOCR 调用读取新启动入口。
+
 ## 会话：2026-11-19 二次评审修复部署与下一步分析
 
 - 用户授权替换并重载后，检查 test-out 源码戳及 self-test，备份生产差异文件后替换 `.source-stamp` / `ImeHudWinUi.dll` / `resources.pri`。

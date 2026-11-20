@@ -1,6 +1,7 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Off
 #NoTrayIcon
+#Warn All, StdOut
 #Include ..\..\shared\notify\translation-panel.ahk
 
 ; Opt-in visible fixture. Controls are operated by a person or Computer Use;
@@ -11,7 +12,8 @@ if (A_Args.Length != 1 && !protocolMode && !ocrMode)
     ExitApp 2
 
 global EvidenceFile := A_Args[(protocolMode || ocrMode) ? 2 : 1]
-global InitialClipboard := ClipboardAll()
+OnError FixtureError
+global InitialClipboard := CaptureClipboard()
 global ClipboardLease := ""
 global SourceText := "Toolbox speech validation. This is a fixed test sentence for checking interruption and recovery. "
     . "The second request should replace the first request and finish normally. "
@@ -44,6 +46,25 @@ Record(name, detail) {
     line := FormatTime(, "yyyy-MM-dd HH:mm:ss") " " name " " detail
     FileAppend line "`n", EvidenceFile, "UTF-8-RAW"
     StatusText.Text := line
+}
+
+FixtureError(failureObject, *) {
+    global EvidenceFile
+    detail := InStr(failureObject.What, "ClipboardAll") = 1 ? " detail=" failureObject.Message : ""
+    try FileAppend "fixture-error type=" Type(failureObject) " line=" failureObject.Line " api=" failureObject.What detail "`n", EvidenceFile, "UTF-8-RAW"
+    ExitApp 1
+}
+
+CaptureClipboard() {
+    deadline := A_TickCount + 2000
+    loop {
+        try return ClipboardAll()
+        catch as clipFailure {
+            if (A_TickCount >= deadline)
+                throw clipFailure
+        }
+        Sleep 100
+    }
 }
 
 CheckRestored(*) {
@@ -91,20 +112,31 @@ RunOcrClipboardSmoke() {
     SplitPath A_ScriptFullPath, , &validationDir
     repo := validationDir "\..\.."
     python := repo "\tools\raycast-scripts\ocr\.venv314\Scripts\python.exe"
+    hostPrefix := "", hostArgument := ""
+    try {
+        module := repo "\tools\raycast-scripts\ocr"
+        settings := FileRead(module "\.venv314\pyvenv.cfg", "UTF-8")
+        if (RegExMatch(settings, "m)^\s*home\s*=\s*([^\r\n]+)", &home)
+            && RegExMatch(settings, "m)^\s*(?:version_info|version)\s*=\s*3\.(?:11|12|13|14)(?:\.\d+)?\s*$")
+            && FileExist(Trim(home[1]) "\pythonw.exe") && DirExist(module "\.venv314\Lib\site-packages")) {
+            python := Trim(home[1]) "\pythonw.exe"
+            hostPrefix := " -I -S", hostArgument := " --ocr-host"
+        }
+    }
     output := evidenceRoot "\ocr-clipboard-" A_TickCount "-" Random(1000, 9999)
     ClipboardLease := output "\clipboard-sequence.txt"
     job := "", code := 1
     oldGuard := EnvGet("TOOLBOX_CLIPBOARD_GUARD")
     try {
         EnvSet "TOOLBOX_CLIPBOARD_GUARD", "1"
-        command := '"' python '" "' validationDir '\integration_smoke.py" ocr-clipboard --output "' output '"'
+        command := '"' python '"' hostPrefix ' "' validationDir '\integration_smoke.py" ocr-clipboard' hostArgument ' --output "' output '"'
         job := ProcessNoWindow.StartAsync(command, evidenceRoot "\ocr-worker.log", 90000, true)
         while !job.Done {
             job.Poll()
             Sleep 50
         }
         code := job.Status = "exited" ? job.ExitCode : 1
-        FileAppend "ocr-worker exit=" code " job=" job.AssignedToJob " handles_closed=" job.HandlesClosed "`nreport=" output "\report.json`n", EvidenceFile, "UTF-8-RAW"
+        FileAppend "ocr-worker exit=" code " job=" job.AssignedToJob " handles_closed=" job.HandlesClosed "`npython=" python "`nreport=" output "\report.json`n", EvidenceFile, "UTF-8-RAW"
     } catch {
         FileAppend "ocr-worker failed=true`n", EvidenceFile, "UTF-8-RAW"
     } finally {

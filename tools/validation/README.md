@@ -72,3 +72,24 @@ Get-Content $log
 2026-11-20 首次实测发现成功通知先于复制，`completionAfterCopy=false`；修复后所有子项与 ClipboardAll 恢复通过，Job/进程句柄已关闭。证据 `.tmp/integration/20261120-browser-ocr/ocr-guarded-final.log` 及该日志指向的 `report.json`。
 
 `browser-fixture.html` 仅提供手工可重复的固定中英文、换行、竖线和 emoji 选区，不访问网络或读取剪贴板。此前浏览器控制接口超时，Windows Computer Use 随后因无法可靠确认当前 URL 而停止；浏览器选区/锚点验收仍待执行，没有用 OCR 或静态页面测试代替。
+
+## OCR 宿主与通知提交
+
+2026-11-20 进一步对照：旧 `.venv314` 的 Low/RID 4096 上下文在 `CreateToastNotifier` 返回 `0x80073D54`；同版本基础解释器的 Medium/RID 8192 上下文能够提交并读回测试 Toast。没有修改通知权限、包注册或文件 ACL。
+
+RapidOCR 启动器现在优先读取 `.venv314/pyvenv.cfg` 的基础 Python，使用 `-I -S ocr_host.py`，只加载原环境 `Lib/site-packages`，不重装依赖。宿主验证主次版本、基础目录和隔离标志后才加载二进制依赖；宿主声明/文件不可用时保留旧 venv、全局解释器回退。系统 OCR 分支不使用这个宿主。启动期版本/基础目录不匹配会退出并写 `ERROR:` 诊断，不尝试混用 ABI。
+
+```powershell
+. ./tools/raycast-scripts/ocr/OcrHost.ps1
+$spec = Get-OcrLaunchSpec (Join-Path (Get-Location) 'tools/raycast-scripts/ocr')
+$python = Join-Path (Split-Path $spec.Python -Parent) 'python.exe'
+& $python -I -S tools/raycast-scripts/ocr/ocr_host.py --check
+& $python -I -S tools/validation/integration_smoke.py ocr --ocr-host
+& $python -I -S tools/validation/integration_smoke.py ocr-notify --ocr-host
+```
+
+`ocr-notify` 真实运行 OCR 的通知 runner，检查同步/异步、中文/emoji/引号/换行、异常以及 10 秒超时后的进程退出和文件清理；接收端用固定脚本观测数据，不在这些场景弹 Toast。随后独立调用真实 Windows 通知 API，用唯一 tag/group、抑制横幅的固定测试通知验证历史记录，并仅删除自己的测试记录。这是系统提交验收，**不等于横幅展示、真实 Raycast 调度或截图框选验收**。[ToastNotificationManager API](https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotificationmanager)。
+
+同版基础 `python.exe/pythonw.exe` 的真实模型及通知探针均通过；无窗口宿主确认 RID=8192，临时 runner 全部清理。证据 `.tmp/integration/20261120-ocr-notify/windowless-notify/report.json`、`host-model/report.json`。新宿主的完整剪贴板复测本轮未执行成功：原 ClipboardAll 备份失败，原生 `OpenClipboard` 返回拒绝访问，保护入口在写入前退出。既有旧宿主成功证据不替代这次待复测项。
+
+剪贴板保护入口现在对备份作约 2 秒的有界重试，失败记录元数据并退出，避免后台错误对话框无限等待。接口访问恢复后再运行 `--ocr-clipboard-smoke`；浏览器控制接口仍超时，Maestro 列出的 Chromium 未连接，因此浏览器验收继续待办。

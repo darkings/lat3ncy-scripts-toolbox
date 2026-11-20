@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import ctypes
 import importlib.metadata
 import importlib.util
@@ -79,7 +80,8 @@ def ocr_clipboard_probe(output: Path) -> dict:
     """Guarded opt-in: real clipboard image -> real OCR -> real copied text."""
     from PIL import Image, ImageDraw, ImageFont
     import pyperclip
-    from clipboard_fixture import copy_image, record_sequence, sequence
+    clipboard = load_module('toolbox_clipboard_fixture', 'tools/validation/clipboard_fixture.py')
+    copy_image, record_sequence, sequence = clipboard.copy_image, clipboard.record_sequence, clipboard.sequence
     ocr = load_module('toolbox_clipboard_ocr', 'tools/raycast-scripts/ocr/ocr.py')
     ocr._SILENT_MODE = True
     lease = output/'clipboard-sequence.txt'
@@ -151,6 +153,67 @@ def ocr_clipboard_probe(output: Path) -> dict:
         'realClipboard': True, 'imageToText': delivered, 'blankPreservedClipboard': blank_ok,
         'cancelPreservedClipboard': cancelled, 'completionAfterCopy': notified,
         'workerRestore': 'external ClipboardAll guard required', 'errors': errors}
+
+
+def ocr_notify_probe(output: Path) -> dict:
+    """Real notification runners; separate suppressed Windows API/history test."""
+    ocr = load_module('toolbox_notify_ocr', 'tools/raycast-scripts/ocr/ocr.py')
+    title, message = 'OCR 通知验证 " \' < > & 🙂', '固定测试文字\n第二行 | $literal @\''
+    original = (ocr.SCRIPT_DIR, ocr._SILENT_MODE, ocr._debug, ocr._resolve_toast_script, subprocess.Popen)
+    records, logs, results = [], [], {}
+    def start(args, **kwargs):
+        child = original[4](args, **kwargs)
+        records.append((child, Path(args[args.index('-File')+1])))
+        return child
+    prior_record = os.environ.get('TOOLBOX_NOTIFY_RECORD')
+    try:
+        ocr.SCRIPT_DIR, ocr._SILENT_MODE, ocr._debug = str(output), False, logs.append
+        subprocess.Popen = start
+        for case, wait in [('sync', True), ('async', False), ('error', True), ('timeout', True)]:
+            record, helper = output/(case+'.txt'), output/(case+'.ps1')
+            os.environ['TOOLBOX_NOTIFY_RECORD'] = str(record)
+            script = 'param([string]$Title,[string]$Message)\n'
+            if case == 'async': script += 'Start-Sleep -Milliseconds 600\n'
+            if case == 'error': script += "throw 'controlled fixture error'\n"
+            elif case == 'timeout': script += 'Start-Sleep -Seconds 30\n'
+            else:
+                title64, message64 = (base64.b64encode(value.encode()).decode() for value in (title, message))
+                script += f"$same=($Title -ceq [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{title64}'))) -and ($Message -ceq [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{message64}')))\n"
+                script += "[IO.File]::WriteAllText($env:TOOLBOX_NOTIFY_RECORD,[string]$same)\n"
+            helper.write_text(script, encoding='ascii')
+            ocr._resolve_toast_script = lambda: helper
+            begun = time.monotonic()
+            ocr.notify(title, message, wait=wait)
+            elapsed = time.monotonic()-begun
+            child, runner = records[-1]
+            retained = runner.exists()
+            if not wait: child.wait(timeout=15)
+            exact = record.read_text() == 'True' if record.exists() else None
+            good = child.poll() is not None and not runner.exists()
+            good = good and ((exact and child.returncode == 0) if case in ('sync', 'async') else child.returncode != 0)
+            if case == 'async': good = good and retained and elapsed < 2
+            if case == 'timeout': good = good and 9 <= elapsed < 15
+            results[case] = {'status': 'passed' if good else 'failed', 'seconds': round(elapsed, 3),
+                'returnCode': child.returncode, 'runnerRemoved': not runner.exists(), 'payloadExact': exact}
+    finally:
+        for child, _ in records:
+            if child.poll() is None:
+                child.kill(); child.wait(timeout=5)
+        ocr.SCRIPT_DIR, ocr._SILENT_MODE, ocr._debug, ocr._resolve_toast_script, subprocess.Popen = original
+        if prior_record is None: os.environ.pop('TOOLBOX_NOTIFY_RECORD', None)
+        else: os.environ['TOOLBOX_NOTIFY_RECORD'] = prior_record
+    (output/'runner-debug.log').write_text('\n'.join(logs), encoding='utf-8')
+    host = Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe'
+    run = subprocess.run([str(host), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', str(ROOT/'tools/validation/toast-api-probe.ps1')], capture_output=True, timeout=15,
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    fields = dict(line.split('=', 1) for line in run.stdout.decode('utf-8-sig').splitlines() if '=' in line)
+    accepted = run.returncode == 0 and all(fields.get(key) == 'True' for key in ('posted', 'found', 'cleaned'))
+    results['windowsApi'] = {'status': 'passed' if accepted else 'partial', **fields,
+        'banner': 'suppressed; not visually verified'}
+    results['context'] = load_module('toolbox_notify_context', 'tools/validation/process_context.py').inspect_context()
+    results['status'] = 'failed' if any(results[key]['status'] != 'passed' for key in ('sync', 'async', 'error', 'timeout')) else ('passed' if accepted else 'partial')
+    return results
 
 
 def audio_length(path: Path) -> int:
@@ -365,7 +428,8 @@ def local_tts_probe(output: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('component', choices=['ocr', 'ocr-clipboard', 'tts', 'playback', 'local-tts'])
+    parser.add_argument('component', choices=['ocr', 'ocr-clipboard', 'ocr-notify', 'tts', 'playback', 'local-tts'])
+    parser.add_argument('--ocr-host', action='store_true', help='Use matching base interpreter with -I -S and existing OCR dependencies')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if args.component == 'ocr-clipboard' and os.environ.get('TOOLBOX_CLIPBOARD_GUARD') != '1':
@@ -375,11 +439,17 @@ def main() -> int:
     result = {'component': args.component, 'python': sys.version, 'executable': sys.executable,
               'scope': 'synthetic fixture; no UI, clipboard, playback or device-state changes'}
     try:
-        probes = {'ocr': ocr_probe, 'ocr-clipboard': ocr_clipboard_probe, 'tts': tts_probe, 'playback': playback_probe, 'local-tts': local_tts_probe}
+        if args.ocr_host:
+            if not args.component.startswith('ocr'):
+                raise ValueError('ocr-host is only valid for OCR probes')
+            load_module('toolbox_ocr_host', 'tools/raycast-scripts/ocr/ocr_host.py').activate_environment()
+        probes = {'ocr': ocr_probe, 'ocr-clipboard': ocr_clipboard_probe, 'ocr-notify': ocr_notify_probe, 'tts': tts_probe, 'playback': playback_probe, 'local-tts': local_tts_probe}
         if args.component == 'ocr-clipboard':
             result['scope'] = 'synthetic image and real clipboard; ClipboardAll guarded by the parent fixture'
         if args.component == 'playback':
             result['scope'] = 'real MCI playback/cancellation with silent PCM; no speech or device setting changes'
+        if args.component == 'ocr-notify':
+            result['scope'] = 'fixed notification runners and suppressed synthetic Windows Toast history; no clipboard or device changes'
         result.update(probes[args.component](output))
     except Exception as error:
         result.update({'status': 'failed', 'errorType': type(error).__name__})

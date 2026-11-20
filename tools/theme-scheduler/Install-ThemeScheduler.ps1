@@ -17,8 +17,11 @@ $darkScript   = Join-Path $PSScriptRoot 'Set-Theme-Dark.ps1'
 $updateScript = Join-Path $PSScriptRoot 'Update-ThemeSchedule.ps1'
 $applyScript  = Join-Path $PSScriptRoot 'Apply-ThemeNow.ps1'
 $cursorScript = Join-Path $PSScriptRoot 'Apply-CursorsNow.ps1'
+# 尾巴脚本不注册任务，由 Set-Theme-Light/Dark 通过 Start-ThemeTail 以独立进程拉起；
+# 这里只做存在性校验，免得装完才发现缺文件、切换时静默丢掉壁纸和光标。
+$tailScript   = Join-Path $PSScriptRoot 'Set-Theme-Tail.ps1'
 
-foreach ($p in @($lightScript, $darkScript, $updateScript, $applyScript, $cursorScript)) {
+foreach ($p in @($lightScript, $darkScript, $updateScript, $applyScript, $cursorScript, $tailScript)) {
   if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
     Write-Host "[!!] Missing: $p" -ForegroundColor Red
     exit 1

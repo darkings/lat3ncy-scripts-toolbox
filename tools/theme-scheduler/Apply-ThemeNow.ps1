@@ -63,7 +63,7 @@ if (-not (Test-Path -LiteralPath $targetScript -PathType Leaf))
   exit 1
 }
 
+# 目标脚本会自己派发 Set-Theme-Tail.ps1（壁纸/光标/键盘灯/锁屏，独立进程），
+# 这里不再重复套一遍，避免和尾巴进程同时写同一批注册表项。
 & $targetScript
-Set-WindowsCursorScheme -Mode $desired -Config $config | Out-Null
-Set-ThinkPadKeyboardBacklight -Mode $desired -Config $config | Out-Null
 Write-ThemeLog ("Apply-Now switched to {0}" -f $desired)

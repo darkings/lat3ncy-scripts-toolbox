@@ -204,22 +204,73 @@ function Get-ExistingThemeTaskTime
 {
   param([string]$TaskName)
 
-  # 登录时网络可能还没好。sun 模式算不出来时，复用已经校准过的 Daily 触发时间
-  $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-  if (-not $task)
+  # 登录/唤醒时网络可能还没好。sun 模式算不出来时，复用已经校准过的 Daily 触发时间。
+  #
+  # 为什么不直接用 Get-ScheduledTask：它走 MSFT_ScheduledTask 这个 CIM 类，是本工具里
+  # 最贵的单点开销。2026-10-31 实测单次 814-928ms，而且和 -TaskName 过滤无关
+  # （查一个根本不存在的任务也要 845ms，本质是全量枚举）；本函数在热路径上会被调两次，
+  # 等于每次切换白付 1.6-1.8 秒 —— 日志里"任务 08:35:08 启动、08:35:12 才写出第一行"
+  # 的那 4 秒，大头就是它。
+  #
+  # 改成直接读任务定义 XML（实测约 60ms，且不需要 Import-Module ScheduledTasks 的 232ms）：
+  # 我们只关心 CalendarTrigger 的 StartBoundary，XML 里是明文。
+  $boundary = $null
+  try
   {
-    return $null
+    $tasksDir = Join-Path $env:WINDIR 'System32'
+    $tasksDir = Join-Path $tasksDir 'Tasks'
+    # 任务计划程序在磁盘上的根任务文件名没有扩展名（如 ...\Tasks\Theme-Light）；
+    # 早期/迁移过来的布局可能带 .xml，两种都试一次。
+    $xmlPath = Join-Path $tasksDir $TaskName
+    if (-not (Test-Path -LiteralPath $xmlPath -PathType Leaf))
+    {
+      $xmlPath = Join-Path $tasksDir ($TaskName + '.xml')
+    }
+    if (Test-Path -LiteralPath $xmlPath -PathType Leaf)
+    {
+      $xml = [xml](Get-Content -LiteralPath $xmlPath -Raw -ErrorAction Stop)
+      $nodes = @($xml.Task.Triggers.ChildNodes | Where-Object { $_.StartBoundary })
+      if ($nodes.Count -gt 0)
+      {
+        $boundary = [string]$nodes[0].StartBoundary
+      }
+    }
+  }
+  catch
+  {
   }
 
-  $daily = @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' }) | Select-Object -First 1
-  if (-not $daily -or -not $daily.StartBoundary)
+  if (-not $boundary)
+  {
+    # 兜底：任务文件读不到（权限/被加密/不在根目录）时退回旧的 CIM 查询。
+    try
+    {
+      $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+      if ($task)
+      {
+        $daily = @($task.Triggers | Where-Object { $_.StartBoundary }) | Select-Object -First 1
+        if ($daily)
+        {
+          $boundary = [string]$daily.StartBoundary
+        }
+      }
+    }
+    catch
+    {
+    }
+  }
+
+  if (-not $boundary)
   {
     return $null
   }
 
   try
   {
-    return [datetime]::Parse($daily.StartBoundary)
+    # 统一投影到今天：StartBoundary 可能是"今天还没到"或"今天已过、下次在明天"，
+    # 调用方要的是"今天这一次的触发时刻"。日出日落每天只差约 1 分钟，
+    # 投影比走网络或退回 07:00/19:00 准得多。
+    return (Get-Date).Date.Add([datetime]::Parse($boundary).TimeOfDay)
   }
   catch
   {
@@ -587,7 +638,28 @@ function Sync-ThemeFileCursors
   $unicode = [Text.Encoding]::Unicode
   $bytes = [IO.File]::ReadAllBytes($themePath)
   $isUnicode = ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE)
-  $text = if ($isUnicode) { $unicode.GetString($bytes, 2, $bytes.Length - 2) } else { [Text.Encoding]::UTF8.GetString($bytes) }
+  # .theme 是 INI：只有 UTF-16LE+BOM 与 UTF-8+BOM 能按 BOM 判定；
+  # 其余（ANSI，Windows 按系统代码页写入的那些）必须按系统 ANSI 代码页解码，
+  # 并且用同一编码回写。以前非 UTF-16 一律当 UTF-8 读、再以 UTF-8 无 BOM 写回，
+  # 中文方案名/路径会被解成 U+FFFD 并永久损坏。
+  $hasUtf8Bom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+  if ($isUnicode)
+  {
+    $sourceEncoding = $unicode
+    $preambleLength = 2
+  }
+  elseif ($hasUtf8Bom)
+  {
+    $sourceEncoding = New-Object Text.UTF8Encoding $true
+    $preambleLength = 3
+  }
+  else
+  {
+    $sourceEncoding = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage)
+    $preambleLength = 0
+  }
+  $text = $sourceEncoding.GetString($bytes, $preambleLength, $bytes.Length - $preambleLength)
+  $originalText = $text
   $newline = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
   $rawLines = [regex]::Split($text, '\r\n|\n|\r')
 
@@ -677,19 +749,31 @@ function Sync-ThemeFileCursors
 
   # 内容没变就不要重写：整份 .theme 重写既慢，又会在解锁/唤醒瞬间和并发的
   # Theme-Apply-Cursors 抢同一把文件锁（日志里 6 次「正由另一进程使用」都出在这里）。
-  $original = if ($isUnicode) { $unicode.GetString($bytes, 2, $bytes.Length - 2) } else { [Text.Encoding]::UTF8.GetString($bytes) }
+  $original = $originalText
   if ($text -ceq $original)
   {
     return $false
   }
 
-  if ($isUnicode)
+  # 按原编码整体回写（BOM 有无保持不变），写完读回比对；不一致就用备份还原。
+  $outBytes = $sourceEncoding.GetBytes($text)
+  if ($preambleLength -gt 0)
   {
-    [IO.File]::WriteAllBytes($themePath, ($unicode.GetPreamble() + $unicode.GetBytes($text)))
+    $outBytes = [byte[]]($sourceEncoding.GetPreamble() + $outBytes)
   }
-  else
+  [IO.File]::WriteAllBytes($themePath, $outBytes)
+
+  $verifyBytes = [IO.File]::ReadAllBytes($themePath)
+  $verifyText = ''
+  if ($verifyBytes.Length -ge $preambleLength)
   {
-    [IO.File]::WriteAllText($themePath, $text, (New-Object Text.UTF8Encoding $false))
+    $verifyText = $sourceEncoding.GetString($verifyBytes, $preambleLength, $verifyBytes.Length - $preambleLength)
+  }
+  if ($verifyText -cne $text)
+  {
+    Write-ThemeLog (("Cursor theme file verify mismatch, restoring backup: {0}" -f $themePath))
+    Copy-Item -LiteralPath $backupPath -Destination $themePath -Force
+    return $false
   }
   Write-ThemeLog ("Cursor theme file synced: {0}" -f $themePath)
   return $true
@@ -1225,9 +1309,36 @@ function Resolve-WallpaperImage
   return Get-NextWallpaperImage -Config $Config -CurrentPath (Get-DesktopWallpaperPath) -Mode $Mode
 }
 
+function Read-LockScreenResult
+{
+  # 读 Set-LockScreenFromWallpaper.ps1 的 -ResultFile（UTF-8 单行 key=value）。
+  # 不解析子进程 stdout/stderr：控制台重定向里的中文按 OEM 代码页编码，
+  # 本文件既可能跑在 5.1（计划任务）也可能被 pwsh 7 dot-source（Raycast），读法不统一。
+  param([string]$Path)
+
+  if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf))
+  {
+    return $null
+  }
+
+  $result = @{}
+  foreach ($line in [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8))
+  {
+    $index = $line.IndexOf('=')
+    if ($index -gt 0)
+    {
+      $result[$line.Substring(0, $index)] = $line.Substring($index + 1)
+    }
+  }
+  if ($result.Count -eq 0) { return $null }
+  return [pscustomobject]$result
+}
+
 function Sync-LockScreenWallpaper
 {
   param($Config, [string]$ImagePath)
+
+  $script:ThemeLockScreenError = $null
 
   if (-not $Config.wallpaper.sync_lock_screen)
   {
@@ -1249,7 +1360,9 @@ function Sync-LockScreenWallpaper
     $winPs = 'powershell.exe'
   }
 
-  $arguments = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
+  $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("lat3ncy-lockscreen-{0}.result" -f [guid]::NewGuid().ToString('n'))
+
+  $arguments = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath, '-ResultFile', $resultPath)
   $source = 'desktop-wallpaper'
   if ($ImagePath -and (Test-Path -LiteralPath $ImagePath -PathType Leaf))
   {
@@ -1257,30 +1370,87 @@ function Sync-LockScreenWallpaper
     $source = $ImagePath
   }
 
-  # 子进程里有两处 Wait(-1)（WinRT GetFileFromPathAsync / SetImageFileAsync），
-  # 锁屏态下可能长时间不返回。这里给它一个上限，超时就杀掉并如实记日志，
-  # 不能让整个切换流程被锁屏同步拖着。
-  $timeoutMs = 20000
+  # 不用 Start-Process：带 -RedirectStandard* 时 pwsh 7 拿不到 ExitCode（返回 null），
+  # 这里要同时拿到退出码和子进程输出。输出按 OEM 代码页解码，中文才不会变乱码。
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $winPs
+  $startInfo.Arguments = ($arguments | ForEach-Object {
+      $text = [string]$_
+      if ($text -match '[\s"]')
+      {
+        '"{0}"' -f ($text -replace '(\\+)"', '$1$1\"' -replace '(\\+)$', '$1$1' -replace '"', '\"')
+      }
+      else
+      {
+        $text
+      }
+    }) -join ' '
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $consoleEncoding = [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+  $startInfo.StandardOutputEncoding = $consoleEncoding
+  $startInfo.StandardErrorEncoding = $consoleEncoding
+
+  # 子进程里 WinRT 落地大图实测要 13-19s（6000x3000 JPEG、16-bit PNG 转码），
+  # 上限给它留足余量；超时就杀掉并如实记日志，不能让整个切换流程被锁屏同步无限拖着。
+  $timeoutMs = 60000
+  $process = New-Object System.Diagnostics.Process
+  $process.StartInfo = $startInfo
   try
   {
-    $proc = Start-Process -FilePath $winPs -ArgumentList $arguments -PassThru -WindowStyle Hidden
-    if (-not $proc.WaitForExit($timeoutMs))
+    [void]$process.Start()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($timeoutMs))
     {
-      try { $proc.Kill() } catch { }
+      try { $process.Kill() } catch { }
+      $script:ThemeLockScreenError = ('子进程 {0}s 未返回，已结束' -f ($timeoutMs / 1000))
       Write-ThemeLog ("LockScreen sync timeout after {0}s, child killed" -f ($timeoutMs / 1000))
       return $false
     }
-    if ($proc.ExitCode -ne 0)
+    # 再等一次让异步读流收尾，之后 .Result 才是完整的
+    $process.WaitForExit()
+
+    $result = Read-LockScreenResult -Path $resultPath
+    if ($process.ExitCode -ne 0)
     {
-      throw ("exit code {0}" -f $proc.ExitCode)
+      $detail = if ($result -and $result.error) { [string]$result.error } else { '' }
+      if (-not $detail)
+      {
+        # 子进程在写结果文件之前就挂了（参数错误、找不到壁纸等），退回第一条 stderr
+        $stderrText = ''
+        try { $stderrText = [string]$stderrTask.Result } catch { }
+        $firstLine = @($stderrText -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+        if ($firstLine.Count -gt 0)
+        {
+          $detail = ($firstLine[0] -replace '^[A-Za-z]:\\[^:]+\.ps1\s*:\s*', '').Trim()
+        }
+      }
+      if (-not $detail) { $detail = ('exit code {0}' -f $process.ExitCode) }
+      $script:ThemeLockScreenError = $detail
+      throw $detail
     }
-    Write-ThemeLog ("LockScreen synced from {0}" -f $source)
+
+    $method = if ($result -and $result.method) { ' (' + [string]$result.method + ')' } else { '' }
+    Write-ThemeLog ("LockScreen synced from {0}{1}" -f $source, $method)
     return $true
   }
   catch
   {
+    if (-not $script:ThemeLockScreenError)
+    {
+      $script:ThemeLockScreenError = $_.Exception.Message
+    }
     Write-ThemeLog ("LockScreen sync failed: {0}" -f $_.Exception.Message)
     return $false
+  }
+  finally
+  {
+    try { $process.Dispose() } catch { }
+    Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
   }
 }
 
@@ -1328,7 +1498,10 @@ function Get-ThemeTaskSettings
 {
   param([switch]$DisableStartWhenAvailable)
 
-  # Light/Dark 必须关掉 StartWhenAvailable：关机错过的日出/日落不能在开机时补跑，否则会和登录对齐任务抢最后一次切换
+  # StartWhenAvailable 默认打开：关机/休眠错过的日出日落允许在开机或恢复后补跑。
+  # 2026-10-31 实测：S4 恢复后的补跑时机由任务计划程序内部扫描决定，实测晚 6 分 00 秒到
+  # 24 分钟不等（只有恰好撞上 S0ix 退出才可能是秒级），所以它只能当最终一致性兜底。
+  # 唤醒后的即时对齐交给 Theme-Apply-Cursors 的解锁/控制台连接触发器（实测唤醒后 0.5 秒内拉起）。
   $settings = New-ScheduledTaskSettingsSet `
     -Hidden `
     -AllowStartIfOnBatteries `
@@ -1452,14 +1625,75 @@ function Repair-ThemeScheduledTaskWindow
   }
 }
 
+function Start-ThemeTail
+{
+  param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('light', 'dark')]
+    [string]$Mode,
+    [switch]$PlanOnly
+  )
+
+  # 壁纸 / 光标 / 键盘灯 / 锁屏 都发生在"界面已经变色之后"，用户看不到它们，
+  # 但实测会把任务尾巴拖长 5-17 秒（锁屏 p90 10s、壁纸 SPI 1.5-2s、光标四个 pass 共 8s、
+  # 锁屏子进程 WaitForExit 最长 60s）。抽成独立进程后主脚本能立刻返回，
+  # 任务状态也真实反映"颜色切完了"而不是"壁纸也换完了"。
+  $tailScript = Join-Path $PSScriptRoot 'Set-Theme-Tail.ps1'
+  if (-not (Test-Path -LiteralPath $tailScript -PathType Leaf))
+  {
+    Write-ThemeLog ("Tail missing: {0}" -f $tailScript)
+    return $false
+  }
+
+  $psExe = Join-Path $env:WINDIR 'System32'
+  $psExe = Join-Path $psExe 'WindowsPowerShell'
+  $psExe = Join-Path $psExe 'v1.0'
+  $psExe = Join-Path $psExe 'powershell.exe'
+
+  $argLine = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -Mode {1}' -f $tailScript, $Mode
+  if ($PlanOnly)
+  {
+    $argLine = $argLine + ' -PlanOnly'
+  }
+
+  # 必须静默：powershell.exe 是控制台程序，Start-Process -WindowStyle Hidden 只设置
+  # STARTUPINFO 的 wShowWindow，仍然会分配 conhost，唤醒时可能在屏幕上闪一个终端窗口。
+  # 这里和 Sync-LockScreenWallpaper 用同一套做法：UseShellExecute=false + CreateNoWindow=true，
+  # 根本不给子进程创建控制台，再叠一次 -WindowStyle Hidden 兜底。
+  try
+  {
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $psExe
+    $startInfo.Arguments = $argLine
+    $startInfo.WorkingDirectory = $PSScriptRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($process)
+    {
+      $process.Dispose()
+    }
+    Write-ThemeLog ("Tail dispatched: mode={0} (wallpaper/cursor/backlight/lockscreen in background)" -f $Mode)
+    return $true
+  }
+  catch
+  {
+    Write-ThemeLog ("Tail dispatch failed: {0}" -f $_.Exception.Message)
+    return $false
+  }
+}
+
 function Write-ThemeLog
 {
   param([string]$Message)
 
-  # 计划任务无控制台，切换结果只写本地日志，便于核对注册表和 Explorer 重启
+  # 计划任务无控制台，切换结果只写本地日志，便于核对注册表和 Explorer 重启。
+  # 日志里会带子进程回传的中文原因，固定写 UTF-8：5.1 的 Add-Content 默认按 ANSI 写，
+  # 和 pwsh 7（默认 UTF-8）混在一起会变成乱码。
   $logFile = Join-Path $PSScriptRoot 'theme-scheduler.log'
   $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
-  Add-Content -LiteralPath $logFile -Value $line -ErrorAction SilentlyContinue
+  Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
 }
 
 function Get-ThemePersonalizeState
@@ -1500,6 +1734,15 @@ public static class ThemeRefreshNative {
 
   [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
   public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+  // SendNotifyMessage：同进程窗口同步直达，其他进程只投递、不入队等待。
+  // 系统自己广播 WM_SETTINGCHANGE 用的就是它 —— 正好避开 SendMessageTimeout
+  // 「最坏等待 = 超时 x 顶层窗口数」的长尾（本机 26 个窗口，日志里出过 111 秒和 560 秒）。
+  [DllImport("user32.dll", EntryPoint = "SendNotifyMessage", SetLastError = true, CharSet = CharSet.Auto)]
+  public static extern bool SendNotifyMessageStr(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam);
+
+  [DllImport("user32.dll", EntryPoint = "SendNotifyMessage", SetLastError = true, CharSet = CharSet.Auto)]
+  public static extern bool SendNotifyMessagePtr(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
   [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
   public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
@@ -1563,14 +1806,16 @@ public static class ThemeRefreshNative {
     if (className != "CabinetWClass" && className != "ExploreWClass") return true;
 
     IntPtr result;
-    // 每个资源管理器窗口 3 条消息；超时收到 1500ms 与广播侧一致（原来各 2000ms，单窗口最坏 6 秒）。
-    SendMessageTimeoutStr(hWnd, WM_SETTINGCHANGE, IntPtr.Zero, "ImmersiveColorSet", SMTO_ABORTIFHUNG, 1500, out result);
-    SendMessageTimeoutPtr(hWnd, WM_THEMECHANGED, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 1500, out result);
-    SendMessageTimeoutPtr(hWnd, WM_DWMCOLORIZATIONCOLORCHANGED, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 1500, out result);
+    // 只给一条 WM_SETTINGCHANGE 做 400ms 有限同步确认（够它重读标题栏色），其余两条投递不等待。
+    // 原来是 3 条 x 1500ms 全同步：一个忙住的资源管理器窗口就能吃掉 4.5 秒。
+    SendMessageTimeoutStr(hWnd, WM_SETTINGCHANGE, IntPtr.Zero, "ImmersiveColorSet", SMTO_ABORTIFHUNG, 400, out result);
+    SendNotifyMessagePtr(hWnd, WM_THEMECHANGED, IntPtr.Zero, IntPtr.Zero);
+    SendNotifyMessagePtr(hWnd, WM_DWMCOLORIZATIONCOLORCHANGED, IntPtr.Zero, IntPtr.Zero);
 
     SetExplorerFrameColors(hWnd, _explorerDark != 0);
+    // 去掉 RDW_UPDATENOW：让它走消息循环异步重绘，别在切换脚本里同步等整棵子窗口树画完。
     RedrawWindow(hWnd, IntPtr.Zero, IntPtr.Zero,
-      RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME);
+      RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_FRAME);
     _explorerRefreshed++;
     return true;
   }
@@ -1610,14 +1855,16 @@ function Send-ThemeBroadcast
   $result = [IntPtr]::Zero
   $flags = [ThemeRefreshNative]::SMTO_ABORTIFHUNG
 
-  # 广播给所有顶层窗口，再点名任务栏和溢出区，提高托盘宿主收到 ImmersiveColorSet 的概率。
-  # 超时收紧到 1500/1000ms：SendMessageTimeout 是同步的，任一顶层窗口「忙但未挂起」就吃满
-  # 整个超时，原来 5000+2000+2000 的单次上限 13 秒、还被调用两次（日志里见过 560 秒卡顿）。
-  # 正常 Explorer/DWM 是毫秒级响应，1.5 秒足够；真正挂起的窗口本来也不该等。
-  [ThemeRefreshNative]::SendMessageTimeoutStr($broadcast, [ThemeRefreshNative]::WM_SETTINGCHANGE, [IntPtr]::Zero, $SettingName, $flags, 1500, [ref]$result) | Out-Null
-  [ThemeRefreshNative]::SendMessageTimeoutPtr($broadcast, [ThemeRefreshNative]::WM_THEMECHANGED, [IntPtr]::Zero, [IntPtr]::Zero, $flags, 1000, [ref]$result) | Out-Null
-  [ThemeRefreshNative]::SendMessageTimeoutPtr($broadcast, [ThemeRefreshNative]::WM_DWMCOLORIZATIONCOLORCHANGED, [IntPtr]::Zero, [IntPtr]::Zero, $flags, 1000, [ref]$result) | Out-Null
+  # 全局广播改用 SendNotifyMessage（投递不等待）。原来的 SendMessageTimeout 是同步的：
+  # 任一顶层窗口「忙但未挂起」就吃满整个超时，而总等待 = 超时 x 顶层窗口数 ——
+  # 本机 26 个可见顶层窗口 x 9 条消息，理论最坏约 97 秒，日志里实测过 111 秒和 560 秒。
+  # ImmersiveColorSet / WM_THEMECHANGED / DWM 颜色变化本身就是"通知"，不需要回执。
+  [ThemeRefreshNative]::SendNotifyMessageStr($broadcast, [ThemeRefreshNative]::WM_SETTINGCHANGE, [IntPtr]::Zero, $SettingName) | Out-Null
+  [ThemeRefreshNative]::SendNotifyMessagePtr($broadcast, [ThemeRefreshNative]::WM_THEMECHANGED, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+  [ThemeRefreshNative]::SendNotifyMessagePtr($broadcast, [ThemeRefreshNative]::WM_DWMCOLORIZATIONCOLORCHANGED, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
 
+  # 任务栏 / 托盘溢出区 / 桌面这三个宿主决定托盘底色，点名给一次有限同步确认。
+  # 400ms 足够：正常 Explorer 是毫秒级响应，真挂起的窗口本来也不该等。
   foreach ($className in @('Shell_TrayWnd', 'NotifyIconOverflowWindow', 'Progman'))
   {
     $hwnd = [ThemeRefreshNative]::FindWindow($className, $null)
@@ -1625,8 +1872,9 @@ function Send-ThemeBroadcast
     {
       continue
     }
-    [ThemeRefreshNative]::SendMessageTimeoutStr($hwnd, [ThemeRefreshNative]::WM_SETTINGCHANGE, [IntPtr]::Zero, $SettingName, $flags, 1000, [ref]$result) | Out-Null
-    [ThemeRefreshNative]::SendMessageTimeoutPtr($hwnd, [ThemeRefreshNative]::WM_THEMECHANGED, [IntPtr]::Zero, [IntPtr]::Zero, $flags, 1000, [ref]$result) | Out-Null
+    [ThemeRefreshNative]::SendMessageTimeoutStr($hwnd, [ThemeRefreshNative]::WM_SETTINGCHANGE, [IntPtr]::Zero, $SettingName, $flags, 400, [ref]$result) | Out-Null
+    [ThemeRefreshNative]::SendNotifyMessagePtr($hwnd, [ThemeRefreshNative]::WM_THEMECHANGED, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+    [ThemeRefreshNative]::SendNotifyMessagePtr($hwnd, [ThemeRefreshNative]::WM_DWMCOLORIZATIONCOLORCHANGED, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
   }
 }
 

@@ -53,6 +53,11 @@ namespace Lat3ncyToolbox
     {
         [FieldOffset(0)] public short vt;
         [FieldOffset(8)] public IntPtr pwszVal;
+        // PROPVARIANT = 8 字节头 + 16 字节 union（含 DECIMAL），x64 上共 24 字节。
+        // 只声明到 pwszVal 时托管侧 SizeOf 是 16，而属性存储按原生大小写入
+        // （PropVariantInit/PropVariantCopy 整块清零或复制），于是每次读设备名
+        // 都会越界写 8 字节。补一段尾部 union 让托管结构等于原生大小。
+        [FieldOffset(16)] private long unionTail;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -112,14 +117,54 @@ namespace Lat3ncyToolbox
         const int DeviceStateMaskAll = 0x0000000F;
         static int ConnectWaitMs = 12000;
         static int ConnectPollMs = 200;
+        // 蓝牙层已连但立体声终点未就绪时：先短等，再断开/启用 A2DP 强制重新协商。
+        // 实测：耳机在耳朵上时 1s 内就绪；耳机空闲/睡眠时 enable 后还要 5-15s 终点才出现。
+        // 因此恢复后要给足等待；AHK 侧 ChildTimeoutMs 必须覆盖这里的最坏路径。
+        static int StuckWaitMs = 2000;
+        static int RecoverWaitMs = 14000;
+        static int RecoverSettleMs = 400;
         // Enable-PnpDevice 常 8s+ 超时，默认关闭；需要时在 config.toml 打开。
         static bool PnpFallbackEnabled = false;
         static bool DebugMode = false;
-        static string DebugLog { get { return System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lat3ncy-audio-debug.log"); } }
+        static string DebugLogPath = null;
+        static string DebugLogFailed = "";
+        // 日志首选 %LOCALAPPDATA%\lat3ncy-toolbox（稳定可读），失败回退 %TEMP%、再回退 exe 目录。
+        // 历史问题：%TEMP% 写入失败时无任何痕迹，排查看不到现场。
+        static string DebugLog {
+            get {
+                if (DebugLogPath != null) return DebugLogPath;
+                string temp = null, local = null, exeDir = null;
+                try { temp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "lat3ncy-audio-debug.log"); } catch {}
+                try {
+                    string dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "lat3ncy-toolbox");
+                    System.IO.Directory.CreateDirectory(dir);
+                    local = System.IO.Path.Combine(dir, "audio-switcher.log");
+                } catch {}
+                try {
+                    exeDir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "audio-switcher.log");
+                } catch {}
+                string[] candidates = new string[] { local, temp, exeDir };
+                DebugLogPath = "";
+                foreach (var c in candidates) {
+                    if (string.IsNullOrEmpty(c)) continue;
+                    try {
+                        System.IO.File.AppendAllText(c, "", System.Text.Encoding.UTF8);
+                        DebugLogPath = c;
+                        break;
+                    } catch (Exception ex) {
+                        DebugLogFailed += c + "=" + ex.GetType().Name + ";";
+                    }
+                }
+                return DebugLogPath;
+            }
+        }
         static void LogDebug(string msg) {
             try {
-                string line = DateTime.Now.ToString("HH:mm:ss.fff") + " " + msg;
-                System.IO.File.AppendAllText(DebugLog, line + Environment.NewLine, System.Text.Encoding.UTF8);
+                string path = DebugLog;
+                if (!string.IsNullOrEmpty(path)) {
+                    string line = DateTime.Now.ToString("HH:mm:ss.fff") + " " + msg;
+                    System.IO.File.AppendAllText(path, line + Environment.NewLine, System.Text.Encoding.UTF8);
+                }
                 if (DebugMode) Console.Error.WriteLine("DEBUG|" + msg);
             } catch {}
         }
@@ -275,6 +320,8 @@ namespace Lat3ncyToolbox
         static readonly Guid A2dpSinkUuid = new Guid("0000110B-0000-1000-8000-00805F9B34FB");
         static readonly Guid AdvancedAudioUuid = new Guid("0000110D-0000-1000-8000-00805F9B34FB");
         const uint BluetoothServiceEnable = 0x00000001;
+        // 仅用于“服务已启用但链路卡死”时的重协商（TryRecoverA2dpLink），不是退出路径。
+        const uint BluetoothServiceDisable = 0x00000000;
         const int NsBth = 16;
         const int AfBth = 32;
         const int SockStream = 1;
@@ -289,6 +336,10 @@ namespace Lat3ncyToolbox
 
         [DllImport("ole32.dll")]
         static extern int CoCreateInstance(ref Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, ref Guid riid, out IntPtr ppv);
+
+        // pwszVal 由属性存储用 CoTaskMemAlloc 分配，读完整必须清掉，否则每个设备漏一次。
+        [DllImport("ole32.dll")]
+        static extern int PropVariantClear(ref PropVariant pvar);
 
         [DllImport("BluetoothAPIs.dll", SetLastError = true)]
         static extern IntPtr BluetoothFindFirstRadio(ref BluetoothFindRadioParams pbtfrp, out IntPtr phRadio);
@@ -537,16 +588,20 @@ namespace Lat3ncyToolbox
                         PropVariant pv;
                         if (props.GetValue(ref PKEY_Device_FriendlyName, out pv) == 0 && pv.pwszVal != IntPtr.Zero) {
                             name = Marshal.PtrToStringUni(pv.pwszVal);
+                            PropVariantClear(ref pv);
                         }
                         // 蓝点未点“连接”时，立体声终点常只有 DeviceDesc。
                         if (string.IsNullOrEmpty(name) || name == "Unknown") {
                             PropVariant desc;
                             if (props.GetValue(ref PKEY_Device_DeviceDesc, out desc) == 0 && desc.pwszVal != IntPtr.Zero) {
                                 name = Marshal.PtrToStringUni(desc.pwszVal);
+                                PropVariantClear(ref desc);
                             }
                         }
                     }
 
+                    // 属性存储在每次枚举里都会新建，不释放会以 200ms 一次累积 RCW。
+                    if (props != null) { Marshal.ReleaseComObject(props); }
                     list.Add(new DeviceInfo {
                         Id = id,
                         Name = name,
@@ -745,11 +800,11 @@ namespace Lat3ncyToolbox
             } catch (Exception ex) { LogDebug(" TryEnablePnp elevated=" + elevated + " ex " + ex.Message); return false; }
         }
 
-        static DeviceInfo WaitForActiveHeadset()
+        static DeviceInfo WaitForActiveHeadset(int waitMs)
         {
             int waited = 0;
-            LogDebug("WaitForActiveHeadset start waitMs=" + ConnectWaitMs);
-            while (waited <= ConnectWaitMs) {
+            LogDebug("WaitForActiveHeadset start waitMs=" + waitMs);
+            while (waited <= waitMs) {
                 string ignored;
                 DeviceInfo headset = FindPreferredHeadset(GetDevices(DeviceStateActive, out ignored));
                 if (headset != null) {
@@ -1156,20 +1211,144 @@ namespace Lat3ncyToolbox
             return attempt;
         }
 
+        // A2DP 服务已 Enable（SetServiceState 返回 87）时链路可能卡死：
+        // 此时再 Enable 是空操作，Disable→Enable 才让 Windows 重新协商 profile。
+        // 实测（2026-11-02，ThinkPad T14p + AirPods）：全程 fConnected 保持，HFP 终点不受影响，
+        // 立体声终点约 0.5s 内回到 ACTIVE，不会把耳机踢下线。
+        static bool TryRecoverA2dpLink()
+        {
+            LogDebug("TryRecoverA2dpLink start");
+            try {
+                var radioParams = new BluetoothFindRadioParams();
+                radioParams.dwSize = Marshal.SizeOf(typeof(BluetoothFindRadioParams));
+                IntPtr radio;
+                IntPtr findRadio = BluetoothFindFirstRadio(ref radioParams, out radio);
+                if (findRadio == IntPtr.Zero || radio == IntPtr.Zero)
+                    return false;
+
+                bool recovered = false;
+                try {
+                    do {
+                        if (TryRecoverA2dpOnRadio(radio))
+                            recovered = true;
+                        CloseHandle(radio);
+                        radio = IntPtr.Zero;
+                    } while (BluetoothFindNextRadio(findRadio, out radio) && radio != IntPtr.Zero);
+                } finally {
+                    if (radio != IntPtr.Zero)
+                        CloseHandle(radio);
+                    BluetoothFindRadioClose(findRadio);
+                }
+                LogDebug(" TryRecoverA2dpLink=" + recovered);
+                return recovered;
+            } catch (Exception ex) {
+                LogDebug(" TryRecoverA2dpLink ex " + ex.Message);
+                return false;
+            }
+        }
+
+        static bool TryRecoverA2dpOnRadio(IntPtr radio)
+        {
+            var search = new BluetoothDeviceSearchParams();
+            search.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceSearchParams));
+            search.fReturnAuthenticated = 1;
+            search.fReturnRemembered = 1;
+            search.fReturnUnknown = 0;
+            search.fReturnConnected = 1;
+            search.fIssueInquiry = 0;
+            search.cTimeoutMultiplier = 0;
+            search.hRadio = radio;
+
+            var info = new BluetoothDeviceInfo();
+            info.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+            IntPtr findDevice = BluetoothFindFirstDevice(ref search, ref info);
+            if (findDevice == IntPtr.Zero)
+                return false;
+
+            bool recovered = false;
+            try {
+                do {
+                    if (info.Address == 0) {
+                        info = new BluetoothDeviceInfo();
+                        info.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                        continue;
+                    }
+                    string nameCheck = info.szName;
+                    var probe = new BluetoothDeviceInfo();
+                    probe.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                    probe.Address = info.Address;
+                    uint qProbe = BluetoothGetDeviceInfo(radio, ref probe);
+                    if (qProbe == 0 && !string.IsNullOrEmpty(probe.szName))
+                        nameCheck = probe.szName;
+                    if (IsPreferredHeadset(nameCheck)) {
+                        var fresh = new BluetoothDeviceInfo();
+                        fresh.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                        fresh.Address = info.Address;
+                        if (qProbe == 0)
+                            fresh = probe;
+                        else
+                            BluetoothGetDeviceInfo(radio, ref fresh);
+
+                        // 只重协商“仍是配对/已连”的耳机；盒子里的设备 API 会直接失败，不额外加门。
+                        // 注意：fConnected 在 AirPods 空闲时会抖动（同一秒内 True/0 都出现过），
+                        // 不能拿它当“跳过恢复”的判据，否则关键修复会被跳过。
+                        if (fresh.fConnected == 0 && fresh.fRemembered == 0 && fresh.fAuthenticated == 0) {
+                            LogDebug("  recover skip not-paired " + nameCheck);
+                            info = new BluetoothDeviceInfo();
+                            info.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                            continue;
+                        }
+                        LogDebug("  recover state " + nameCheck + " conn=" + fresh.fConnected + " rem=" + fresh.fRemembered + " auth=" + fresh.fAuthenticated);
+
+                        Guid svc = A2dpSinkUuid;
+                        uint errOff = BluetoothSetServiceState(radio, ref fresh, ref svc, BluetoothServiceDisable);
+                        LogDebug("  recover A2DP disable " + nameCheck + " err=" + errOff);
+                        Thread.Sleep(RecoverSettleMs);
+
+                        var again = new BluetoothDeviceInfo();
+                        again.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                        again.Address = info.Address;
+                        uint qAgain = BluetoothGetDeviceInfo(radio, ref again);
+                        uint errOn = BluetoothSetServiceState(radio, ref again, ref svc, BluetoothServiceEnable);
+                        LogDebug("  recover A2DP enable " + nameCheck + " err=" + errOn + " getInfo=" + qAgain);
+                        if (errOn == 0 || errOn == 87)
+                            recovered = true;
+                    }
+                    info = new BluetoothDeviceInfo();
+                    info.dwSize = Marshal.SizeOf(typeof(BluetoothDeviceInfo));
+                } while (BluetoothFindNextDevice(findDevice, ref info));
+            } finally {
+                BluetoothFindDeviceClose(findDevice);
+            }
+            return recovered;
+        }
+
         static int FinishHeadsetConnect(HeadsetConnectAttempt attempt, int activeCount)
         {
             if (attempt.ActiveHeadset != null)
                 return SwitchToDevice(attempt.ActiveHeadset, "音频切换失败");
 
-            // 只有 Enable/WSA/PNP 真正成功才等 ACTIVE；蓝牙已连但没立体声立即失败。
+            // 只有 Enable/WSA/PNP 真正成功才按完整预算等 ACTIVE。
             if (attempt.LinkActionSucceeded) {
-                DeviceInfo connected = WaitForActiveHeadset();
+                DeviceInfo connected = WaitForActiveHeadset(ConnectWaitMs);
                 if (connected != null)
                     return SwitchToDevice(connected, "音频切换失败");
                 Console.WriteLine("ERROR|连接超时");
                 return 1;
             }
             if (attempt.BluetoothConnected) {
+                // 蓝牙层已连（ACL/AVRCP 往往先就绪）但立体声终点还没起来：
+                // 旧实现立刻报错；实际 Windows 常要几秒才把 A2DP/offload 终点带起来，先短等。
+                DeviceInfo connected = WaitForActiveHeadset(StuckWaitMs);
+                if (connected != null)
+                    return SwitchToDevice(connected, "音频切换失败");
+
+                // 仍是“服务已启用但链路没建”的卡死态：断开再启用 A2DP 强制重新协商。
+                if (TryRecoverA2dpLink()) {
+                    connected = WaitForActiveHeadset(RecoverWaitMs);
+                    if (connected != null)
+                        return SwitchToDevice(connected, "音频切换失败");
+                }
                 Console.WriteLine("ERROR|蓝牙已连但立体声未就绪");
                 return 1;
             }
@@ -1255,6 +1434,11 @@ namespace Lat3ncyToolbox
         {
             try {
                 try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch {}
+                try {
+                    LogDebug("run args=" + string.Join(" ", args) + " user=" + Environment.UserName
+                        + " temp=" + System.IO.Path.GetTempPath() + " log=" + DebugLog
+                        + (DebugLogFailed == "" ? "" : " tempFailed=" + DebugLogFailed));
+                } catch {}
                 // 调试模式：任意位置出现 --debug 即开启，过滤后不影响原有命令解析
                 var argList = new List<string>(args);
                 if (argList.Contains("--debug") || argList.Contains("-d") || argList.Contains("--verbose")) {
@@ -1279,6 +1463,13 @@ namespace Lat3ncyToolbox
 
                 if (args[0] == "--ensure-headset" || args[0] == "--ensure" || args[0] == "-e") {
                     return EnsureHeadsetActive();
+                }
+
+                // 手动修复：蓝牙已连但立体声卡死时，断开/启用 A2DP 强制重新协商。
+                if (args[0] == "--recover" || args[0] == "--fix-link") {
+                    bool recovered = TryRecoverA2dpLink();
+                    Console.WriteLine(recovered ? "RECOVERED" : "RECOVER_FAILED");
+                    return recovered ? 0 : 1;
                 }
 
                 if (args[0] == "--list" || args[0] == "-l") {
@@ -1313,7 +1504,7 @@ namespace Lat3ncyToolbox
                     return 1;
                 }
 
-                Console.WriteLine("Usage: audio-switcher.exe [--toggle | --ensure-headset | --list | --get | --set <name/id> | --debug-dump]");
+                Console.WriteLine("Usage: audio-switcher.exe [--toggle | --ensure-headset | --recover | --list | --get | --set <name/id> | --debug-dump]");
                 return 0;
             } catch (Exception ex) {
                 if (IsNoSuchDevinst(ex)) {

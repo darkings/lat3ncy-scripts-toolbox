@@ -60,7 +60,11 @@ if (-not (Set-DesktopWallpaper -ImagePath $next)) {
 }
 
 if (-not (Sync-LockScreenWallpaper -Config $config -ImagePath $next)) {
-  throw "Desktop changed, but lock screen failed: $([IO.Path]::GetFileName($next))"
+  # 桌面已经换好了；这里把锁屏失败的真实原因带进 Toast，省得再去翻日志。
+  $detail = if ($script:ThemeLockScreenError) { [string]$script:ThemeLockScreenError } else { '' }
+  if ($detail.Length -gt 200) { $detail = $detail.Substring(0, 200) + '…' }
+  $suffix = if ($detail) { ' — ' + $detail } else { '' }
+  throw "Desktop changed, but lock screen failed: $([IO.Path]::GetFileName($next))$suffix"
 }
 
 # 壁纸和锁屏已更换，静默退出不弹 Toast

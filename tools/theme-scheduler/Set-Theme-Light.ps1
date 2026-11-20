@@ -21,6 +21,8 @@ if (-not $Force)
   }
 }
 
+$beforeState = Get-ThemePersonalizeState
+
 if ($config.general.switch_type -eq 'theme' -and $config.theme_settings.light_theme_file)
 {
   Apply-ThemeFile -ThemeInput $config.theme_settings.light_theme_file | Out-Null
@@ -31,27 +33,31 @@ else
   Set-WindowsColorMode -Mode 'light' -Config $config
 }
 
-# 壁纸：显式路径优先，否则按文件名取当前壁纸的下一张，和 Raycast 下一张共用顺序。
-$wallpaperImage = Resolve-WallpaperImage -Config $config -Mode 'light'
-if ($config.wallpaper.enabled -and $wallpaperImage)
+# 只有"颜色真的变了"才派发尾巴（壁纸/光标/键盘灯/锁屏）。两个原因：
+#   ① 幂等补跑不该把壁纸再轮换一张 —— 典型场景是唤醒对齐已经切过浅色，
+#      几分钟后 S4 漏跑补偿又跑一次本脚本，两次都换壁纸会连跳两张。
+#   ② 尾巴实测 5-17 秒，它跟"什么时候变色"完全无关。
+# 用前后状态对比而不是看函数返回值：返回链路上任何杂散输出都会污染判断，
+# 而多读两次注册表只要 ~2ms。
+$afterState = Get-ThemePersonalizeState
+$colorChanged = $true
+if ($config.general.switch_type -ne 'theme')
 {
-  Set-DesktopWallpaper -ImagePath $wallpaperImage | Out-Null
+  $colorChanged = ([int]$beforeState.AppsUseLightTheme -ne [int]$afterState.AppsUseLightTheme) -or `
+                  ([int]$beforeState.SystemUsesLightTheme -ne [int]$afterState.SystemUsesLightTheme)
 }
 
-# 锁屏跟随：换过壁纸就用同一张，否则同步当前桌面壁纸（wallpaper.sync_lock_screen 控制）
-$lockScreenImage = if ($config.wallpaper.enabled -and $wallpaperImage) { $wallpaperImage } else { '' }
-
-
-# 颜色切完再换指针；缺文件或关闭 cursor.enabled 时静默跳过。
-Set-WindowsCursorScheme -Mode 'light' -Config $config | Out-Null
-
-# 键盘背光：ThinkPad 设备随浅色模式切至目标亮度（非 ThinkPad 或禁用时静默跳过）
-Set-ThinkPadKeyboardBacklight -Mode 'light' -Config $config | Out-Null
-
-if ($config.general.show_notification)
+if ($config.general.show_notification -and $colorChanged)
 {
-  Invoke-ThemeNotify -Type 'info' -Icon '☀️' -Text '已切换为浅色模式'
+  Invoke-ThemeNotify -Type 'info' -Icon ([string][char]0x2600 + [string][char]0xFE0F) -Text '已切换为浅色模式'
 }
 
-# 锁屏同步放最后：WinRT 调用不阻塞体感
-Sync-LockScreenWallpaper -Config $config -ImagePath $lockScreenImage | Out-Null
+if ($colorChanged)
+{
+  # 壁纸 / 光标 / 键盘灯 / 锁屏 全部交给独立进程，主脚本立刻返回
+  Start-ThemeTail -Mode 'light' | Out-Null
+}
+else
+{
+  Write-ThemeLog 'Tail skipped: color unchanged (wallpaper/cursor/backlight/lockscreen)'
+}

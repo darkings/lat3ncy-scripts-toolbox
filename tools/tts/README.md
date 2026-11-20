@@ -36,6 +36,8 @@ tools/tts/.venv/Scripts/python.exe tools/tts/tts_player.py --config .\tools\tts\
 
 2026-11-20 的对照：全局 Python 3.15 为 medium（RID 8192），其 PowerShell 子进程能用 SAPI 生成 WAV；模块虚拟环境 Python 为 low（RID 4096），SAPI 能枚举声音但无法合成，默认 TEMP 写入被拒绝。两者都不是 AppContainer 或 restricted token，且子进程均为 STA/FullLanguage。当前 3.15 环境还没有可用的旧 `winsdk`。这些是独立记录的环境限制，不应误报为没有安装任何声音。
 
+`icacls` 进一步确认：仓库目录包含可继承的 `Low Mandatory Level:(OI)(CI)(NW)`；venv 的 python.exe/pythonw.exe 含继承的 Low 标签，全局解释器没有该标签。Windows 创建进程时取用户与可执行文件完整性的较低者，因此该 venv 会以 Low 运行；不是缺失声音、32/64 位不匹配或 PowerShell 语言模式问题。未修改文件标签、ACL 或尝试提权。机制参考 [Microsoft MIC 文档](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)。
+
 ```powershell
 python tools/validation/process_context.py
 tools/tts/.venv/Scripts/python.exe tools/validation/process_context.py

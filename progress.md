@@ -322,6 +322,8 @@
 - TTS auto 从本地失败恢复到独立 MP3 缓存，中英文真实文件可解码；显式 winrt 无在线请求。缓存写入探针失败回退模块 .cache；MCI/SAPI/顶层失败不再伪报成功。
 - 独立 Build-ImeHud.ps1 及 CI WinUI job 已补，构建逻辑与主套件共用 BuildSupport；validation 来源/排除/原 Git 状态保护纳入离线和全量回归。
 - 新证据位于 .tmp/integration/20261120-* 与 .tmp/validation/20261120-release-candidate/。音频未播放，剪贴板/电源/设备状态未改；总体 TTS smoke 仍为 partial。
+- 随后按模块在 codex/reliability-baseline-20261120 创建 6 个本地提交（电源/启动、AHK通知、Python、桌面助手、构建/测试、文档）；四份个人配置内容哈希不变且未提交。远端结果以对应分支的 Actions 为准。
+- `icacls` 确认仓库有可继承 Low 标签，venv 解释器继承 Low、全局解释器无 Low；这解释了实际子进程完整性差异。保持 ACL 不变，并记录 Microsoft MIC 机制。
 
 ## 会话：2026-11-19 二次评审修复部署与下一步分析
 

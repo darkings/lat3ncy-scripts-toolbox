@@ -1,5 +1,12 @@
 # 发现与决策
 
+## 2026-11-22：设置窗口关闭与常驻生命周期
+
+- 原生 HWND HUD 增加普通 XAML 设置窗口后，实际关闭设置导致 PID 17200 结束，AHK 后续恢复新 HUD；这不是设置读取失败。控件树和 settings-loaded 已确认加载成功。
+- 本地 Windows App SDK 1.8 的 Microsoft.WinUI.xml 提供 Application.DispatcherShutdownMode。微软 [1.8 属性说明](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.application.dispatchershutdownmode?view=windows-app-sdk-1.8) 说明 Application.Start 将当前线程设为 OnLastWindowClose；混合原生 HWND 常驻应改 OnExplicitShutdown，正式结束时主动 Application.Exit。
+- HudApp 构造时显式设置该模式。新增 --settings-lifecycle-test，不占用 HUD 全局标识、不保存设置、不注入输入，连续两轮设置加载/关闭后继续 Dispatcher 调度；独立源码构建产物实际返回 0。
+- Computer Use 可枚举新设置窗口并读取全部控件/已加载状态，点击“重新加载”仍 GetCursorPos 0x80070005；没有成功输入，不能据此标为点击/视觉/声音通过。普通 ShellExecute 启动在后台环境挂起，清理精确自有 launcher PID，Raycast 改无 shell 的 ProcessStartInfo/CreateNoWindow，正常原生 CLI 转发已验证。
+
 ## 2026-10-01：中英文切换提示不跟光标（锚点退化）
 
 ### 现象

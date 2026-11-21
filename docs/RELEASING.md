@@ -89,6 +89,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 | HUD 部署产物 | 使用部署输出的 `Release` 路径 | 恢复该发布清单中的字节，并重载当前 AHK 源码 |
 | AHK/Python/PowerPolicy 源码 | 审阅具体 Git 差异，应用修复提交或恢复已选定版本，再按模块重载 | HUD 回滚不会恢复源码；保留未提交改动与个人配置 |
 | 个人 TOML/凭证 | 从本机配置备份恢复所需文件，再按模块重新读取 | 不在部署产物备份内 |
+| 翻译/朗读窗口偏好 | 单独备份本仓库身份对应的 `preferences.json`；需要回到 TOML 时先关闭设置窗口，再将该文件改名保留 | 位于 LOCALAPPDATA，不在 HUD 产物备份中；旧源码忽略它，仓库移动后身份变化 |
 | TTS Python 环境 | 使用所选源码版本的锁文件执行安装/检查 | HUD 回滚不回退包；旧 repo 环境保留但不会自动取代就绪的 profile 环境 |
 | 电源设置/设备恢复记录 | 使用现有 PowerPolicy 恢复/卸载入口 | 不属于 HUD 回滚；设备不可用时保留未成功恢复的记录 |
 
@@ -105,4 +106,4 @@ python tools/diagnostics/doctor.py
 
 每次候选记录：提交 SHA、相对 `main` 的完整范围、对应 SHA 的 CI、干净 clone 报告、基础使用验收及剩余专项矩阵。草稿 PR 不等于合并或正式发布；本仓库没有自动发布安装包的流程。
 
-本轮候选见 [2026-11-21 发布说明](releases/2026-11-21-reliability.md)。本机配置、运行日志、模型、依赖环境和 `.tmp` 证据不作为发布附件；自动化报告只记录必要元数据。
+本轮候选见 [2026-11-22 文本工作流说明](releases/2026-11-22-text-workflow.md)，前一轮见 [2026-11-21 基础可靠性记录](releases/2026-11-21-reliability.md)。本机配置、偏好文件、运行日志、模型、依赖环境和 `.tmp` 证据不作为发布附件；自动化报告只记录必要元数据。分享诊断使用 `doctor.py --bundle <新 ZIP 路径>`；`--output` 的普通本地报告仍含路径/PID，不应当作脱敏附件。

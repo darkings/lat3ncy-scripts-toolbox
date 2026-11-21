@@ -23,6 +23,7 @@ __pycache__/
 !/docs/releases/
 /docs/releases/*
 !/docs/releases/2026-11-21-reliability.md
+!/docs/releases/2026-11-22-text-workflow.md
 
 # 运行日志
 **/*.log

@@ -63,6 +63,9 @@ class TranslateSelectedText {
     ; 测试注入用；生产保持 0。只影响面板/通知副作用，不影响轮询和状态机。
     static Hooks := 0
     static Workflow := 0
+    static ExitBound := ""
+    static ShuttingDown := false
+    static ShutdownBudgetMs := 1500
 
     static RepoDir() {
         if (this.CachedRepoDir != "")
@@ -196,6 +199,8 @@ class TranslateSelectedText {
 
     ; Shared backend entry; callers supply text directly, never through clipboard.
     static TranslateText(selected, hotkeyX := 0, hotkeyY := 0, keepSourceOnError := false) {
+        if this.ShuttingDown
+            return 0
         selected := this.Normalize(selected)
         if (selected = "") {
             Notify.Error("!", "未选中文字")
@@ -239,7 +244,7 @@ class TranslateSelectedText {
             if (panelOpened && IsObject(this.Workflow))
                 this.Workflow.Bind(requestId)
             ; 非等待启动：热键线程立刻返回，翻译在子进程里跑，AHK 定时器不受阻。
-            job := ProcessNoWindow.StartAsync(cmd, "", this.ProcessTimeoutMs)
+            job := ProcessNoWindow.StartAsync(cmd, "", this.ProcessTimeoutMs, true)
         } catch as err {
             try FileDelete inputFile
             try FileDelete outputFile
@@ -278,6 +283,10 @@ class TranslateSelectedText {
     }
 
     static EnsurePoll() {
+        if (this.ExitBound = "") {
+            this.ExitBound := ObjBindMethod(this, "Shutdown")
+            OnExit this.ExitBound
+        }
         if (this.PollTimer != "")
             return
         this.PollTimer := ObjBindMethod(this, "Poll")
@@ -303,6 +312,46 @@ class TranslateSelectedText {
     static CleanupTaskFiles(task) {
         try FileDelete task.inputFile
         try FileDelete task.outputFile
+        return !FileExist(task.inputFile) && !FileExist(task.outputFile)
+    }
+
+    static Shutdown(*) {
+        if this.ShuttingDown
+            return 0
+        this.ShuttingDown := true
+        this.StopPoll()
+        this.CancelCurrent()
+        tasks := this.Tasks
+        deadline := A_TickCount + this.ShutdownBudgetMs
+        for task in tasks {
+            if !task.job.Done
+                try task.job.Cancel()
+        }
+        loop {
+            pending := false
+            for task in tasks {
+                if !task.job.Done {
+                    try task.job.Poll()
+                    pending := pending || !task.job.Done
+                }
+            }
+            if (!pending || A_TickCount >= deadline)
+                break
+            Sleep 10
+        }
+        for task in tasks
+            try task.job.Dispose()
+        loop {
+            clean := true
+            for task in tasks
+                clean := this.CleanupTaskFiles(task) && clean
+            if (clean || A_TickCount >= deadline)
+                break
+            Sleep 10
+        }
+        this.Tasks := []
+        this.Log("shutdown tasks=" tasks.Length " cleanup=" (clean ? "complete" : "incomplete"))
+        return 0
     }
 
     static IsPanelOpen() {

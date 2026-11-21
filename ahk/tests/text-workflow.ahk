@@ -4,6 +4,7 @@ class WorkflowTestSpeaker {
     static WarmupJob := 0
     static Said := []
     static Stops := 0
+    static Shutdowns := 0
     static SpeakText(text) {
         this.Generation += 1
         this.CurrentTask := {}
@@ -16,6 +17,7 @@ class WorkflowTestSpeaker {
         this.Stops += 1
     }
     static CancelCurrent() => this.Stops += 1
+    static Shutdown() => this.Shutdowns += 1
 }
 
 class WorkflowTestClient extends TextWorkflow {
@@ -217,7 +219,9 @@ TextWorkflowTests() {
         }
         WorkflowBackendEntryTests(root)
     } finally {
+        shutdowns := WorkflowTestSpeaker.Shutdowns
         client.Shutdown()
+        AssertEqual(shutdowns + 1, WorkflowTestSpeaker.Shutdowns, "workflow shutdown closes its translator before returning")
         ; All children are individually owned and removed above; no recursive deletion.
         try DirDelete root
     }

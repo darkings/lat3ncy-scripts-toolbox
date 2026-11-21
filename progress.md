@@ -474,3 +474,12 @@
 - 新增 5 项离线回归，验证布尔策略、回退历史与终态分离、阶段分类、枚举/缓存边界和普通 CLI；任意私有标记、异常正文、未识别枚举均不进入报告。日志读取仍限末尾 64 KiB，环境健康结论仍不由历史日志决定，无系统通知。
 - 134 项 Python、完整 AHK/WinUI 和含空格路径干净候选三阶段通过：.tmp/validation/20261122-diagnostic-history/report.json；最终两份实现/测试源码与候选文件哈希一致。实际既有 producer 日志验证 tencent → google_gtx / credentials，随后注入的 config 失败独立保留：.tmp/diagnostic-history-producer-evidence.json。
 - 当前只读 JSON 与普通诊断均成功，.tmp/diagnostic-history-live.json / .txt；四份个人配置 SHA-256 不变。诊断按需生效，未重载或操作生产常驻、截图、剪贴板或声音。实机项目仍待会话恢复，保持草稿 PR #3；推送后按最终 SHA 检查 CI。
+
+## 会话：2026-11-22 翻译取消与退出生命周期
+
+- 用户要求继续无需实机的工作，检查退出路径发现 TranslateSelectedText 仅靠定时器回收，没有 OnExit 收尾；TextWorkflow.Shutdown 也未关闭翻译器。最小固定后端复现：退出观察器记录 handles_closed=0 / tasks=1 / input_present=1 / output_present=1，.tmp/translation-exit-before/report.txt。复现进程与文件均已按精确归属清理。
+- 增加退出钩子和幂等 Shutdown，工作流关闭联动翻译器；进入关闭后拒绝新请求、撤销身份、停定时器、取消全部任务，轮询与删除重试共用 1.5 秒预算，最后 Dispose 释放残余句柄。不显示迟到结果或发退出通知。翻译子进程必须绑定 Job；绑定失败不放行挂起进程。
+- 新增 translation-lifecycle.ahk / translation-exit-fixture.ahk 并加入完整入口：固定后端持有输入文件、先写测试结果且启动子进程。观察器在实际宿主退出前验证子进程、文件、任务及句柄，覆盖自动退出、普通取消、显式/重复关闭与迟到请求。另以不完成的 Job 桩验证预算耗尽后强制回收所有在途任务。无网络、选区、剪贴板、模型或声音操作。
+- 修复后退出探针 handles_closed=1 / job_assigned=1，任务/输入/结果/子进程均为 0，.tmp/translation-exit-after/report.txt。134 项 Python、完整 AHK/WinUI 及含空格路径干净候选离线/助手构建/全量三阶段通过：.tmp/validation/20261122-translation-shutdown/report.json；最终 6 份 AHK 源码与候选哈希一致。
+- 正式 ForceReload，无 WinUI 字节替换：AHK 26676 / HUD 25804 / 光标 27508，PING/归属和只读诊断 ok。发布备份 .tmp/releases/20261121-222439-ddbdac41，.tmp/translation-shutdown-deploy.json；自有 Python 测试工作进程剩余 0，四份个人配置 SHA-256 不变。
+- 文档区分正常退出与断电/强杀/持续文件锁，后者不作清理成功保证；清理状态只记固定 complete/incomplete。保留实机待办和草稿 PR #3，推送后核对最终 SHA 的 CI。

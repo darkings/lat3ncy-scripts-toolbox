@@ -1941,6 +1941,7 @@ AssertNotContains(smartPasteHelperSource, 'Remove-Item -LiteralPath $outputPath'
 #Include tts-lifecycle.ahk
 TtsLifecycleTests()
 #Include text-workflow.ahk
+#Include translation-lifecycle.ahk
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

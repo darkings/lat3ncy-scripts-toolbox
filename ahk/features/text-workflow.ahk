@@ -270,6 +270,9 @@ class TextWorkflow {
 
     static Shutdown(*) {
         this.CancelCapture()
+        translator := this.Translator()
+        if HasMethod(translator, "Shutdown")
+            translator.Shutdown()
         for task in this.Retired {
             task.job.Dispose()
             this.CleanupCapture(task)

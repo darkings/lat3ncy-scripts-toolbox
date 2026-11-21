@@ -8,7 +8,7 @@ python tools/diagnostics/doctor.py
 python tools/diagnostics/doctor.py --json --output .tmp/diagnostics/report.json
 ```
 
-默认检查配置 TOML 语法、引擎名及翻译源／目标语言枚举、当前仓库 AHK/HUD/光标助手/PowerPolicy 状态、OCR/翻译/TTS 解释器和依赖元数据、进程完整性及 TEMP 写入能力，并列出日志位置与最近可识别的终态/失败类别。语言仅输出归一后的 `auto` / `zh` / `en`，非法值只报告字段名。`ok` 表示这些离线检查通过，退出码为 0；缺失、过期、依赖不匹配或无法判断时为 `attention`，退出码为 1。启动失败也返回 1。
+默认检查配置 TOML 语法、引擎名、翻译源／目标语言枚举与回退开关、当前仓库 AHK/HUD/光标助手/PowerPolicy 状态、OCR/翻译/TTS 解释器和依赖元数据、进程完整性及 TEMP 写入能力，并列出日志位置与最近可识别的终态/失败类别。语言仅输出归一后的 `auto` / `zh` / `en`；回退开关仅接受布尔值，非法值只报告字段名。`ok` 表示这些离线检查通过，退出码为 0；缺失、过期、依赖不匹配或无法判断时为 `attention`，退出码为 1。启动失败也返回 1。
 
 内部解释器探针以 JSON 交付观察结果，交付成功时退出 0，即使发现依赖不匹配或低完整性；外层命令再按这些字段返回健康退出码。这样依赖异常不会被丢弃为笼统的子进程失败。
 
@@ -23,13 +23,22 @@ python tools/diagnostics/doctor.py --json --output .tmp/diagnostics/report.json
 
 日志每份最多读取末尾 64 KiB，只提取固定格式的时间、终态、错误类别、退出码；未识别的格式不作推断。OCR 日志仅有本地时分秒，`completed` 可能包含空结果或取消。历史失败独立于最新终态，并且不影响本次环境检查结论。报告不包含日志原文、选中文字、译文、密钥、进程命令行或异常消息；包含本机路径与 PID。
 
+翻译报告另外提供：
+
+- `configs.translate.fallback_without_credentials` / `fallback_on_auth_error`：当前配置是否允许缺密钥／鉴权失败回退，缺省 false；不检查密钥值。
+- `logs.translate.lastTerminalEvent`：成功记录的实际 `engine`、布尔 `cached` 和 `presentation=panel/popup`；启动或显示失败统一为 `status=fail`、`kind=internal`，并以 `stage=launch/delivery` 区分。
+- `logs.translate.lastFallbackEvent`：最近可识别的 `preferredEngine`、实际回退 `engine`、固定 `reason` 和时间。它与终态独立保存，单独一条回退记录不代表交付成功或失败，也不自动归属最近终态。
+- `logs.translate.lastFailure`：最近失败，即使后续成功也保留；支持鉴权、输入、I/O 等固定类别，绝不输出异常原文。
+
+不加 `--json` 的普通输出也会显示回退开关、最近回退路线和失败阶段。诊断不发通知、不调用服务、不更改回退策略；历史回退或失败不会自动将当前环境标为 `attention`。
+
 排查顺序：
 
 | 结果 | 下一步 |
 | --- | --- |
 | `missing` / `interpreter-not-found` | 检查报告中的运行环境和模块安装说明 |
 | `mismatches` 非空 | 按该模块现有安装入口恢复锁定依赖；诊断命令不自动安装 |
-| `invalid` 配置 | 检查对应 `config.toml` 的语法和引擎名 |
+| `invalid` 配置 | 检查对应 `config.toml` 的语法、引擎、语言和回退布尔开关 |
 | `outdated` | 对照源码/配置变更，使用已有正式重载入口 |
 | `query-failed` / `probe-timeout` | 结合报告时间、当前权限及日志路径排查，保留未知状态 |
 | 环境正常但功能失败 | 查看最新终态和错误类别，再运行模块的显式集成探针 |

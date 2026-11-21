@@ -466,3 +466,11 @@
 - 完成任务的 UI 交付置于 try/catch/finally，显示/通知异常仅记固定 internal，不重复通知、不记录潜在正文异常消息；始终回收输入与结果文件，并继续清空完成任务。新增真实状态机回调故障注入回归。
 - 129 项 Python、完整 AHK/WinUI 及含空格路径干净候选离线/助手构建/全量三阶段通过，证据 .tmp/validation/20261122-protocol-cleanup/report.json。正式 ForceReload 无 WinUI 字节变化，AHK 6756 / HUD 9200 / 光标 12392，PING 与归属健康；.tmp/review-20261122-deploy.json。四份个人配置字节保持本轮基线，包括已授权的 Google 静默保底策略。
 - 实机项目继续待办，保留草稿 PR #3；同步修复后核对最终 SHA 的远端 CI，不要求用户当下回到电脑旁。
+
+## 会话：2026-11-22 回退与交付异常诊断
+
+- 用户继续推进无需实机的工作，补齐统一诊断对当前 Google 保底策略和上轮交付异常的可观测性。配置只导出严格布尔 fallback_without_credentials / fallback_on_auth_error，非法原始值不导出；不验证密钥或改变配置。
+- 翻译日志新增独立 lastFallbackEvent（首选/实际引擎、固定原因、时间），成功终态输出实际引擎、布尔缓存与 panel/popup。回退本身不代表终态，不覆盖历史失败；新错误 delivery-failed / start-failed 以 internal + delivery/launch 记录。补齐鉴权、I/O、输入等固定类别，普通输出同步展示。
+- 新增 5 项离线回归，验证布尔策略、回退历史与终态分离、阶段分类、枚举/缓存边界和普通 CLI；任意私有标记、异常正文、未识别枚举均不进入报告。日志读取仍限末尾 64 KiB，环境健康结论仍不由历史日志决定，无系统通知。
+- 134 项 Python、完整 AHK/WinUI 和含空格路径干净候选三阶段通过：.tmp/validation/20261122-diagnostic-history/report.json；最终两份实现/测试源码与候选文件哈希一致。实际既有 producer 日志验证 tencent → google_gtx / credentials，随后注入的 config 失败独立保留：.tmp/diagnostic-history-producer-evidence.json。
+- 当前只读 JSON 与普通诊断均成功，.tmp/diagnostic-history-live.json / .txt；四份个人配置 SHA-256 不变。诊断按需生效，未重载或操作生产常驻、截图、剪贴板或声音。实机项目仍待会话恢复，保持草稿 PR #3；推送后按最终 SHA 检查 CI。

@@ -55,7 +55,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 
 ## 自动化与真机验收
 
-`ahk/tests/run-offline-tests.ps1` 是 Windows CI 子集：全部第一方 PowerShell AST/BOM、启动/心跳/发布回滚及主题入口桩，以及当前 129 个 Python 行为测试。Python 使用 `-S` 排除本机 site-packages；模型、网络服务和硬件均为桩。`.github/workflows/offline-windows.yml` 使用 Python 3.13、Windows PowerShell 5.1 执行它，并独立源码构建 WinUI；可靠性分支已有远端通过记录，最新结果以对应提交的 Actions 为准。
+`ahk/tests/run-offline-tests.ps1` 是 Windows CI 子集：全部第一方 PowerShell AST/BOM、启动/心跳/发布回滚及主题入口桩，以及当前 134 个 Python 行为测试。Python 使用 `-S` 排除本机 site-packages；模型、网络服务和硬件均为桩。`.github/workflows/offline-windows.yml` 使用 Python 3.13、Windows PowerShell 5.1 执行它，并独立源码构建 WinUI；可靠性分支已有远端通过记录，最新结果以对应提交的 Actions 为准。
 
 `run-tests.ps1` 额外验证真实 AHK 引擎、独立 feature 加载、WinUI 构建戳/self-test 与锚点 self-test。两种套件通过都不代表真实合盖、蓝牙和 UIA 场景已验收。
 

@@ -50,7 +50,13 @@ def config_summary(path: Path, component: str) -> dict:
                 if code not in {'auto', 'zh', 'en'}:
                     return {'status': 'invalid', 'reason': 'unsupported-language', 'field': field}
                 languages[field] = code
-            return {'status': 'ok', 'engine': engine, **languages}
+            policy = {}
+            for field in ('fallback_without_credentials', 'fallback_on_auth_error'):
+                enabled = value.get(field, False)
+                if not isinstance(enabled, bool):
+                    return {'status': 'invalid', 'reason': 'invalid-fallback-policy', 'field': field}
+                policy[field] = enabled
+            return {'status': 'ok', 'engine': engine, **languages, **policy}
         return {'status': 'ok', 'engine': engine}
     except FileNotFoundError:
         return {'status': 'default', 'engine': {'ocr': 'system', 'translate': 'tencent', 'tts': 'auto'}[component]}
@@ -70,9 +76,21 @@ def log_summary(path: Path, component: str) -> dict:
             tail = stream.read(65536).decode('utf-8-sig', errors='replace')
         # Anchored to production AHK records. A detail= field cannot inject one.
         tts = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[AHK\] 朗读结束 request=[A-Za-z0-9_-]+ status=(success|failed|timeout|cancelled) kind=(none|input|synthesis|playback|timeout|internal|cancelled|protocol) exit=(-?\d{1,3})$')
-        translate = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] (ok|fail) id=\d+(?: .*)?$')
+        stamp = r'\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] '
+        engines = r'(tencent|aliyun|google_gtx|mymemory)'
+        translate = re.compile('^'+stamp+r'(ok|ok-popup|fail|delivery-failed|start-failed) id=\d+(?: .*)?$')
+        fallback = re.compile('^'+stamp+r'fallback preferred='+engines+r' engine=(google_gtx|mymemory) reason=(credentials|auth|network|timeout|too_long)$')
+        success = re.compile('^'+stamp+r'(ok|ok-popup) id=\d+ engine=(tencent|aliyun|google_gtx|mymemory|identity) cached=([01])(?: chars=\d+)?$')
         ocr = re.compile(r'^(\d\d:\d\d:\d\d) py (done exit=(0|1)|error exit=1(?: .*)?)$')
         for line in tail.splitlines():
+            if component == 'translate':
+                route = fallback.fullmatch(line)
+                if route:
+                    if route[2] != route[3]:
+                        result['lastFallbackEvent'] = {'atLocal': route[1], 'preferredEngine': route[2],
+                                                       'engine': route[3], 'reason': route[4]}
+                    # A fallback record alone is neither delivery nor failure.
+                    continue
             match = tts.fullmatch(line) if component == 'tts' else translate.fullmatch(line) if component == 'translate' else ocr.fullmatch(line) if component == 'ocr' else None
             if not match:
                 continue
@@ -80,9 +98,24 @@ def log_summary(path: Path, component: str) -> dict:
             if component == 'tts':
                 event.update(kind=match[3], exitCode=int(match[4]))
             elif component == 'translate':
-                category = re.search(r' diagnostic=(config|timeout|network|http|parse|internal)(?= |$)', line)
-                if category:
-                    event['kind'] = category[1]
+                if match[2] in {'ok', 'ok-popup'}:
+                    delivered = success.fullmatch(line)
+                    if not delivered:
+                        continue
+                    event.update(status='ok', engine=delivered[3], cached=delivered[4] == '1',
+                                 presentation='popup' if match[2] == 'ok-popup' else 'panel')
+                elif match[2] == 'delivery-failed':
+                    if not re.fullmatch(stamp+r'delivery-failed id=\d+ diagnostic=internal', line):
+                        continue
+                    event.update(status='fail', kind='internal', stage='delivery')
+                elif match[2] == 'start-failed':
+                    if not re.fullmatch(stamp+r'start-failed id=\d+ error=.*', line):
+                        continue
+                    event.update(status='fail', kind='internal', stage='launch')
+                else:
+                    category = re.search(r' diagnostic=(auth|config|timeout|network|http|parse|internal|too_long|io|empty|detect|protocol|error)(?= |$)', line)
+                    if category:
+                        event['kind'] = category[1]
             else:
                 # OCR exit=0 also includes no-text/cancel; do not infer delivery.
                 event['status'] = 'completed' if match[3] == '0' else 'failed'
@@ -229,12 +262,19 @@ def main() -> int:
             if item.get('mismatches'):
                 print('    Dependency mismatches: '+', '.join(item['mismatches']))
             if report['configs'][name]['status'] == 'invalid':
-                print('    Check config.toml syntax and engine; values are omitted from this report.')
+                print('    Check config.toml syntax, engine, language and fallback policy; invalid values are omitted.')
+            elif name == 'translate':
+                policy = report['configs'][name]
+                print(f"    Fallback policy: missing credentials={policy.get('fallback_without_credentials', False)}; auth error={policy.get('fallback_on_auth_error', False)}")
         for name, item in report['logs'].items():
             print(f"  {name} log: {item['path']} ({item['status']})")
             if 'lastTerminalEvent' in item:
                 event = item['lastTerminalEvent']
-                print(f"    Latest recorded event: {event['atLocal']} {event['status']}")
+                details = ''.join(f' {key}={event[key]}' for key in ('engine', 'cached', 'stage') if key in event)
+                print(f"    Latest recorded event: {event['atLocal']} {event['status']}{details}")
+            if 'lastFallbackEvent' in item:
+                event = item['lastFallbackEvent']
+                print(f"    Latest recorded fallback: {event['atLocal']} {event['preferredEngine']} -> {event['engine']} ({event['reason']})")
             if 'lastFailure' in item:
                 event = item['lastFailure']
                 print(f"    Historical failure: {event['atLocal']} {event.get('kind', event['status'])}")

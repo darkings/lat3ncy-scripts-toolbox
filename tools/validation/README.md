@@ -143,3 +143,5 @@ $python = Join-Path (Split-Path $spec.Python -Parent) 'python.exe'
 AHK 全量回归新增：译文正文的 request_id / preferred_engine 等不能伪造头部元数据；OCR 缺少头部身份时拒绝正文伪造身份；结果 UI 回调抛异常时仍回收输入/结果文件、清空完成任务，并仅记录固定 internal 类别，不输出私有异常正文或重复通知。Python 总数仍为 129。干净候选全量证据 .tmp/validation/20261122-protocol-cleanup/。
 
 本轮实际重试 Computer Use：WinUI 工具窗口没有可控目标，启动重试超时；普通固定测试 GUI 的控件树可读，但截图返回 CreateForMonitor 0x80070057，点击及激活返回 GetCursorPos 0x80070005。成功输入次数为 0，不能宣称选区、真实快捷键、按钮或视觉已验收。自有测试窗口已清理，未修改桌面权限；证据 .tmp/computer-use-20261122/report.json。用户离开电脑不阻塞无交互回归，实机待办继续保留。
+
+2026-11-22 诊断增量：新增回退开关严格布尔检查、回退历史与终态分离、实际引擎/缓存/交付位置、启动与显示失败阶段及普通输出回归。只识别白名单元数据，不导出日志正文或异常消息。新增 5 项离线行为测试，Python 合计 134 项；不需要桌面、网络、模型或真实语音。

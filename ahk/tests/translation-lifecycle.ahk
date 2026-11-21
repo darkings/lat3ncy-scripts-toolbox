@@ -23,7 +23,7 @@ TranslationLifecycleTests() {
     DirCreate root
     SplitPath A_LineFile, , &testDir
     worker := 'import argparse,pathlib,subprocess,sys,time`n'
-        . 'p=argparse.ArgumentParser();p.add_argument("--input-file");p.add_argument("--output-file");a=p.parse_args()`n'
+        . 'p=argparse.ArgumentParser();p.add_argument("--input-file");p.add_argument("--output-file");a,_=p.parse_known_args()`n'
         . 'with open(a.input_file,encoding="utf-8-sig") as held:`n'
         . '    child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"],creationflags=0x08000000)`n'
         . '    pathlib.Path(a.output_file).write_text("status=ok\nengine=fixture\ncached=0\ntext=pending",encoding="utf-8")`n'

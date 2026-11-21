@@ -28,12 +28,24 @@ def load_file(name: str, path: Path):
     return module
 
 
+support = load_file('toolbox_support_bundle', Path(__file__).with_name('support_bundle.py'))
+preferences = load_file('toolbox_diagnostic_preferences', ROOT/'tools/toolbox_preferences.py')
+
+
 def config_summary(path: Path, component: str) -> dict:
     """Only export allowlisted enums, never the config or arbitrary values."""
     try:
-        if path.stat().st_size > 1024 * 1024:
-            return {'status': 'invalid', 'reason': 'config-too-large'}
-        value = tomllib.loads(path.read_text('utf-8-sig'))
+        default = False
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                return {'status': 'invalid', 'reason': 'config-too-large'}
+            value = tomllib.loads(path.read_text('utf-8-sig'))
+        except FileNotFoundError:
+            value, default = {}, True
+        original = value
+        if component in {'translate', 'tts'}:
+            value = preferences.apply_overlay(component, value, path)
+        extra = {'preferencesApplied': True} if value != original else {}
         engine = value.get('ocr' if component == 'ocr' else 'engine',
                            {'ocr': 'system', 'translate': 'tencent', 'tts': 'auto'}[component])
         if component == 'translate' and isinstance(engine, str):
@@ -51,15 +63,13 @@ def config_summary(path: Path, component: str) -> dict:
                     return {'status': 'invalid', 'reason': 'unsupported-language', 'field': field}
                 languages[field] = code
             policy = {}
-            for field in ('fallback_without_credentials', 'fallback_on_auth_error'):
+            for field in ('fallback_without_credentials', 'fallback_on_auth_error', 'long_text_enabled'):
                 enabled = value.get(field, False)
                 if not isinstance(enabled, bool):
                     return {'status': 'invalid', 'reason': 'invalid-fallback-policy', 'field': field}
                 policy[field] = enabled
-            return {'status': 'ok', 'engine': engine, **languages, **policy}
-        return {'status': 'ok', 'engine': engine}
-    except FileNotFoundError:
-        return {'status': 'default', 'engine': {'ocr': 'system', 'translate': 'tencent', 'tts': 'auto'}[component]}
+            return {'status': 'default' if default else 'ok', 'engine': engine, **languages, **policy, **extra}
+        return {'status': 'default' if default else 'ok', 'engine': engine, **extra}
     except (OSError, ValueError) as error:
         return {'status': 'invalid', 'errorType': type(error).__name__}
 
@@ -74,13 +84,15 @@ def log_summary(path: Path, component: str) -> dict:
                           modifiedUtc=datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat())
             stream.seek(max(0, stat.st_size - 65536))
             tail = stream.read(65536).decode('utf-8-sig', errors='replace')
+        if component == 'translate':
+            result['statistics'] = support.translation_statistics(tail)
         # Anchored to production AHK records. A detail= field cannot inject one.
         tts = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[AHK\] 朗读结束 request=[A-Za-z0-9_-]+ status=(success|failed|timeout|cancelled) kind=(none|input|synthesis|playback|timeout|internal|cancelled|protocol) exit=(-?\d{1,3})$')
         stamp = r'\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] '
         engines = r'(tencent|aliyun|google_gtx|mymemory)'
-        translate = re.compile('^'+stamp+r'(ok|ok-popup|fail|delivery-failed|start-failed) id=\d+(?: .*)?$')
+        translate = re.compile('^'+stamp+r'(ok|ok-popup|fail|delivery-failed|start-failed|partial) id=\d+(?: .*)?$')
         fallback = re.compile('^'+stamp+r'fallback preferred='+engines+r' engine=(google_gtx|mymemory) reason=(credentials|auth|network|timeout|too_long)$')
-        success = re.compile('^'+stamp+r'(ok|ok-popup) id=\d+ engine=(tencent|aliyun|google_gtx|mymemory|identity) cached=([01])(?: chars=\d+)?$')
+        success = re.compile('^'+stamp+r'(ok|ok-popup) id=\d+ engine=(tencent|aliyun|google_gtx|mymemory|identity|mixed) cached=([01])(?: chars=\d+)?$')
         ocr = re.compile(r'^(\d\d:\d\d:\d\d) py (done exit=(0|1)|error exit=1(?: .*)?)$')
         for line in tail.splitlines():
             if component == 'translate':
@@ -112,6 +124,11 @@ def log_summary(path: Path, component: str) -> dict:
                     if not re.fullmatch(stamp+r'start-failed id=\d+ error=.*', line):
                         continue
                     event.update(status='fail', kind='internal', stage='launch')
+                elif match[2] == 'partial':
+                    category = re.fullmatch(stamp+r'partial id=\d+ diagnostic=(auth|config|timeout|network|internal)', line)
+                    if not category:
+                        continue
+                    event.update(status='partial', kind=category[2])
                 else:
                     category = re.search(r' diagnostic=(auth|config|timeout|network|http|parse|internal|too_long|io|empty|detect|protocol|error)(?= |$)', line)
                     if category:
@@ -120,7 +137,7 @@ def log_summary(path: Path, component: str) -> dict:
                 # OCR exit=0 also includes no-text/cancel; do not infer delivery.
                 event['status'] = 'completed' if match[3] == '0' else 'failed'
             result['lastTerminalEvent'] = event
-            if event['status'] in {'fail', 'failed', 'timeout'}:
+            if event['status'] in {'fail', 'failed', 'timeout', 'partial'}:
                 result['lastFailure'] = event
         return result
     except FileNotFoundError:
@@ -232,6 +249,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true', help='Print structured metadata instead of the summary')
     parser.add_argument('--output', type=Path, help='Also save JSON to this path (contains local paths)')
+    parser.add_argument('--bundle', type=Path, help='Create a new shareable ZIP of allowlisted metadata; excludes paths and raw logs')
     parser.add_argument('--probe', choices=list(MODULES), help=argparse.SUPPRESS)
     parser.add_argument('--kind', default='global', help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -245,6 +263,12 @@ def main() -> int:
     except (OSError, ValueError, RuntimeError, ImportError) as error:
         report = {'status': 'query-failed', 'errorType': type(error).__name__}
     encoded = json.dumps(report, ensure_ascii=True, indent=2)
+    if args.bundle:
+        try:
+            support.write_bundle(args.bundle, report)
+        except (OSError, ValueError):
+            print('Support bundle could not be created (existing destination or unavailable output).', file=sys.stderr)
+            return 1
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(encoded+'\n', encoding='utf-8')
@@ -278,6 +302,9 @@ def main() -> int:
             if 'lastFailure' in item:
                 event = item['lastFailure']
                 print(f"    Historical failure: {event['atLocal']} {event.get('kind', event['status'])}")
+            if 'statistics' in item:
+                stats = item['statistics']
+                print(f"    Retained requests: {stats['samples']}; cache hits: {stats['cacheHits']}; fallback requests: {stats['fallbackRequests']}; p95 ms: {stats['elapsedMs']['p95']}")
         print('Offline metadata only. Use --json for details; historical failures do not indicate a current outage.')
     # A probe successfully delivered an observation even when it found a problem.
     # The outer command owns the health exit code; keep probe findings intact.

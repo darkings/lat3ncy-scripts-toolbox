@@ -17,9 +17,10 @@ internal static class TranslationPanelDismiss
         bool visible,
         bool pinned,
         bool foregroundKnown,
-        bool foregroundBelongsToPanel)
+        bool foregroundBelongsToPanel,
+        bool interactionPopupOpen = false)
     {
-        if (!visible || pinned)
+        if (!visible || pinned || interactionPopupOpen)
             return false;
         if (!foregroundKnown)
             return false;
@@ -38,6 +39,8 @@ internal static class TranslationPanelDismiss
 
     public static int SelfTest()
     {
+        if (ShouldHide(true, false, true, false, interactionPopupOpen: true))
+            return 611;
         // 隐藏着的面板不重复关。
         if (ShouldHide(visible: false, pinned: false, foregroundKnown: true, foregroundBelongsToPanel: false))
             return 601;

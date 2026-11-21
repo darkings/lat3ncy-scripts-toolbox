@@ -26,6 +26,8 @@ import tomllib
 import uuid
 from logging.handlers import RotatingFileHandler
 from typing import Any
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from task_protocol import RequestState, TaskFailure
 
 _TASK: RequestState | None = None
@@ -363,6 +365,10 @@ def load_config(config_path: str | None = None) -> dict:
                 default_config["cache"] = cache
         except Exception as e:
             log_error(get_logger(), "加载配置文件失败，使用默认配置", e)
+
+    # Only allowlisted non-secret preferences overlay the default module TOML.
+    from toolbox_preferences import apply_overlay
+    default_config = apply_overlay("tts", default_config, config_path)
 
     default_config["concurrency"] = _clamp_int(
         default_config.get("concurrency", 2), 2, 1, 10, "concurrency"

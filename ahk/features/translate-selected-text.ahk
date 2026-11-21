@@ -198,7 +198,7 @@ class TranslateSelectedText {
     }
 
     ; Shared backend entry; callers supply text directly, never through clipboard.
-    static TranslateText(selected, hotkeyX := 0, hotkeyY := 0, keepSourceOnError := false) {
+    static TranslateText(selected, hotkeyX := 0, hotkeyY := 0, keepSourceOnError := false, options := 0) {
         if this.ShuttingDown
             return 0
         selected := this.Normalize(selected)
@@ -228,10 +228,17 @@ class TranslateSelectedText {
         stamp := A_TickCount "-" requestId "-" Random(1000, 9999)
         inputFile := A_Temp "\lat3ncy-translate-in-" stamp ".txt"
         outputFile := A_Temp "\lat3ncy-translate-out-" stamp ".txt"
+        resumeFile := IsObject(options) && options.Has("resumeFile") && options["resumeFile"] != "" ? options["resumeFile"] : outputFile ".resume.json"
+        target := IsObject(options) && options.Has("target") ? options["target"] : ""
+        if (IsObject(this.Workflow) && HasMethod(this.Workflow, "Context"))
+            this.Workflow.Context(requestId, selected, hotkeyX, hotkeyY, resumeFile, target)
         try FileDelete inputFile
         try FileDelete outputFile
 
         cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '" --output-file "' outputFile '"'
+        cmd .= ' --request-id ' requestId ' --resume-file "' resumeFile '"'
+        if RegExMatch(target, "^(auto|zh|en)$")
+            cmd .= ' --target-language ' target
         if FileExist(configPath)
             cmd .= ' --config "' configPath '"'
 
@@ -251,6 +258,8 @@ class TranslateSelectedText {
             if !(keepSourceOnError && panelOpened && this.IsPanelOpen())
                 try this.ClosePanel()
             this.Log("start-failed id=" requestId " error=" err.Message)
+            if (IsObject(this.Workflow) && HasMethod(this.Workflow, "Failed"))
+                this.Workflow.Failed(requestId)
             this.ShowError("翻译失败")
             return
         }
@@ -262,8 +271,10 @@ class TranslateSelectedText {
             outputFile: outputFile,
             panelOpened: panelOpened,
             dismissed: false,
+            started: A_TickCount,
             keepSourceOnError: keepSourceOnError
         }
+        task.resumeFile := resumeFile
         this.Tasks.Push(task)
         this.CurrentTask := task
         this.EnsurePoll()
@@ -310,9 +321,25 @@ class TranslateSelectedText {
     }
 
     static CleanupTaskFiles(task) {
+        clean := true
         try FileDelete task.inputFile
         try FileDelete task.outputFile
-        return !FileExist(task.inputFile) && !FileExist(task.outputFile)
+        loop files task.outputFile ".*.tmp", "F" {
+            try FileDelete A_LoopFileFullPath
+            clean := !FileExist(A_LoopFileFullPath) && clean
+        }
+        if task.HasOwnProp("resumeFile") {
+            retained := IsObject(this.Workflow) && this.Workflow.HasOwnProp("ResumeFile") && this.Workflow.ResumeFile = task.resumeFile
+            if !retained {
+                try FileDelete task.resumeFile
+                clean := !FileExist(task.resumeFile) && clean
+            }
+            loop files task.resumeFile ".*.tmp", "F" {
+                try FileDelete A_LoopFileFullPath
+                clean := !FileExist(A_LoopFileFullPath) && clean
+            }
+        }
+        return clean && !FileExist(task.inputFile) && !FileExist(task.outputFile)
     }
 
     static Shutdown(*) {
@@ -321,6 +348,9 @@ class TranslateSelectedText {
         this.ShuttingDown := true
         this.StopPoll()
         this.CancelCurrent()
+        retainedResume := IsObject(this.Workflow) && this.Workflow.HasOwnProp("ResumeFile") ? this.Workflow.ResumeFile : ""
+        if (IsObject(this.Workflow) && HasMethod(this.Workflow, "ClearContext"))
+            this.Workflow.ClearContext()
         tasks := this.Tasks
         deadline := A_TickCount + this.ShutdownBudgetMs
         for task in tasks {
@@ -343,6 +373,10 @@ class TranslateSelectedText {
             try task.job.Dispose()
         loop {
             clean := true
+            if (retainedResume != "") {
+                try FileDelete retainedResume
+                clean := !FileExist(retainedResume)
+            }
             for task in tasks
                 clean := this.CleanupTaskFiles(task) && clean
             if (clean || A_TickCount >= deadline)
@@ -416,6 +450,8 @@ class TranslateSelectedText {
         remaining := []
         for task in this.Tasks {
             ; Done 只由 Job.Poll() 推进；定时器必须实际轮询子进程。
+            if (this.CurrentTask = task)
+                this.ReadProgress(task)
             task.job.Poll()
             if !task.job.Done {
                 ; 用户关掉面板就取消请求；不要再把结果塞回已关的面板。
@@ -439,6 +475,7 @@ class TranslateSelectedText {
                 this.RequestGate.CancelCurrent()
             }
 
+            deliveryFailed := false
             try {
                 switch decision {
                     case "apply", "apply-fallback":
@@ -460,7 +497,9 @@ class TranslateSelectedText {
                 ; A failed UI callback must not escape a timer or expose its
                 ; potentially private exception text. Do not retry notifications.
                 this.Log("delivery-failed id=" task.id " diagnostic=internal")
+                deliveryFailed := true
             } finally {
+                try this.RecordMetric(task, decision, deliveryFailed)
                 ; The protocol must be read first, then removed on every path.
                 this.CleanupTaskFiles(task)
             }
@@ -474,6 +513,24 @@ class TranslateSelectedText {
     static ApplyResult(task, fallback) {
         content := this.ReadOutput(task.outputFile)
         status := this.ParseField(content, "status")
+        if ((status = "partial" && this.ParseField(content, "version") != "1") || (this.ParseField(content, "version") != "" &&
+            (this.ParseField(content, "version") != "1" || this.ParseField(content, "request_id") != task.id))) {
+            this.Fail(task, "翻译结果归属无效", "internal")
+            return
+        }
+        if (status = "partial") {
+            text := this.ParseField(content, "text")
+            if fallback
+                this.ShowPopup(text)
+            else {
+                this.SetPanelResult(text)
+                this.ShowProgress(task, content)
+            }
+            if (IsObject(this.Workflow) && HasMethod(this.Workflow, "Failed"))
+                this.Workflow.Failed(task.id)
+            this.Log("partial id=" task.id " diagnostic=" this.ParseField(content, "code"))
+            return
+        }
         if (status != "ok") {
             code := this.ParseField(content, "code")
             message := this.ParseField(content, "message")
@@ -508,16 +565,75 @@ class TranslateSelectedText {
             return
         }
         this.SetPanelResult(text)
+        if (this.ParseField(content, "version") = "1")
+            this.ShowProgress(task, content)
         if IsObject(this.Workflow)
             this.Workflow.Result(task.id, text)
         this.Log("ok id=" task.id " engine=" engine " cached=" cached " chars=" StrLen(text))
     }
 
     static Fail(task, message, diagnostic) {
-        if !(task.HasOwnProp("keepSourceOnError") && task.keepSourceOnError && task.panelOpened && this.IsPanelOpen())
+        workflowContext := IsObject(this.Workflow) && HasMethod(this.Workflow, "Failed")
+        if !((workflowContext || (task.HasOwnProp("keepSourceOnError") && task.keepSourceOnError)) && task.panelOpened && this.IsPanelOpen())
             try this.ClosePanel()
+        if workflowContext
+            this.Workflow.Failed(task.id)
         this.Log("fail id=" task.id " message=" message " diagnostic=" SubStr(diagnostic, 1, 240))
         this.ShowError(message)
+    }
+
+    static RecordMetric(task, decision, deliveryFailed) {
+        content := this.ReadOutput(task.outputFile)
+        status := this.ParseField(content, "status"), code := this.ParseField(content, "code")
+        terminal := deliveryFailed ? "failed" : InStr(decision, "discard-") ? "cancelled" : decision = "timeout" ? "timeout"
+            : status = "ok" ? "ok" : status = "partial" ? "partial" : code = "timeout" ? "timeout" : "failed"
+        engine := this.ParseField(content, "engine")
+        if !RegExMatch(engine, "^(tencent|aliyun|google_gtx|mymemory|identity|mixed)$")
+            engine := "unknown"
+        reason := this.ParseField(content, "fallback_reason")
+        if !RegExMatch(reason, "^(credentials|auth|timeout|network|too_long)$")
+            reason := "none"
+        elapsed := task.HasOwnProp("started") ? Min(7200000, Max(0, A_TickCount - task.started)) : 0
+        counts := Map("total", 1, "completed", terminal = "ok" ? 1 : 0, "failed", terminal = "ok" ? 0 : 1, "resumed", 0)
+        for field, default in counts {
+            value := this.ParseField(content, field)
+            if (RegExMatch(value, "^\d{1,3}$") && Integer(value) <= 200)
+                counts[field] := Integer(value)
+        }
+        this.Log("metric id=" task.id " status=" terminal " elapsed_ms=" elapsed " engine=" engine
+            . " cached=" (this.ParseField(content, "cached") = "1" ? 1 : 0) " fallback=" reason
+            . " total=" counts["total"] " completed=" counts["completed"] " failed=" counts["failed"] " resumed=" counts["resumed"])
+    }
+
+    static ReadProgress(task) {
+        if !FileExist(task.outputFile)
+            return
+        try {
+            if (FileGetSize(task.outputFile) > 4096)
+                return
+            content := this.ReadOutput(task.outputFile)
+            if (this.ParseField(content, "status") = "progress" && this.ParseField(content, "version") = "1"
+                && this.ParseField(content, "request_id") = task.id) {
+                task.job.TimeoutMs := 125000
+                this.ShowProgress(task, content)
+            }
+        }
+    }
+
+    static ShowProgress(task, content) {
+        done := this.ParseField(content, "completed"), total := this.ParseField(content, "total"), failed := this.ParseField(content, "failed")
+        if !(RegExMatch(done, "^\d{1,3}$") && RegExMatch(total, "^\d{1,3}$") && RegExMatch(failed, "^\d{1,3}$"))
+            return
+        if (Integer(total) < 1 || Integer(total) > 200 || Integer(done) + Integer(failed) > Integer(total))
+            return
+        value := done "|" total "|" failed
+        if (task.HasOwnProp("progress") && task.progress = value)
+            return
+        task.progress := value
+        if (IsObject(this.Hooks) && this.Hooks.Has("progress"))
+            this.Hooks["progress"].Call(done, total, failed)
+        else
+            TranslationPanel.SendExisting("PANEL|PROGRESS|" task.id "|" value)
     }
 }
 

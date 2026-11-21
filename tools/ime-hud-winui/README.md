@@ -2,6 +2,12 @@
 
 唯一 IME HUD 实现。芯片视觉已定稿。
 
+`ImeHudWinUi.exe --settings`（或面板更多菜单 / Raycast Toolbox Settings）打开标准 WinUI 设置窗口。表单滚动、底部操作固定，字段校验保留输入，异步加载/保存期间禁用重复操作；只调用固定的本地标准库 JSON 助手，不处理密钥。关闭设置不应关闭常驻 HUD；`--settings-close` 供显式生命周期检查清理设置窗口。
+
+显式 `--settings-lifecycle-test` 在独立进程连续打开、加载、关闭两次设置页，再检查 Dispatcher 仍可调度；不占用全局 HUD 标题/互斥体，不保存设置或注入输入。应用将 DispatcherShutdownMode 设为 OnExplicitShutdown，避免最后一个普通 XAML 窗口关闭时终止原生 HUD，正式退出仍走 Application.Exit。
+
+面板更多菜单提供原文朗读、重试、单次中英目标切换。`ACTIONS` 可追加第七段 busy 0/1，旧六段保持兼容；`PANEL|PROGRESS|requestId|completed|total|failed` 只更新匹配上下文，最多 200 段。回传动作 1=译文朗读/停止、2=关闭、3=重试、4=原文朗读/停止、5/6/7=中文/英文/自动目标；文本继续只由 AHK 持有，消息没有选中文字。
+
 AHK CapsLock IME 状态芯片和 Caps+F 翻译链都打本进程主窗口 `Lat3ncyImeHudWinUi`。
 
 截图翻译也使用现有面板。标题栏新增“朗读译文 / 停止朗读”按钮（Alt+R），等待译文时禁用，沿用原有尺寸/ThemeResource 与键盘焦点样式。按钮只回传请求编号，不读取选区或剪贴板；实际 TTS 任务由 AHK 管理。

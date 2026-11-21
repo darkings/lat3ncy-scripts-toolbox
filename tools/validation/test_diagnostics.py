@@ -37,7 +37,7 @@ raise SystemExit(module.main())
             config = Path(folder)/'config.toml'
             config.write_text('engine="TMT"\nsecret_key="private-secret"\n', encoding='utf-8')
             self.assertEqual({'status': 'ok', 'engine': 'tencent', 'source_language': 'auto', 'target_language': 'auto',
-                              'fallback_without_credentials': False, 'fallback_on_auth_error': False}, doctor.config_summary(config, 'translate'))
+                              'fallback_without_credentials': False, 'fallback_on_auth_error': False, 'long_text_enabled': False}, doctor.config_summary(config, 'translate'))
             for text in ('engine="private-secret"', 'engine=["private-secret"]', 'engine="broken-private-secret'):
                 config.write_text(text, encoding='utf-8')
                 result = doctor.config_summary(config, 'translate')
@@ -51,7 +51,7 @@ raise SystemExit(module.main())
             config = Path(folder)/'config.toml'
             config.write_text('source_language=" EN "\ntarget_language="ZH-Hans"\nsecret_key="private-secret"\n', encoding='utf-8')
             self.assertEqual({'status': 'ok', 'engine': 'tencent', 'source_language': 'en', 'target_language': 'zh',
-                              'fallback_without_credentials': False, 'fallback_on_auth_error': False}, doctor.config_summary(config, 'translate'))
+                              'fallback_without_credentials': False, 'fallback_on_auth_error': False, 'long_text_enabled': False}, doctor.config_summary(config, 'translate'))
 
     def test_translation_fallback_policy_is_boolean_and_never_exports_invalid_values(self):
         with tempfile.TemporaryDirectory() as folder:

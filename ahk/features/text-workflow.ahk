@@ -13,7 +13,14 @@ class TextWorkflow {
     static Retired := []
     static ContextId := 0
     static ResultText := ""
+    static SourceText := ""
+    static ResumeFile := ""
+    static TargetLanguage := ""
+    static ContextX := 0
+    static ContextY := 0
+    static Busy := false
     static SpeechGeneration := 0
+    static SpeechTarget := ""
     static Timer := 0
     static OnExitCallback := 0
 
@@ -52,26 +59,40 @@ class TextWorkflow {
             SetTimer(ObjBindMethod(this, "StartScreenshot"), -1)
             return 1
         }
-        if (hwnd != A_ScriptHwnd || wParam != this.ContextId || wParam <= 0 || (lParam != 1 && lParam != 2))
+        if (hwnd != A_ScriptHwnd || wParam != this.ContextId || wParam <= 0 || lParam < 1 || lParam > 7)
             return 0
         SetTimer(ObjBindMethod(this, "HandleAction", wParam, lParam), -1)
         return 1
     }
 
     static HandleAction(id, action) {
-        if (id != this.ContextId || id <= 0)
+        if (id != this.ContextId || id <= 0 || action < 1 || action > 7)
             return
         if (action = 2) {
             this.Translator().CancelCurrent()
             this.ClearContext()
             return
         }
-        if (this.ResultText = "")
+        if (action = 3 || action >= 5) {
+            if (this.SourceText = "" || (action = 3 && this.Busy))
+                return
+            text := this.SourceText, x := this.ContextX, y := this.ContextY
+            target := action = 5 ? "zh" : action = 6 ? "en" : action = 7 ? "auto" : this.TargetLanguage
+            resume := action = 3 ? this.ResumeFile : ""
+            ; Transfer retry ownership before Begin clears the old context.
+            if (action = 3)
+                this.ResumeFile := ""
+            this.Translator().TranslateText(text, x, y, true, Map("target", target, "resumeFile", resume))
+            return
+        }
+        text := action = 4 ? this.SourceText : this.ResultText
+        if (text = "")
             return
         if this.OwnsSpeech()
             this.StopSpeech()
         else {
-            this.SpeechGeneration := this.Speaker().SpeakText(this.ResultText)
+            this.SpeechGeneration := this.Speaker().SpeakText(text)
+            this.SpeechTarget := action = 4 ? "source" : "result"
             this.EnsureTimer()
         }
         this.Bind(id)
@@ -87,32 +108,54 @@ class TextWorkflow {
         if this.OwnsSpeech()
             this.Speaker().StopCurrent()
         this.SpeechGeneration := 0
+        this.SpeechTarget := ""
     }
 
     static ClearContext() {
         this.StopSpeech()
+        if (this.ResumeFile != "")
+            try FileDelete this.ResumeFile
+        this.ResumeFile := ""
         this.ContextId := 0
         this.ResultText := ""
+        this.SourceText := ""
+        this.Busy := false
     }
 
     static Begin(id) {
         this.CancelCapture()
         this.ClearContext()
         this.ContextId := id
+        this.Busy := true
+    }
+
+    static Context(id, text, x, y, resumeFile, target) {
+        if (id != this.ContextId)
+            return
+        this.SourceText := text, this.ContextX := x, this.ContextY := y
+        this.ResumeFile := resumeFile, this.TargetLanguage := target
+    }
+
+    static Failed(id) {
+        if (id != this.ContextId)
+            return
+        this.Busy := false
+        this.Bind(id)
     }
 
     static Result(id, text) {
         if (id != this.ContextId)
             return
-        if (this.ResultText != text)
+        if (this.ResultText != text && this.SpeechTarget != "source")
             this.StopSpeech()
         this.ResultText := text
+        this.Busy := false
         this.Bind(id)
     }
 
     static Bind(id) {
         if (id = this.ContextId)
-            TranslationPanel.SendExisting(TranslationPanel.BuildActionsCommand(A_ScriptHwnd, id, this.ResultText != "", this.OwnsSpeech()))
+            TranslationPanel.SendExisting(TranslationPanel.BuildActionsCommand(A_ScriptHwnd, id, this.ResultText != "", this.OwnsSpeech(), this.Busy))
     }
 
     static StartScreenshot(*) {
@@ -260,6 +303,7 @@ class TextWorkflow {
         this.Retired := remaining
         if (this.SpeechGeneration && !this.OwnsSpeech()) {
             this.SpeechGeneration := 0
+            this.SpeechTarget := ""
             this.Bind(this.ContextId)
         }
         if (!IsObject(this.Capture) && !this.SpeechGeneration && this.Retired.Length = 0 && this.Timer) {

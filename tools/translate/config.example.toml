@@ -7,6 +7,7 @@ fallback_without_credentials = false
 fallback_on_auth_error = false # Set both fallback flags true for silent Google fallback.
 timeout_s = 4
 max_chars = 2000 # Reject longer input; never truncate.
+long_text_enabled = false # Opt in: 20000 characters / 200 segments / 120 seconds.
 
 [cache]
 max_size_mb = 10

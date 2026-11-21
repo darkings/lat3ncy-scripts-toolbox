@@ -5,6 +5,10 @@ class WorkflowTestSpeaker {
     static Said := []
     static Stops := 0
     static Shutdowns := 0
+    static LastTranslation := 0
+    static TranslateText(text, x, y, keep, options) {
+        this.LastTranslation := {text: text, x: x, y: y, options: options}
+    }
     static SpeakText(text) {
         this.Generation += 1
         this.CurrentTask := {}
@@ -66,6 +70,7 @@ class WorkflowTranslationEntry extends TranslateSelectedText {
     static Output := ""
     static ErrorText := ""
     static Closed := 0
+    static ProgressFrames := []
     static ResolveScript() => this.Script
     static ResolvePython() => this.PythonOverride != "" ? this.PythonOverride : TranslateSelectedText.ResolvePython()
     static ResolveConfig() => this.Script ".missing-config"
@@ -76,6 +81,62 @@ class WorkflowTranslationEntry extends TranslateSelectedText {
     }
 }
 
+WorkflowLongEntryTests(root) {
+    entry := WorkflowTranslationEntry
+    entry.Script := root "\long-translator.py"
+    worker := 'import argparse,pathlib,time`np=argparse.ArgumentParser()`n'
+        . 'for n in ("input-file","output-file","request-id","resume-file"):p.add_argument("--"+n)`na=p.parse_args()`n'
+        . 'resume=pathlib.Path(a.resume_file);retry=resume.exists()`n'
+        . 'out=pathlib.Path(a.output_file);base="version=1\nrequest_id="+a.request_id+"\ntotal=3\n"`n'
+        . 'out.write_text("status=progress\n"+base+"completed=0\nfailed=0\n",encoding="utf-8");time.sleep(.3)`n'
+        . 'resume.write_text("request-owned checkpoint",encoding="utf-8")`n'
+        . 'terminal="status=ok\n"+base+"completed=3\nfailed=0\nengine=google_gtx\ncached=0\ntext=完整长译文😀" if retry else "status=partial\n"+base+"completed=2\nfailed=1\ncode=network\ntext=翻译未完成：第2段失败"`n'
+        . 'out.write_text(terminal,encoding="utf-8")`n'
+    FileAppend worker, entry.Script, "UTF-8-RAW"
+    entry.Hooks["result"] := (text) => WorkflowTranslationEntry.Output := text
+    entry.Hooks["progress"] := (done, total, failed) => WorkflowTranslationEntry.ProgressFrames.Push(done "|" total "|" failed)
+    resume := ""
+    try {
+        entry.TranslateText("fixed long source 中文", 11, 22, true)
+        task := entry.CurrentTask
+        deadline := A_TickCount + 5000
+        while (entry.Tasks.Length && A_TickCount < deadline) {
+            entry.Poll()
+            Sleep 20
+        }
+        resume := task.resumeFile
+        AssertEqual(125000, task.job.TimeoutMs, "valid owned long progress extends the bounded Job budget")
+        AssertEqual(false, WorkflowTestClient.Busy, "partial terminal enables retry")
+        AssertEqual("", WorkflowTestClient.ResultText, "partial text is not offered as complete result speech")
+        AssertEqual(true, !!FileExist(resume), "partial checkpoint remains owned by the open panel")
+        AssertEqual(false, !!FileExist(task.outputFile), "partial terminal output is removed after delivery")
+        AssertEqual("2|3|1", entry.ProgressFrames[entry.ProgressFrames.Length], "partial panel displays failed and completed counts")
+        WorkflowTestClient.ResumeFile := ""
+        entry.TranslateText("fixed long source 中文", 11, 22, true, Map("resumeFile", resume))
+        deadline := A_TickCount + 5000
+        while (entry.Tasks.Length && A_TickCount < deadline) {
+            entry.Poll()
+            Sleep 20
+        }
+        AssertEqual("完整长译文😀", WorkflowTestClient.ResultText, "retry returns complete result and enables speech")
+        WorkflowTestClient.ClearContext()
+        AssertEqual(false, !!FileExist(resume), "closing context removes the retained checkpoint")
+        task := {id: 42, job: {TimeoutMs: 14000}, outputFile: root "\forged-progress.txt"}
+        FileAppend "status=progress`nversion=1`nrequest_id=41`ncompleted=0`ntotal=3`nfailed=0", task.outputFile, "UTF-8-RAW"
+        entry.ReadProgress(task)
+        AssertEqual(14000, task.job.TimeoutMs, "foreign progress cannot extend another request")
+        FileDelete task.outputFile
+    } finally {
+        entry.CancelCurrent()
+        entry.StopPoll()
+        WorkflowTestClient.ClearContext()
+        if (resume != "")
+            try FileDelete resume
+        try FileDelete entry.Script
+        try FileDelete entry.LogPath()
+    }
+}
+
 WorkflowThrowDelivery(text) {
     throw Error("private UI delivery body")
 }
@@ -83,7 +144,7 @@ WorkflowThrowDelivery(text) {
 WorkflowBackendEntryTests(root) {
     entry := WorkflowTranslationEntry
     entry.Script := root "\translator.py"
-    script := 'import argparse,pathlib`np=argparse.ArgumentParser();p.add_argument("--input-file");p.add_argument("--output-file");a=p.parse_args()`n'
+    script := 'import argparse,pathlib`np=argparse.ArgumentParser();p.add_argument("--input-file");p.add_argument("--output-file");a,_=p.parse_known_args()`n'
         . 'text=pathlib.Path(a.input_file).read_text(encoding="utf-8-sig")`n'
         . 'result="status=error\ncode=config\nmessage=fixed failure\nengine=fixture\ntext=" if "error" in text else "status=ok\nengine=fixture\ncached=0\ntext=完整译文|😀\n第二行"`n'
         . 'pathlib.Path(a.output_file).write_text(result,encoding="utf-8",newline="\n")`n'
@@ -141,6 +202,7 @@ WorkflowBackendEntryTests(root) {
         deliveryLog := FileRead(entry.LogPath(), "UTF-8")
         AssertContains(deliveryLog, "delivery-failed id=" id " diagnostic=internal", "failed UI delivery records a fixed category")
         AssertEqual(false, !!InStr(deliveryLog, "private UI delivery body"), "UI callback exception text is never logged")
+        WorkflowLongEntryTests(root)
     } finally {
         entry.PythonOverride := ""
         entry.CancelCurrent()
@@ -185,6 +247,29 @@ TextWorkflowTests() {
     stops := WorkflowTestSpeaker.Stops
     client.Begin(3)
     AssertEqual(stops + 1, WorkflowTestSpeaker.Stops, "new translation stops the old panel's owned speech")
+
+    client.Begin(100)
+    client.Context(100, "original source 中文", 11, 22, "", "en")
+    client.HandleAction(100, 4)
+    AssertEqual("original source 中文", WorkflowTestSpeaker.Said[WorkflowTestSpeaker.Said.Length], "source speech works before a result exists")
+    stops := WorkflowTestSpeaker.Stops
+    client.Result(100, "new result arrived")
+    AssertEqual(stops, WorkflowTestSpeaker.Stops, "arriving result does not interrupt owned source speech")
+    client.HandleAction(100, 4)
+    AssertEqual(false, client.OwnsSpeech(), "source speech action toggles off only owned speech")
+    client.HandleAction(100, 5)
+    request := WorkflowTestSpeaker.LastTranslation
+    AssertEqual("original source 中文", request.text, "target switch reuses the original input")
+    AssertEqual("zh", request.options["target"], "target switch only overrides this request")
+    AssertEqual(11, request.x, "target switch preserves the initial anchor")
+    client.HandleAction(99, 7)
+    client.Busy := true
+    client.HandleAction(100, 3)
+    AssertEqual(request, WorkflowTestSpeaker.LastTranslation, "stale actions and busy retry do not start another request")
+    client.Failed(100)
+    client.HandleAction(100, 3)
+    AssertEqual("en", WorkflowTestSpeaker.LastTranslation.options["target"], "retry preserves the prior per-request target")
+    client.ClearContext()
 
     WorkflowSpeechEntry.SpeakText("  direct text 中文  ")
     AssertEqual("direct text 中文", WorkflowSpeechEntry.Launched, "shared speech text entry trims without selection capture")

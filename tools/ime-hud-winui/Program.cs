@@ -61,6 +61,9 @@ internal static class Program
         ComWrappersSupport.InitializeComWrappers();
         HudLog.Line("comwrappers-ok");
 
+        if (HasFlag(args, "--settings-lifecycle-test"))
+            return SettingsLifecycleProbe.Run();
+
         // 第二个进程只转发到本 Renderer 的 HWND，不查找其他窗口。
         if (!TryClaimResident(startupCommand, cycleRounds > 0))
             return cycleRounds > 0 ? 1 : 0;
@@ -135,6 +138,10 @@ internal static class Program
             string token = args[i];
             if (token.StartsWith("--", StringComparison.Ordinal))
             {
+                if (token.Equals("--settings", StringComparison.OrdinalIgnoreCase))
+                    return "SETTINGS";
+                if (token.Equals("--settings-close", StringComparison.OrdinalIgnoreCase))
+                    return "SETTINGS|CLOSE";
                 if (token.Equals("--state", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                     return "STATE|" + args[i + 1];
                 if (token.Equals("--panel", StringComparison.OrdinalIgnoreCase))
@@ -155,6 +162,7 @@ internal static class Program
                 || token.StartsWith("PANEL", StringComparison.OrdinalIgnoreCase)
                 || token.Equals("HIDE", StringComparison.OrdinalIgnoreCase)
                 || token.Equals("PING", StringComparison.OrdinalIgnoreCase)
+                || token.Equals("SETTINGS", StringComparison.OrdinalIgnoreCase)
                 || token.Equals("QUIT", StringComparison.OrdinalIgnoreCase))
             {
                 return token;

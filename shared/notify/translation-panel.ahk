@@ -75,9 +75,10 @@ class TranslationPanel {
         return "PANEL|CLOSE"
     }
 
-    static BuildActionsCommand(owner, requestId, ready, speaking) {
+    static BuildActionsCommand(owner, requestId, ready, speaking, busy := unset) {
         ; AHK handles may be hexadecimal strings; the wire protocol is decimal.
-        return "PANEL|ACTIONS|" Integer(owner) "|" Integer(requestId) "|" (ready ? 1 : 0) "|" (ready && speaking ? 1 : 0)
+        value := "PANEL|ACTIONS|" Integer(owner) "|" Integer(requestId) "|" (ready ? 1 : 0) "|" ((ready || IsSet(busy)) && speaking ? 1 : 0)
+        return IsSet(busy) ? value "|" (busy ? 1 : 0) : value
     }
 
     ; 已有窗口直接 COPYDATA；没有窗口就无控制台拉起 exe，再等主 HWND。

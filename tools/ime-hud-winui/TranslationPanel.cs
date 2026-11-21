@@ -29,6 +29,11 @@ internal sealed class TranslationPanel
     readonly Button _copyResultButton;
     readonly Button _closeButton;
     readonly Button _speechButton;
+    readonly MenuFlyoutItem _retry = new() { Text = "重试失败段 / 重新翻译", IsEnabled = false };
+    readonly MenuFlyoutItem _sourceSpeech = new() { Text = "朗读原文", IsEnabled = false };
+    readonly MenuFlyoutSubItem _targetLanguage = new() { Text = "切换目标语言", IsEnabled = false };
+    readonly MenuFlyout _menu = new();
+    readonly TextBlock _progress = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12, 0, 12, 4), Visibility = Visibility.Collapsed };
     bool _speechReady;
     bool _speechPlaying;
     readonly FrameworkElement _iconPinOutline;
@@ -46,6 +51,9 @@ internal sealed class TranslationPanel
     public event EventHandler<string>? CopyRequested;
     public event EventHandler? DragRequested;
     public event EventHandler? SpeechRequested;
+    public event EventHandler? SettingsRequested;
+    public event EventHandler<int>? WorkflowActionRequested;
+    public event EventHandler<bool>? MenuStateChanged;
 
     public bool IsPinned => _pinButton.IsChecked == true;
     public TranslationSource.Result CurrentSource => _source;
@@ -57,6 +65,7 @@ internal sealed class TranslationPanel
         {
             Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent)
         };
+        _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -141,12 +150,39 @@ internal sealed class TranslationPanel
             VerticalAlignment = VerticalAlignment.Center
         };
         buttons.Children.Add(_speechButton);
+        var more = MakeChromeButton<Button>(new FontIcon { Glyph = "\uE712", FontSize = IconDip });
+        AutomationProperties.SetName(more, "更多翻译操作");
+        ToolTipService.SetToolTip(more, "更多操作");
+        var menu = _menu;
+        menu.Opened += (_, _) => MenuStateChanged?.Invoke(this, true);
+        menu.Closed += (_, _) => MenuStateChanged?.Invoke(this, false);
+        _retry.Click += (_, _) => WorkflowActionRequested?.Invoke(this, 3);
+        _sourceSpeech.Click += (_, _) => WorkflowActionRequested?.Invoke(this, 4);
+        menu.Items.Add(_retry);
+        menu.Items.Add(_sourceSpeech);
+        foreach (var option in new[] { ("译成中文", 5), ("译成英文", 6), ("中英自动互译", 7) })
+        {
+            var item = new MenuFlyoutItem { Text = option.Item1 };
+            int action = option.Item2;
+            item.Click += (_, _) => WorkflowActionRequested?.Invoke(this, action);
+            _targetLanguage.Items.Add(item);
+        }
+        menu.Items.Add(_targetLanguage);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        var settings = new MenuFlyoutItem { Text = "翻译与朗读设置" };
+        settings.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+        menu.Items.Add(settings);
+        more.Flyout = menu;
+        buttons.Children.Add(more);
         buttons.Children.Add(_copyResultButton);
         buttons.Children.Add(_pinButton);
         buttons.Children.Add(_closeButton);
         caption.Children.Add(buttons);
         Grid.SetRow(caption, 0);
         _root.Children.Add(caption);
+        AutomationProperties.SetLiveSetting(_progress, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+        Grid.SetRow(_progress, 1);
+        _root.Children.Add(_progress);
         SyncPinVisual();
 
         _sourceText = BuildBody(TranslationSource.Empty().DisplayText);
@@ -155,12 +191,12 @@ internal sealed class TranslationPanel
             Padding = new Thickness(12, 8, 12, 8),
             Content = _sourceText
         };
-        Grid.SetRow(sourceView, 1);
+        Grid.SetRow(sourceView, 2);
         _root.Children.Add(sourceView);
 
         // 分隔线走 ThemeResource，不要写死 Gray。资源挂不上才退回半透明灰。
         FrameworkElement divider = BuildDivider();
-        Grid.SetRow(divider, 2);
+        Grid.SetRow(divider, 3);
         _root.Children.Add(divider);
 
         _resultText = BuildBody(TranslationResult.Empty().DisplayText);
@@ -169,7 +205,7 @@ internal sealed class TranslationPanel
             Padding = new Thickness(12, 8, 12, 12),
             Content = _resultText
         };
-        Grid.SetRow(resultView, 3);
+        Grid.SetRow(resultView, 4);
         _root.Children.Add(resultView);
 
         // Esc 关面板。不抢 IME 芯片热键，不接线 AHK。定位 / 原文 / 译文来源只写日志，不画在面板上。
@@ -206,12 +242,31 @@ internal sealed class TranslationPanel
     /// </summary>
     public void SetSource(TranslationSource.Result source, bool keepResult = false)
     {
+        CloseMenu();
+        _progress.Visibility = Visibility.Collapsed;
         _source = source;
         ApplyBody(_sourceText, source.Ok, source.DisplayText);
         if (!keepResult)
             SetResult(TranslationResult.Empty());
         else
             SyncCopyButtons();
+    }
+
+    public void CloseMenu() => _menu.Hide();
+
+    public void SetWorkflowState(bool bound, bool busy, bool speaking = false)
+    {
+        _sourceSpeech.Text = speaking ? "停止朗读" : "朗读原文";
+        _retry.IsEnabled = bound && !busy && _source.Ok;
+        _sourceSpeech.IsEnabled = bound && _source.Ok;
+        _targetLanguage.IsEnabled = bound && _source.Ok;
+    }
+
+    public void SetProgress(int completed, int total, int failed)
+    {
+        _progress.Text = failed > 0 ? $"已完成 {completed}/{total} 段 · {failed} 段失败，可重试"
+            : completed == total ? $"翻译完成 · {total} 段" : $"翻译进度 {completed}/{total} 段";
+        _progress.Visibility = Visibility.Visible;
     }
 
     /// <summary>

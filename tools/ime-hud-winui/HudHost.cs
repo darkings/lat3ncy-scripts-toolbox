@@ -43,6 +43,7 @@ internal sealed class HudHost : IDisposable
     readonly HashSet<long> _islandSiteLogged = [];
 
     TranslationPanelHost? _panel;
+    ToolboxSettingsWindow? _settings;
     IslandSystemBackdrop? _islandBackdrop;
     Storyboard? _showStoryboard;
     Storyboard? _hideStoryboard;
@@ -139,6 +140,7 @@ internal sealed class HudHost : IDisposable
             if (_panel == null)
             {
                 _panel = new TranslationPanelHost();
+                _panel.SettingsRequested += (_, _) => ShowSettings();
                 HudLog.Line("translation-host-ok hwnd=" + _panel.Handle.ToInt64());
             }
             return _panel;
@@ -248,6 +250,12 @@ internal sealed class HudHost : IDisposable
         Protocol.Message message = Protocol.Parse(text);
         switch (message.Kind)
         {
+            case Protocol.Kind.Settings:
+                ShowSettings();
+                break;
+            case Protocol.Kind.SettingsClose:
+                _settings?.Close();
+                break;
             case Protocol.Kind.Hide:
                 HideNoActivate(animate: true);
                 break;
@@ -273,6 +281,18 @@ internal sealed class HudHost : IDisposable
                 MoveTo(message);
                 break;
         }
+    }
+
+    void ShowSettings()
+    {
+        if (_closing) return;
+        if (_settings == null)
+        {
+            _settings = new ToolboxSettingsWindow();
+            _settings.Closed += (_, _) => _settings = null;
+        }
+        _settings.Activate();
+        HudLog.Line("settings-open");
     }
 
     /// <summary>
@@ -872,6 +892,8 @@ internal sealed class HudHost : IDisposable
         // SystemBackdrop 必须在 HWND 还活着时拆掉。Destroy 后再 Dispose Island 会 native AV。
         try { _panel?.Dispose(); } catch { }
         _panel = null;
+        try { _settings?.Close(); } catch { }
+        _settings = null;
         DetachIsland("close");
         if (Native.IsWindow(_hwnd))
             Native.DestroyWindow(_hwnd);

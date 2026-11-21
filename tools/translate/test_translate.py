@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -344,7 +345,8 @@ class EnginePlanTests(TranslateTestBase):
                     raise tr.AuthError('private-secret') if reason == 'auth' else TimeoutError('private-secret')
                 return '完整谷歌译文|😀\n第二行'
             body = 'fallback_on_auth_error=true\n'+self.config_body(
-                fallback=reason == 'credentials', tencent_id='' if reason == 'credentials' else 'test-id')
+                fallback=reason == 'credentials', tencent_id='' if reason == 'credentials' else 'test-id',
+                tencent_key='test-secret-' + reason)
             with self.subTest(reason=reason):
                 _, fields, raw, _ = self.invoke(reason, body, fake)
                 self.assertEqual('ok', fields['status'])
@@ -1072,6 +1074,115 @@ class ErrorClassificationTests(TranslateTestBase):
 
     def test_self_test_runs_offline(self) -> None:
         self.assertEqual(tr.run_self_test(), 0)
+
+
+class AuthCooldownTests(TranslateTestBase):
+    def setUp(self):
+        super().setUp()
+        self.cfg = self.tencent_cfg()
+        self.cfg['fallback_on_auth_error'] = True
+        self.calls = []
+
+    def fail_tencent(self, name, *args):
+        self.calls.append(name)
+        if name == 'tencent':
+            raise tr.AuthError('PRIVATE_AUTH_RESPONSE')
+        return '谷歌译文'
+
+    def request(self, text='hello'):
+        return tr.translate_with_cache('tencent', text, 'en-zh', 1, self.cfg)
+
+    def test_auth_failure_persists_and_skips_primary_on_next_request(self):
+        with mock.patch.object(tr, 'call_engine', side_effect=self.fail_tencent):
+            self.request('one')
+            self.calls.clear()
+            result = self.request('two')
+        self.assertEqual(['google_gtx'], self.calls)
+        self.assertEqual('auth', result.fallback_reason)
+        record = tr.auth_cooldown.state_path(self.cache_root).read_text()
+        for private in ('test-id', 'test-secret', 'PRIVATE_AUTH_RESPONSE', 'one', 'two'):
+            self.assertNotIn(private, record)
+
+    def test_separate_one_shot_processes_share_the_auth_cooldown(self):
+        code = '''import sys,json
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]);import translate as t
+t.cache_dir=lambda:Path(sys.argv[2]);t.read_user_env=lambda name:''
+cfg={'tencent':{'secret_id':'fixture-id','secret_key':'fixture-key'},'fallback_on_auth_error':True}
+calls=[]
+def fake(name,*args):
+ calls.append(name)
+ if name=='tencent':raise t.AuthError('private')
+ return 'fixed translation'
+t.call_engine=fake
+t.translate_with_cache('tencent',sys.argv[3],'en-zh',1,cfg)
+print(json.dumps(calls))
+'''
+        observed = []
+        for source in ('one', 'two'):
+            process = subprocess.run([sys.executable, '-I', '-S', '-c', code, str(Path(tr.__file__).parent),
+                                      str(self.cache_root), source], capture_output=True, timeout=10)
+            self.assertEqual(0, process.returncode, process.stderr)
+            observed.append(json.loads(process.stdout))
+        self.assertEqual([['tencent', 'google_gtx'], ['google_gtx']], observed)
+
+    def test_expired_cooldown_probes_primary_before_fallback_cache(self):
+        with mock.patch.object(tr.auth_cooldown.time, 'time', return_value=1000), mock.patch.object(tr, 'call_engine', side_effect=self.fail_tencent):
+            self.request()
+        with mock.patch.object(tr.auth_cooldown.time, 'time', return_value=1301), mock.patch.object(tr, 'call_engine', return_value='腾讯恢复') as call:
+            result = self.request()
+        self.assertEqual('tencent', call.call_args.args[0])
+        self.assertEqual(('tencent', '', '腾讯恢复'), (result.engine, result.fallback_reason, result.text))
+
+    def test_credential_and_tencent_configuration_changes_bypass_cooldown(self):
+        for key, value in (('secret_id', 'new-id'), ('secret_key', 'new-key'),
+                           ('region', 'ap-shanghai'), ('project_id', 1), ('endpoint', 'other.example')):
+            with self.subTest(key=key):
+                self.cfg = self.tencent_cfg(); self.cfg['fallback_on_auth_error'] = True
+                with mock.patch.object(tr, 'call_engine', side_effect=self.fail_tencent):
+                    self.request(key + '-before')
+                self.cfg['tencent'][key] = value
+                with mock.patch.object(tr, 'call_engine', return_value='恢复') as call:
+                    self.request(key + '-after')
+                self.assertEqual('tencent', call.call_args.args[0])
+
+    def test_strict_auth_mode_ignores_prior_cooldown(self):
+        with mock.patch.object(tr, 'call_engine', side_effect=self.fail_tencent):
+            self.request()
+            self.cfg['fallback_on_auth_error'] = False
+            self.calls.clear()
+            with self.assertRaises(tr.AuthError):
+                self.request('different')
+        self.assertEqual(['tencent'], self.calls)
+
+    def test_network_failure_does_not_create_auth_cooldown(self):
+        with mock.patch.object(tr, 'call_engine', side_effect=[TimeoutError(), '谷歌译文']):
+            self.request()
+        self.assertFalse(tr.auth_cooldown.state_path(self.cache_root).exists())
+        with mock.patch.object(tr, 'call_engine', return_value='腾讯') as call:
+            self.request('new')
+        self.assertEqual('tencent', call.call_args.args[0])
+
+    def test_primary_cache_remains_usable_during_cooldown(self):
+        with mock.patch.object(tr, 'call_engine', side_effect=self.fail_tencent):
+            self.request()
+        tr.cache_put('tencent', 'en-zh', 'cached', '腾讯缓存', self.cfg)
+        with mock.patch.object(tr, 'call_engine', side_effect=AssertionError('must use cache')):
+            result = self.request('cached')
+        self.assertEqual(('tencent', True, ''), (result.engine, result.cached, result.fallback_reason))
+
+    def test_corrupt_unbounded_or_unwritable_state_does_not_prevent_translation(self):
+        path = tr.auth_cooldown.state_path(self.cache_root)
+        path.parent.mkdir(parents=True)
+        fingerprint = tr.auth_cooldown.identity(tr.resolve_tencent_keys(self.cfg), self.cfg['tencent'])
+        for raw in ('{', '[]', json.dumps({'version': 1, 'identity': fingerprint, 'until': 1e99})):
+            path.write_text(raw)
+            with self.subTest(raw=raw), mock.patch.object(tr, 'call_engine', return_value='腾讯') as call:
+                self.request(raw)
+            self.assertEqual('tencent', call.call_args.args[0])
+        with mock.patch.object(tr.auth_cooldown.os, 'replace', side_effect=PermissionError()), mock.patch.object(tr, 'call_engine', side_effect=self.fail_tencent):
+            self.assertEqual('google_gtx', self.request('no state writes').engine)
+        self.assertEqual([], list(path.parent.glob('*.tmp')))
 
 
 if __name__ == "__main__":

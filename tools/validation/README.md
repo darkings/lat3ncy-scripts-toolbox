@@ -137,3 +137,9 @@ $python = Join-Path (Split-Path $spec.Python -Parent) 'python.exe'
 同版基础 `python.exe/pythonw.exe` 的真实模型及通知探针均通过；无窗口宿主确认 RID=8192，临时 runner 全部清理。证据 `.tmp/integration/20261120-ocr-notify/windowless-notify/report.json`、`host-model/report.json`。新宿主的完整剪贴板复测本轮未执行成功：原 ClipboardAll 备份失败，原生 `OpenClipboard` 返回拒绝访问，保护入口在写入前退出。既有旧宿主成功证据不替代这次待复测项。
 
 剪贴板保护入口现在对备份作约 2 秒的有界重试，失败记录元数据并退出，避免后台错误对话框无限等待。接口访问恢复后再运行 `--ocr-clipboard-smoke`；浏览器控制接口仍超时，Maestro 列出的 Chromium 未连接，因此浏览器验收继续待办。
+
+## 2026-11-22 协议与异常交付复核
+
+AHK 全量回归新增：译文正文的 request_id / preferred_engine 等不能伪造头部元数据；OCR 缺少头部身份时拒绝正文伪造身份；结果 UI 回调抛异常时仍回收输入/结果文件、清空完成任务，并仅记录固定 internal 类别，不输出私有异常正文或重复通知。Python 总数仍为 129。干净候选全量证据 .tmp/validation/20261122-protocol-cleanup/。
+
+本轮实际重试 Computer Use：WinUI 工具窗口没有可控目标，启动重试超时；普通固定测试 GUI 的控件树可读，但截图返回 CreateForMonitor 0x80070057，点击及激活返回 GetCursorPos 0x80070005。成功输入次数为 0，不能宣称选区、真实快捷键、按钮或视觉已验收。自有测试窗口已清理，未修改桌面权限；证据 .tmp/computer-use-20261122/report.json。用户离开电脑不阻塞无交互回归，实机待办继续保留。

@@ -1,5 +1,13 @@
 # 任务计划：切换播放器自动连接 AirPods 完善
 
+## 2026-11-22 无需实机的复核与 Computer Use 重试
+
+- 用户不在电脑旁，实机项目保留待办，PR #3 保持草稿。按用户要求实际使用 computer-use：WinUI 目标仍未暴露，启动重试超时；普通测试 GUI 可读控件树，但截图 CreateForMonitor 0x80070057，鼠标及激活均 GetCursorPos 0x80070005。未执行成功的点击/按键，无视觉、快捷键或听感通过声明；只清理自有测试窗口，不改桌面安全/权限设置。
+- 自动复现并修复协议边界问题：ParseField 仅从 text 之前读取元数据，正文中的 request_id / preferred_engine 等不再冒充请求归属或回退信息，正文原样保留。
+- 自动复现并修复结果回调异常：定时器捕获显示/通知边界异常，仅记固定 internal 分类；始终 finally 清理输入与结果文件，完成任务不会遗留或再次执行，不记录异常中的私有正文。
+- 新增头部/正文边界、OCR 正文伪造归属拒绝和 UI 回调故障注入回归；129 项 Python 与完整 AHK/WinUI、含空格路径干净候选三阶段通过。已重载 AHK，HUD PING/归属健康；四份个人配置字节未变。证据 .tmp/validation/20261122-protocol-cleanup/、.tmp/computer-use-20261122/。
+- 后续同步本轮修复与最终 SHA CI；输入桌面可操作后继续真实点击验收，不因此阻塞自动开发。
+
 ## 2026-11-21 腾讯首选与 Google 静默保底
 
 - 用户确认腾讯云配置好密钥后优先使用，并明确密钥有问题时直接回退 Google，不用系统通知。当前个人配置仅按授权修改 engine=tencent、fallback_without_credentials=true、fallback_on_auth_error=true；其余设置和另外三份配置保持。

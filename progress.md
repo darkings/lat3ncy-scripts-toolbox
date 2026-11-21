@@ -457,3 +457,12 @@
 - 真实在线连续联动 10 项全部通过：.tmp/integration/20261121-google-fallback-silent/report.json；首个请求 engine=google_gtx cached=0，原因 credentials。用户旧配置此前缺密钥/TLS 超时记录保留为历史，不代表当前回退状态。
 - 含空格路径干净候选离线、助手源码构建、完整 AHK/WinUI 三阶段通过：.tmp/validation/20261121-silent-google-fallback/report.json。正式 ForceReload 无需替换 WinUI 字节，AHK 34752 / HUD 32204 / 光标助手 744，PING 与只读诊断 ok；证据 .tmp/google-fallback-deploy.json，备份 .tmp/releases/20261121-113907-29ff85ee。
 - 本轮只对成功回退保持静默；全部引擎失败沿用原有错误处理。未新增通知、网络设置、密钥或供应商。提交后更新草稿 PR #3 并核对最终 SHA 的 CI。
+
+## 会话：2026-11-22 自动复核与 Computer Use 验收重试
+
+- 用户不在电脑旁后要求继续，并明确尝试 computer-use 技能。已读完整 SKILL.md / guidance / api / confirmations，通过 @oai/sky 实际检查：固定 WinUI 面板协议已打开但三次目标枚举为 0，launch_app 超时；普通桌面固定文本 GUI 可枚举并读 UIA 树，截图失败 0x80070057，click/activate 都因 GetCursorPos 0x80070005 被拒绝。没有成功输入，没有把协议通过视作点击/视觉/声音通过。没有尝试安全桌面、提权或权限设置；自有 GUI 测试进程已清理，证据 .tmp/computer-use-20261122/report.json。
+- 继续无须交互的代码复核。最小复现发现正文伪造元数据与 UI 回调异常残留，修复前 metadata_from_body / callback_escaped / input_retained / output_retained 均为 1，修复后均为 0；证据 .tmp/review-20261122-before.txt / review-20261122-evidence.txt。
+- ParseField 以首个 text= 行为边界，所有其他字段仅查头部；保留正文 CRLF/emoji/竖线及类似字段的行。实际 OCR 状态机补缺少真实 request_id、仅正文伪造身份的拒绝回归。
+- 完成任务的 UI 交付置于 try/catch/finally，显示/通知异常仅记固定 internal，不重复通知、不记录潜在正文异常消息；始终回收输入与结果文件，并继续清空完成任务。新增真实状态机回调故障注入回归。
+- 129 项 Python、完整 AHK/WinUI 及含空格路径干净候选离线/助手构建/全量三阶段通过，证据 .tmp/validation/20261122-protocol-cleanup/report.json。正式 ForceReload 无 WinUI 字节变化，AHK 6756 / HUD 9200 / 光标 12392，PING 与归属健康；.tmp/review-20261122-deploy.json。四份个人配置字节保持本轮基线，包括已授权的 Google 静默保底策略。
+- 实机项目继续待办，保留草稿 PR #3；同步修复后核对最终 SHA 的远端 CI，不要求用户当下回到电脑旁。

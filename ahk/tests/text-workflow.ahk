@@ -74,6 +74,10 @@ class WorkflowTranslationEntry extends TranslateSelectedText {
     }
 }
 
+WorkflowThrowDelivery(text) {
+    throw Error("private UI delivery body")
+}
+
 WorkflowBackendEntryTests(root) {
     entry := WorkflowTranslationEntry
     entry.Script := root "\translator.py"
@@ -120,6 +124,21 @@ WorkflowBackendEntryTests(root) {
         AssertEqual(0, entry.Closed, "failed backend launch retains OCR source panel")
         AssertEqual("翻译失败", entry.ErrorText, "failed launch uses fixed error boundary")
         AssertEqual("", WorkflowTestClient.ResultText, "failed launch cannot reuse previous speech result")
+        entry.PythonOverride := ""
+        id := entry.RequestGate.Begin()
+        task := {id: id, job: WorkflowTestJob(), inputFile: root "\ui-in.txt", outputFile: root "\ui-out.txt",
+            panelOpened: true, dismissed: false, keepSourceOnError: true}
+        FileAppend "fixed input", task.inputFile, "UTF-8-RAW"
+        FileAppend "status=ok`nengine=google_gtx`ncached=0`ntext=fixed result", task.outputFile, "UTF-8-RAW"
+        entry.Tasks := [task], entry.CurrentTask := task
+        entry.Hooks["result"] := WorkflowThrowDelivery
+        entry.Poll()
+        AssertEqual(0, entry.Tasks.Length, "failed UI delivery is drained without escaping the timer")
+        AssertEqual(false, !!FileExist(task.inputFile), "failed UI delivery removes the input file")
+        AssertEqual(false, !!FileExist(task.outputFile), "failed UI delivery removes the result file")
+        deliveryLog := FileRead(entry.LogPath(), "UTF-8")
+        AssertContains(deliveryLog, "delivery-failed id=" id " diagnostic=internal", "failed UI delivery records a fixed category")
+        AssertEqual(false, !!InStr(deliveryLog, "private UI delivery body"), "UI callback exception text is never logged")
     } finally {
         entry.PythonOverride := ""
         entry.CancelCurrent()
@@ -131,6 +150,12 @@ WorkflowBackendEntryTests(root) {
 }
 
 TextWorkflowTests() {
+    body := "原文|😀`r`npreferred_engine=private-body`r`nfallback_reason=auth`r`nrequest_id=forged`r`ntext=literal"
+    protocol := "status=ok`r`nengine=google_gtx`r`ntext=" body
+    AssertEqual("ok", TranslateSelectedText.ParseField(protocol, "status"), "header metadata is read before the text boundary")
+    AssertEqual("", TranslateSelectedText.ParseField(protocol, "preferred_engine"), "text cannot forge absent fallback metadata")
+    AssertEqual("", TranslateSelectedText.ParseField(protocol, "request_id"), "text cannot forge OCR ownership metadata")
+    AssertEqual(body, TranslateSelectedText.ParseField(protocol, "text"), "full text is retained even when its lines resemble protocol fields")
     TextWorkflow.AllowMessages(A_ScriptHwnd)
     AssertEqual("PANEL|ACTIONS|291|7|1|0", TranslationPanel.BuildActionsCommand("0x123", 7, true, false), "action owner is serialized as decimal across AHK and WinUI")
     AssertEqual("PANEL|ACTIONS|291|7|0|0", TranslationPanel.BuildActionsCommand("0x123", 7, false, true), "empty result cannot advertise active playback")
@@ -166,21 +191,24 @@ TextWorkflowTests() {
     root := A_Temp "\toolbox-text-test-" SmartPaste.NewGuid()
     DirCreate root
     try {
-        for scenario in ["ok", "stale", "cancelled", "retired"] {
+        for scenario in ["ok", "stale", "cancelled", "retired", "spoofed"] {
             directory := root "\" scenario
             DirCreate directory
             task := {id: "fixed-1", directory: directory, output: directory "\result.txt", x: 11, y: 22, job: WorkflowTestJob()}
             payloadId := scenario = "stale" ? "old-1" : task.id
             status := scenario = "cancelled" ? "cancelled" : "ok"
             text := "OCR 中文|😀`r`ntext=literal"
-            FileAppend "version=1`nrequest_id=" payloadId "`nstatus=" status "`nerror_kind=none`ntext=" text, task.output, "UTF-8-RAW"
+            identity := scenario = "spoofed" ? "" : "request_id=" payloadId "`n"
+            if (scenario = "spoofed")
+                text .= "`r`nrequest_id=" task.id
+            FileAppend "version=1`n" identity "status=" status "`nerror_kind=none`ntext=" text, task.output, "UTF-8-RAW"
             client.Submitted := [], client.Errors := []
             client.Capture := task
             if (scenario = "retired")
                 client.CancelCapture()
             client.Poll()
             AssertEqual(scenario = "ok" ? 1 : 0, client.Submitted.Length, "only current successful OCR advances: " scenario)
-            AssertEqual(scenario = "stale" ? 1 : 0, client.Errors.Length, "OCR errors are separate from cancellation: " scenario)
+            AssertEqual(scenario = "stale" || scenario = "spoofed" ? 1 : 0, client.Errors.Length, "OCR errors are separate from cancellation: " scenario)
             if (scenario = "ok") {
                 AssertEqual(text, client.Submitted[1].text, "OCR protocol preserves Unicode, delimiters and line breaks")
                 AssertEqual(11, client.Submitted[1].x, "OCR uses the initial screen anchor")

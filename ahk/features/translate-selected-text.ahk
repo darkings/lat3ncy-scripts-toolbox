@@ -120,13 +120,16 @@ class TranslateSelectedText {
     }
 
     static ParseField(content, name) {
+        ; text consumes the remainder, including lines that look like headers.
+        hasText := RegExMatch(content, "m)^text=", &body)
+        if (name = "text")
+            return hasText ? SubStr(content, body.Pos + body.Len) : ""
+        header := hasText ? SubStr(content, 1, body.Pos - 1) : content
         needle := "m)^" name "="
-        if !RegExMatch(content, needle, &match)
+        if !RegExMatch(header, needle, &match)
             return ""
         start := match.Pos + match.Len
-        rest := SubStr(content, start)
-        if (name = "text")
-            return rest
+        rest := SubStr(header, start)
         lineEnd := InStr(rest, "`n")
         if !lineEnd
             return Trim(rest, "`r")
@@ -387,24 +390,31 @@ class TranslateSelectedText {
                 this.RequestGate.CancelCurrent()
             }
 
-            switch decision {
-                case "apply", "apply-fallback":
-                    this.ApplyResult(task, decision = "apply-fallback")
-                case "timeout":
-                    this.Fail(task, "翻译超时", "timeout")
-                case "error":
-                    this.Fail(task, "翻译失败", status)
-                case "discard-stale":
-                    this.Log("discard-stale id=" task.id " status=" status)
-                case "discard-dismissed":
-                    this.Log("discard-dismissed id=" task.id)
-                case "discard-cancelled":
-                    this.Log("discard-cancelled id=" task.id)
-                default:
-                    this.Log("discard-unknown id=" task.id " decision=" decision)
+            try {
+                switch decision {
+                    case "apply", "apply-fallback":
+                        this.ApplyResult(task, decision = "apply-fallback")
+                    case "timeout":
+                        this.Fail(task, "翻译超时", "timeout")
+                    case "error":
+                        this.Fail(task, "翻译失败", status)
+                    case "discard-stale":
+                        this.Log("discard-stale id=" task.id " status=" status)
+                    case "discard-dismissed":
+                        this.Log("discard-dismissed id=" task.id)
+                    case "discard-cancelled":
+                        this.Log("discard-cancelled id=" task.id)
+                    default:
+                        this.Log("discard-unknown id=" task.id " decision=" decision)
+                }
+            } catch {
+                ; A failed UI callback must not escape a timer or expose its
+                ; potentially private exception text. Do not retry notifications.
+                this.Log("delivery-failed id=" task.id " diagnostic=internal")
+            } finally {
+                ; The protocol must be read first, then removed on every path.
+                this.CleanupTaskFiles(task)
             }
-            ; 结果文件必须先读后删。
-            this.CleanupTaskFiles(task)
         }
 
         this.Tasks := remaining

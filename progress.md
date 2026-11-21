@@ -376,6 +376,13 @@
 - 日志扫描限制末尾 64 KiB，只输出固定格式时间/状态/错误类别；不输出配置、异常或日志原文。历史失败不改变当前环境检查结论，无法查询不会当作缺失，不自动安装或重载。
 - 本机统一检查返回 ok：AHK/HUD/光标助手/PowerPolicy 均 running，三模块依赖元数据正常；新增 7 项隐私、超时、宿主归属与查询失败回归。离线全套 96 项 Python 行为测试及 69 个本机 PowerShell AST/BOM 检查通过；证据 `.tmp/diagnostics/20261121-report.json`、`offline.log`，四份个人配置 SHA-256 与保护基线相同，无需重载常驻。
 
+## 会话：2026-11-21 发布材料与合并准备
+
+- 统一诊断提交 `503d22c` 的远端 offline/winui 均通过。核对 main 基线 `65ec768`，相对候选代码已有 29 个提交、145 个文件，包含此前 PowerPolicy、主题、光标/键盘灯及 Raycast 调整，发布与 PR 说明覆盖完整范围。
+- 新增 `docs/RELEASING.md` 和本轮候选说明，按现有入口核对环境、依赖安装、源码构建、预览/重载、PowerPolicy 单独重载及回滚范围；`.gitignore` 只放行这两份文档，其他本机 docs 仍忽略。
+- 使用 HEAD 配置、无旧运行产物的含空格路径本地 clone，离线套件（96 项 Python）、两 C# 助手来源构建及 WinUI/AHK 完整本机套件三阶段全部通过；证据 `.tmp/validation/20261121-release-review/report.json`。指南本地链接已核对，不重新安装依赖或操作生产常驻。
+- 个人配置四份 SHA-256 保持保护基线；本轮只提交发布文档与忽略规则，准备草稿 PR 供审阅，合并/正式 tag/安装包未执行。
+
 ## 会话：2026-11-19 二次评审修复部署与下一步分析
 
 - 用户授权替换并重载后，检查 test-out 源码戳及 self-test，备份生产差异文件后替换 `.source-stamp` / `ImeHudWinUi.dll` / `resources.pri`。

@@ -17,7 +17,12 @@ __pycache__/
 !/task_plan.md
 !/REVIEW.md
 !/REVIEW-SECOND-PASS.md
-/docs/
+# Only the release guide and this candidate record are published; other docs stay local.
+/docs/*
+!/docs/RELEASING.md
+!/docs/releases/
+/docs/releases/*
+!/docs/releases/2026-11-21-reliability.md
 
 # 运行日志
 **/*.log

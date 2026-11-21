@@ -4,6 +4,8 @@
 
 各工具的细节写在 `tools/*/README.md`，这里只给总览和常用命令。
 
+更新已有安装时，先看 [安装、更新与回滚](docs/RELEASING.md)；当前合并范围与验收记录见 [2026-11-21 发布候选](docs/releases/2026-11-21-reliability.md)。
+
 ## 快速开始
 
 ```powershell

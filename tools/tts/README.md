@@ -3,6 +3,8 @@
 `tts_player.py` 读取文本，按中英文语境切片，通过 WinRT 本地 OneCore、SAPI WAV 或 Edge Neural TTS
 并发合成并即时播放；带 SHA256 缓存、LRU 容量清理与 Windows SAPI 本地兜底。
 
+2026-11-21 用户已确认朗读基础使用正常；下文 2026-11-20 的听感未确认属于历史记录。专项异常与设备切换仍按独立矩阵验收，安装与恢复流程见 [发布操作](../../docs/RELEASING.md)。
+
 ## 运行环境
 
 - Windows 10/11。播放使用 `winmm` 的 MCI 接口，非 Windows 平台会跳过播放。

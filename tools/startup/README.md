@@ -76,7 +76,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 | RGB SDK/HID 断连、重连、退出 | 超时有界，能重连，无忙循环 | 离线协议通过，设备待测 |
 | AirPods 未取出、立体声恢复及超时 | 有界等待，默认端点正确，不禁用蓝牙服务 | 生产/新编译助手真实只读枚举一致、默认端点不变；建链/切换/超时待测 |
 
-## 当前工作区的提交边界
+## 2026-11-19 提交整理记录（历史）
 
 本轮开始前已保存 402 个文件的哈希/副本到 `.tmp/next-step-20261119/baseline*`，保护已有大量未提交修改。本轮未执行 stage/commit/push。建议按以下依赖顺序审阅提交，个人配置单独审核：
 

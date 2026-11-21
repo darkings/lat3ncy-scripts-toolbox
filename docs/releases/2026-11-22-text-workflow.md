@@ -24,13 +24,15 @@
 
 | 层次 | 范围 | 状态 |
 | --- | --- | --- |
-| 单元/协议 | 设置隐私与竞争写入、冷却和恢复、Unicode 分段、进度、失败段重试、统计及 ZIP 脱敏 | 166 项 Python 通过：翻译 67、TTS 36、OCR 20、RGB 6、validation 37 |
+| 单元/协议 | 设置隐私与竞争写入、冷却和恢复、Unicode 分段、进度、失败段重试、统计及 ZIP 脱敏 | 167 项 Python 通过：翻译 67、TTS 36、OCR 20、RGB 6、validation 38 |
 | AHK/WinUI | 源码构建、自测、请求归属、实际子进程进度/取消/重试与退出回收 | 完整断言、含空格路径干净候选三阶段通过；源码散列一致 |
 | 固定图片/文字 | 真实 OCR/翻译后端及受管交付，不模拟按钮或声音 | 在线图片联动 10 项、2943 字符长文 2 段通过；这次实际由 MyMemory 保底，未宣称 Google 本次成功 |
 | 用户既有验收 | OCR、翻译、朗读基础使用 | 已确认，不替代新增功能的实际点击验收 |
 | 新设置/菜单 | 窗口可打开/关闭和协议联动 | 独立设置两轮及正式常驻两轮加载/关闭通过，HUD PID 不变、健康正常；控件树可读，物理点击待验收 |
 
 本地证据：`.tmp/validation/20261122-text-workflow-lifecycle-final/`、`.tmp/integration/20261122-settings-native/`、`.tmp/integration/20261122-text-workflow-batch/`、`.tmp/integration/20261122-long-translation/`。正式部署源戳 `9deac2fd723112e590d44afe5d3c6dd62d388c9ea4c8a49ba7b8d0ac9691c5a7`；四份个人配置散列未变，未写入真实偏好覆盖。Google 仍是首个免费保底，但本轮网络未返回可用结果，既有末级 MyMemory 保持功能可用。
+
+远端 CI 补齐 Windows 短路径环境：偏好身份与默认配置比较均解析为规范绝对路径，同仓库的路径别名共享偏好。新增别名回归，与真实独立翻译/TTS 子进程共读覆盖一起验证；最终候选证据 `.tmp/validation/20261122-text-workflow-canonical-final/`，最终远端 SHA 和 CI 仍以 PR 记录为准。
 
 以下仍待可操作桌面：Caps+I 原生框选和取消；浏览器/终端 Caps+F 选区及 ClipboardAll；更多菜单实际点击、目标切换/失败重试；设置保存及键盘焦点；复制/钉住/关闭与多屏 DPI；原文/译文播放、打断和听感。此前 Computer Use 截图失败 `0x80070057`，输入/激活失败 `0x80070005`，不能用自动协议通过替代这些验收。
 

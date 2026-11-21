@@ -36,7 +36,7 @@ class PreferenceError(ValueError):
 
 def preference_path() -> Path:
     root = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    identity = hashlib.sha256(os.path.normcase(str(REPO)).encode("utf-8")).hexdigest()[:24]
+    identity = hashlib.sha256(os.path.normcase(str(REPO.resolve())).encode("utf-8")).hexdigest()[:24]
     return root / "lat3ncy-toolbox" / "preferences" / identity / "preferences.json"
 
 
@@ -97,7 +97,7 @@ def read_overlay() -> tuple[dict, str]:
 
 def apply_overlay(section: str, cfg: dict, config_path: str | Path | None = None) -> dict:
     # Explicit test/standalone configs retain their exact, isolated semantics.
-    default_path = REPO / "tools" / section / "config.toml"
+    default_path = (REPO / "tools" / section / "config.toml").resolve()
     if config_path is not None and Path(config_path).resolve() != default_path:
         return cfg
     overlay, _ = read_overlay()

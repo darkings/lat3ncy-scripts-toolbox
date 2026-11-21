@@ -83,6 +83,15 @@ class PreferencesTests(unittest.TestCase):
         with patch.object(prefs, "REPO", self.root / "other repo"):
             self.assertNotEqual(path, prefs.preference_path())
 
+    def test_aliases_of_the_same_repository_share_identity_and_effective_config(self):
+        canonical = prefs.preference_path()
+        with patch.object(prefs, 'REPO', self.repo / 'tools' / '..'):
+            self.assertEqual(canonical, prefs.preference_path())
+            prefs.save({'translate': {'target_language': 'en'}}, prefs.snapshot()['revision'])
+            effective = prefs.apply_overlay('translate', {'target_language': 'auto'}, self.repo / 'tools/translate/config.toml')
+            self.assertEqual('en', effective['target_language'])
+        self.assertEqual('en', prefs.snapshot()['values']['translate']['target_language'])
+
     def test_two_real_processes_cannot_silently_lose_a_save(self):
         revision = prefs.snapshot()["revision"]
         code = '''import sys,json

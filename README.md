@@ -56,6 +56,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ahk\tests\run-tests.ps
 
 测试入口包含：AutoHotkey 各 feature 独立加载及通知/状态行为测试、全量一方 PowerShell AST/BOM、WinUI `--self-test`、光标定位几何自检、Python 编译与自测、翻译/TTS/OCR/RGB 的离线行为测试、看护匹配与含空格路径的真实 AHK 启动、电源备份恢复的隔离测试。离线测试不会禁用设备、修改电源计划或连接 OCR/TTS/RGB 服务。需要 AutoHotkey v2、.NET SDK（`-BuildImeHud`）、Python 3.11+（标准库 `tomllib`）和 Windows PowerShell 5.1。`run-tests.ps1` 本身必须保持 CRLF；非 ASCII 的 `.ps1` 必须带 UTF-8 BOM。
 
+## 故障诊断
+
+在仓库根目录运行 `python tools/diagnostics/doctor.py`，一次查看当前仓库常驻状态、OCR/翻译/朗读的解释器、依赖、配置语法及日志位置。无需管理员权限，不联网、不触发截图或朗读；使用 `--json --output .tmp/diagnostics/report.json` 可保存元数据报告。检查范围和结果解释见 [统一离线诊断](tools/diagnostics/README.md)。
+
+2026-11-21 用户已确认 OCR、翻译和朗读基础使用正常；专项异常、多屏和设备场景单独保留验收记录。
+
 ## 快捷键
 
 改键只编辑 `ahk/shortcuts.ahk`；`ahk/hotkey-router.ahk` 负责校验和注册，`ahk/features/` 只实现功能。两个功能抢占同一快捷键会在启动时报错，不会静默覆盖。

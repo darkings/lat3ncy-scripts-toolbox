@@ -1,5 +1,9 @@
 # 干净候选与真实集成验证
 
+日常故障先运行 `python tools/diagnostics/doctor.py`，统一检查常驻身份、配置语法、解释器和依赖元数据，并定位日志；完整边界见 [诊断说明](../diagnostics/README.md)。它不替代下列集成测试。
+
+2026-11-21 用户反馈 OCR、翻译及朗读基础使用均正常，基础使用验收已确认。下文 2026-11-20 的工具阻塞和听感未确认是历史记录；未获逐项确认的异常路径、多屏、物理设备及自动保护探针保留各自状态。
+
 ```powershell
 # 不读取现有 out/obj/venv；个人 config.toml 改动使用 HEAD 中的版本替代
 python tools/validation/clean_checkout.py --full

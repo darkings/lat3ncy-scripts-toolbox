@@ -44,7 +44,7 @@ if ($config.general.switch_type -ne 'theme')
 
 if ($config.general.show_notification -and $colorChanged)
 {
-  Invoke-ThemeNotify -Type 'state' -Icon ([string][char]0x1F319) -Text '已切换为深色模式'
+  Invoke-ThemeNotify -Type 'state' -Icon ([char]::ConvertFromUtf32(0x1F319)) -Text '已切换为深色模式'
 }
 
 if ($colorChanged)

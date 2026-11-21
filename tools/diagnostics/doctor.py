@@ -229,7 +229,9 @@ def main() -> int:
                 event = item['lastFailure']
                 print(f"    Historical failure: {event['atLocal']} {event.get('kind', event['status'])}")
         print('Offline metadata only. Use --json for details; historical failures do not indicate a current outage.')
-    return 0 if report['status'] == 'ok' else 1
+    # A probe successfully delivered an observation even when it found a problem.
+    # The outer command owns the health exit code; keep probe findings intact.
+    return 0 if args.probe or report['status'] == 'ok' else 1
 
 
 if __name__ == '__main__':

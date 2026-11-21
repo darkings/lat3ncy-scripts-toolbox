@@ -17,6 +17,19 @@ spec.loader.exec_module(doctor)
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_attention_probe_keeps_its_structured_findings_across_process_boundary(self):
+        query = '''import importlib.util,json,sys
+spec=importlib.util.spec_from_file_location('fixture_doctor',sys.argv[1])
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+module.probe=lambda *args: {'status':'attention','mismatches':['edge-tts'],'integrity':'low'}
+sys.argv=['doctor.py','--probe','tts']
+raise SystemExit(module.main())
+'''
+        result = doctor.run_json([sys.executable, '-I', '-S', '-c', query, str(ROOT/'tools/diagnostics/doctor.py')])
+        self.assertEqual('attention', result['status'])
+        self.assertEqual(['edge-tts'], result['mismatches'])
+        self.assertEqual('low', result['integrity'])
+
     def test_config_export_has_no_credentials_or_arbitrary_engine_values(self):
         with tempfile.TemporaryDirectory() as folder:
             config = Path(folder)/'config.toml'

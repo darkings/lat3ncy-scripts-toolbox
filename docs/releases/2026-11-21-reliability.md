@@ -1,10 +1,10 @@
 # 2026-11-21 桌面工具链与可靠性候选
 
-状态：待合并候选；分支 `codex/reliability-baseline-20261120`，目标 `main`。未创建正式 tag 或 GitHub Release。
+分支 `codex/reliability-baseline-20261120`，目标 `main`；当前合并状态以 [PR #2](https://github.com/darkings/lat3ncy-scripts-toolbox/pull/2) 为准。本文记录候选范围与合并前验证，未创建正式 tag 或 GitHub Release。
 
 ## 相对 main 的范围
 
-整理本说明时，`main` 基线为 `65ec768b436380d45e355fb51bfceb9d36abbda8`，候选代码基线为 `503d22cfc5de2ee4e6979e9e32b43b3a62cb0ade`。二者之间有 29 个提交、145 个文件变更；随后文档提交计入最终 PR。此范围包含此前未合并的功能，不能只按最近的诊断命令审阅。
+整理本说明时，`main` 基线为 `65ec768b436380d45e355fb51bfceb9d36abbda8`，候选代码基线为 `503d22cfc5de2ee4e6979e9e32b43b3a62cb0ade`。二者之间有 29 个提交、145 个文件变更；后续发布文档和合并前修复计入最终 PR。此范围包含此前未合并的功能，不能只按最近的诊断命令审阅。
 
 | 模块 | 用户可见行为与维护变化 |
 | --- | --- |
@@ -31,13 +31,15 @@
 | 层次 | 结论与证据范围 |
 | --- | --- |
 | 用户基础实测 | 2026-11-21 用户明确确认 OCR、翻译和朗读均正常；不扩大为所有异常路径或设备场景通过 |
-| 离线行为 | 96 项 Python 测试通过；PowerShell AST/BOM、启动/身份、部署回滚及来源验证通过。机器不同可能导致 AST 文件计数不同 |
+| 离线行为 | 合并前修复后的 97 项 Python 测试通过；PowerShell AST/BOM、启动/身份、部署回滚、主题入口及来源验证通过。机器不同可能导致 AST 文件计数不同 |
 | 远端代码基线 | `503d22c` 的 offline 与 winui 两个 job 均通过：[Actions](https://github.com/darkings/lat3ncy-scripts-toolbox/actions/runs/44844468943)。最终文档提交的结果以 PR 检查为准 |
 | 本机运行快照 | 统一诊断返回 `ok`：AHK/HUD/光标助手/PowerPolicy running；三模块解释器/依赖元数据正常。证据 `.tmp/diagnostics/20261121-report.json`，仅本机保留 |
 | 干净候选 clone | 2026-11-21 使用 HEAD 配置基线、无旧 out/obj/venv 的含空格路径 clone，通过离线套件、两助手来源构建、WinUI 源码构建及 AHK 完整套件。证据 `.tmp/validation/20261121-release-review/report.json` |
 | 真实模块探针 | OCR 模型文字/空白、通知 API；TTS 本地/在线文件、受管任务与取消；7397 UTF-16 单元面板协议复制等已有实测。范围见 [验证文档](../../tools/validation/README.md) |
 
 干净候选 `--full` 三阶段均通过，原工作区未切换分支或重载常驻；该验证使用现有本机工具链，不代替新机器安装。
+
+合并前追加复核修复两项：深色切换通知以 `ConvertFromUtf32` 生成完整月亮图标；诊断内部探针保留异常环境的 JSON 详情，由外层返回健康退出码。完整本机入口同步纳入主题隔离回归和全部 OCR 宿主测试。修复后的干净候选 clone 三阶段再次通过，证据 `.tmp/validation/20261121-merge-fixes/report.json`。三处随分支更新的助手已隔离重编译，并核对方法体、字段及 P/Invoke 元数据；归一化生成标识和音频助手临时构建名称后未发现差异，此结果不是 PE 字节完全一致证明。
 
 ## 剩余专项验收
 

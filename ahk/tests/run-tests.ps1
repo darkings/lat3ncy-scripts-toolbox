@@ -482,8 +482,12 @@ ExitApp 0
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
     (Join-Path $repoRoot 'tools\power-policy\tests\Recovery.Tests.ps1')
   ) -Label 'offline power recovery tests'
+  Invoke-CheckedProcess -FilePath 'powershell.exe' -Arguments @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    (Join-Path $repoRoot 'tools\theme-scheduler\tests\ThemeEntry.Tests.ps1')
+  ) -Label 'isolated theme entry tests'
   foreach ($module in @(
-    @{ Dir = (Join-Path $raycastRoot 'ocr'); Pattern = 'test_ocr.py'; Label = 'OCR offline behavior tests' },
+    @{ Dir = (Join-Path $raycastRoot 'ocr'); Pattern = 'test_*.py'; Label = 'OCR offline behavior and host tests' },
     @{ Dir = $rgbRoot; Pattern = 'test_protocols.py'; Label = 'RGB offline protocol tests' }
     @{ Dir = (Join-Path $repoRoot 'tools\validation'); Pattern = 'test_*.py'; Label = 'clean snapshot isolation tests' }
   )) {

@@ -22,7 +22,8 @@ foreach($relative in @(
     'tools\startup\tests\Deployment.Tests.ps1',
     'tools\startup\tests\DeploymentLease.Tests.ps1',
     'tools\build\tests\ManagedBuild.Tests.ps1',
-    'tools\power-policy\tests\Recovery.Tests.ps1'
+    'tools\power-policy\tests\Recovery.Tests.ps1',
+    'tools\theme-scheduler\tests\ThemeEntry.Tests.ps1'
 )){
     & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo $relative)
     if($LASTEXITCODE -ne 0){throw "Offline PowerShell test failed: $relative"}

@@ -1,0 +1,25 @@
+# Chinese/English policy shared by selection and screenshot translation.
+# Defaults keep automatic Chinese <-> English translation.
+engine = "tencent"
+source_language = "auto" # auto / zh / en (zh-CN and zh-Hans are aliases)
+target_language = "auto" # auto = opposite of source; zh / en = fixed target
+fallback_without_credentials = false
+timeout_s = 4
+max_chars = 2000 # Reject longer input; never truncate.
+
+[cache]
+max_size_mb = 10
+max_files = 500
+
+# Prefer credentials from environment variables. Never commit real keys.
+[tencent]
+secret_id = ""
+secret_key = ""
+region = "ap-guangzhou"
+endpoint = "tmt.tencentcloudapi.com"
+project_id = 0
+
+[aliyun]
+access_key_id = ""
+access_key_secret = ""
+endpoint = "mt.cn-hangzhou.aliyuncs.com"

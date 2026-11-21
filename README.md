@@ -145,6 +145,8 @@ OCR 依赖固定在专用 `.venv314`，使用 `requirements.lock` 的版本及 S
 
 朗读沿用既有本地/在线策略；点击播放才开始朗读，不自动播放译文。翻译会将识别出的文本发送给所选翻译服务。
 
+划词和截图翻译共用语言设置：在 `tools/translate/config.toml` 顶层设置 `source_language = "auto"`、`target_language = "zh"` 可固定译为中文；目标改成 `en` 固定译英文，两项均为 `auto` 保留原有中英互译。每次请求读取，无需重载；同语种直接返回原文。完整选项见 [翻译说明](tools/translate/README.md#配置)，本轮未修改个人配置。
+
 ## 主题、RGB 与设备
 
 主题调度的五个计划任务用脚本注册，不要手写 `schtasks /create`：

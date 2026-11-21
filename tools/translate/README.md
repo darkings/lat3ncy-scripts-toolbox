@@ -19,6 +19,7 @@ python tools/translate/translate.py `
 | `--input-file` | 从 UTF-8 文件读取；读取成功后尝试删除该文件。与 `--text` 同时给时文件优先 |
 | `--output-file` | **必填**，结果写到该文件（key=value 协议） |
 | `--config` | 配置文件路径；缺省用本目录的 `config.toml` |
+| `--source-language` / `--target-language` | 只覆盖本次源／目标语言；不会写回配置。支持 `auto` / `zh` / `en` |
 | `--self-test` | 离线自测：不联网、不读 HKCU、不写真实缓存 |
 
 ## 输出协议
@@ -48,6 +49,7 @@ max_chars=2000
 ```
 
 - `engine` 成功时是**实际使用**的引擎；失败时是配置里的首选引擎。
+- 固定目标与有效源语言相同：`engine=identity`，`cached=0`，直接返回去除首尾空白的完整原文，不读凭证、不访问服务或缓存；长度上限仍适用。
 - `cached=1` 时仍然报告缓存记录里产生译文的引擎。
 - `detail` 是脱敏后的诊断串（异常类型 + 截断消息）；原文、密钥、`Authorization` / `q=` 参数都会打码。输入类错误（`empty` / `detect` / `too_long`）的 `detail` 为空。
 - 写结果文件失败无法再回报协议，进程返回 1。
@@ -96,9 +98,32 @@ max_chars=2000
 
 ## 配置
 
+划词翻译（Caps+F）与截图翻译（Caps+I）共用本目录的 `config.toml`，每次请求读取，修改后无需重载 AHK。完整无密钥模板见 [config.example.toml](config.example.toml)；不要用模板覆盖已有凭证和个人设置。
+
+把下面两项放在 `config.toml` 顶层（第一个 `[cache]` / `[tencent]` 等配置节之前）：
+
+```toml
+source_language = "auto"
+target_language = "zh"
+```
+
+| 需要的行为 | source_language | target_language |
+| --- | --- | --- |
+| 原有中英自动互译（默认） | `auto` | `auto` |
+| 固定译为中文；中文直接返回 | `auto` | `zh` |
+| 固定译为英文；英文直接返回 | `auto` | `en` |
+| 混合文本明确按英文译中文 | `en` | `zh` |
+| 混合文本明确按中文译英文 | `zh` | `en` |
+
+`source_language=auto` 沿用本地汉字／拉丁字母计数规则，不是多语言检测；`target_language=auto` 表示译为有效源语言的另一种语言。显式源语言优先于计数。当前只支持中英，`zh-CN` / `zh-Hans` 归一为 `zh`，大小写和两端空白会被规范化。日语等其他代码、非法类型或空值返回 `code=config`，不默默转换为英文。纯数字／符号仍返回 `detect`。
+
+缓存继续按最终有效方向隔离：同一文本翻向不同语言不会混用，默认方向和等价的显式方向可复用旧缓存；`direction` 新增同语种 `zh-zh` / `en-en`，原有成功字段及 `text` 最后交付约定保持。
+
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `engine` | `tencent` | 首选引擎；支持 `tmt` / `ali` / `google` 等别名 |
+| `source_language` | `auto` | `auto` / `zh` / `en`；显式指定时覆盖中英计数判定 |
+| `target_language` | `auto` | `auto` 自动互译，或固定 `zh` / `en` |
 | `fallback_without_credentials` | `false` | 缺密钥时是否允许回退免费引擎 |
 | `timeout_s` | `4` | 单次请求超时（>0 的有限数） |
 | `max_chars` | `2000` | 超过即 `too_long`（正整数） |

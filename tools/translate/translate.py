@@ -175,6 +175,8 @@ class Settings:
     max_size_mb: int
     max_files: int
     fallback_without_credentials: bool
+    source_language: str = "auto"
+    target_language: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -197,9 +199,31 @@ def detect_direction(text: str) -> str | None:
 
 
 def direction_langs(direction: str) -> tuple[str, str]:
-    if direction == "en-zh":
-        return "en", "zh-CN"
-    return "zh-CN", "en"
+    pairs = {"en-zh": ("en", "zh-CN"), "zh-en": ("zh-CN", "en"),
+             "en-en": ("en", "en"), "zh-zh": ("zh-CN", "zh-CN")}
+    if direction not in pairs:
+        raise ConfigError("翻译方向无效")
+    return pairs[direction]
+
+
+def normalize_language(value: object, label: str) -> str:
+    """This release supports Chinese/English only; never guess an unknown code."""
+    if not isinstance(value, str):
+        raise ConfigError(f"配置项 {label} 无效")
+    code = value.strip().lower()
+    code = {"zh-cn": "zh", "zh-hans": "zh"}.get(code, code)
+    if code not in {"auto", "zh", "en"}:
+        raise ConfigError(f"配置项 {label} 无效（支持 auto / zh / en）")
+    return code
+
+
+def resolve_direction(text: str, settings: Settings) -> str | None:
+    detected = detect_direction(text)
+    if detected is None:
+        return None
+    source = detected.split("-", 1)[0] if settings.source_language == "auto" else settings.source_language
+    target = ("en" if source == "zh" else "zh") if settings.target_language == "auto" else settings.target_language
+    return f"{source}-{target}"
 
 
 def _cfg_value(cfg: dict, key: str, default: object) -> object:
@@ -236,6 +260,8 @@ def _section_dict(cfg: dict, name: str) -> dict:
 def load_config(config_path: str | None) -> dict:
     cfg: dict = {
         "engine": DEFAULT_ENGINE,
+        "source_language": "auto",
+        "target_language": "auto",
         "fallback_without_credentials": False,
         "timeout_s": int(DEFAULT_TIMEOUT_S),
         "max_chars": DEFAULT_MAX_CHARS,
@@ -283,7 +309,7 @@ def load_config(config_path: str | None) -> dict:
 
 
 def load_settings(cfg: dict) -> Settings:
-    """校验并归一化数值配置；非法值直接抛 ConfigError，不静默夹紧。"""
+    """校验并归一化数值及中英语言策略；非法值直接抛 ConfigError。"""
     raw_engine = _cfg_value(cfg, "engine", DEFAULT_ENGINE)
     if not isinstance(raw_engine, str):
         raise ConfigError("配置项 engine 无效")
@@ -324,6 +350,8 @@ def load_settings(cfg: dict) -> Settings:
         max_size_mb=max_size_mb,
         max_files=max_files,
         fallback_without_credentials=fallback_raw,
+        source_language=normalize_language(_cfg_value(cfg, "source_language", "auto"), "source_language"),
+        target_language=normalize_language(_cfg_value(cfg, "target_language", "auto"), "target_language"),
     )
 
 
@@ -1042,8 +1070,12 @@ def translate_with_cache(
     真的失败后才查自己的缓存，避免免费引擎的旧缓存遮住可用的付费引擎。
     """
     settings = cfg if cfg is not None else {}
-    engines = engine_order(engine, settings)
     source, target = direction_langs(direction)
+    # A fixed target can already match the input. Do not contact a provider or
+    # read credentials/cache merely to return the same text.
+    if source == target:
+        return TranslationResult(text=text, engine="identity", cached=False, direction=direction)
+    engines = engine_order(engine, settings)
 
     last_error: Exception | None = None
     for name in engines:
@@ -1529,7 +1561,7 @@ def _run_translation(
             length=str(len(text)),
             max_chars=str(settings.max_chars),
         )
-    direction = detect_direction(text)
+    direction = resolve_direction(text, settings)
     if direction is None:
         return write_error(output, "detect", "未包含可翻译文字", engine_label)
 
@@ -1577,11 +1609,12 @@ def _run_translation(
             sanitize_detail(exc, source_text=text, cfg=cfg),
         )
 
-    try:
-        prune_cache(max_size_mb=settings.max_size_mb, max_files=settings.max_files)
-    except Exception:
-        # 清缓存失败不该让已经成功的翻译失败。
-        pass
+    if result.engine != "identity":
+        try:
+            prune_cache(max_size_mb=settings.max_size_mb, max_files=settings.max_files)
+        except Exception:
+            # 清缓存失败不该让已经成功的翻译失败。
+            pass
     try:
         write_output(
             output,
@@ -1602,6 +1635,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-file", default="", help="包含待译文本的 UTF-8 文件")
     parser.add_argument("--output-file", default="", help="结果文件路径")
     parser.add_argument("--config", default=None, help="config.toml 路径")
+    parser.add_argument("--source-language", default=None, help="覆盖本次源语言：auto / zh / en")
+    parser.add_argument("--target-language", default=None, help="覆盖本次目标语言：auto / zh / en")
     parser.add_argument("--self-test", action="store_true", help="只跑判定/配置/缓存单测，不联网")
     args = parser.parse_args(argv)
 
@@ -1632,6 +1667,10 @@ def main(argv: list[str] | None = None) -> int:
             DEFAULT_ENGINE,
             sanitize_detail(exc),
         )
+    if args.source_language is not None:
+        cfg["source_language"] = args.source_language
+    if args.target_language is not None:
+        cfg["target_language"] = args.target_language
     engine_label = _engine_label(cfg)
     try:
         settings = load_settings(cfg)

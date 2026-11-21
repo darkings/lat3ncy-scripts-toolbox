@@ -120,6 +120,7 @@ class TranslateTestBase(unittest.TestCase):
         fake_engine: Callable[..., str] | None = None,
         *,
         input_file: str | None = None,
+        extra_args: tuple[str, ...] = (),
     ) -> tuple[int, dict[str, str], str, Path]:
         config_path = self.write_config(config_body)
         output = self._next_path("out", ".txt")
@@ -129,6 +130,7 @@ class TranslateTestBase(unittest.TestCase):
         else:
             argv.extend(["--input-file", input_file])
         argv.extend(["--config", str(config_path)])
+        argv.extend(extra_args)
         if fake_engine is None:
             return_code = tr.main(argv)
         else:
@@ -200,6 +202,99 @@ class TranslateTestBase(unittest.TestCase):
     def assert_no_tmp_files(test: unittest.TestCase, folder: Path) -> None:
         leftovers = [item.name for item in folder.iterdir() if ".tmp." in item.name]
         test.assertEqual(leftovers, [], f"temporary cache files left behind: {leftovers}")
+
+
+class LanguagePolicyTests(TranslateTestBase):
+    def test_defaults_keep_legacy_detection_and_cache_directions(self) -> None:
+        settings = tr.load_settings({})
+        for text, expected in [("hello", "en-zh"), ("你好", "zh-en"), ("今天使用 Windows", "en-zh"), ("123!", None)]:
+            with self.subTest(text=text):
+                self.assertEqual(expected, tr.resolve_direction(text, settings))
+
+    def test_language_aliases_are_normalized(self) -> None:
+        settings = tr.load_settings({"source_language": " EN ", "target_language": "ZH-Hans"})
+        self.assertEqual(("en", "zh"), (settings.source_language, settings.target_language))
+        self.assertEqual("zh", tr.load_settings({"source_language": "zh-CN"}).source_language)
+
+    def test_fixed_source_overrides_the_character_majority(self) -> None:
+        calls = []
+        def fake(name, text, source, target, timeout, cfg):
+            calls.append((source, target))
+            return "fixed translation"
+        for source, target, text, pair in [("en", "zh", "中文很多 Hello", ("en", "zh-CN")),
+                                           ("zh", "auto", "Windows 中文", ("zh-CN", "en"))]:
+            with self.subTest(source=source):
+                body = f'source_language="{source}"\ntarget_language="{target}"\n'+self.config_body()
+                _, fields, _, _ = self.invoke(text, body, fake)
+                self.assertEqual("ok", fields["status"])
+                self.assertEqual(pair, calls[-1])
+                self.assertEqual(pair, tr.direction_langs(fields["direction"]))
+
+    def test_fixed_target_applies_to_both_input_directions(self) -> None:
+        for target, source_text, expected_pair in [("zh", "Hello", ("en", "zh-CN")), ("en", "你好", ("zh-CN", "en"))]:
+            with self.subTest(target=target):
+                calls = []
+                def fake(name, text, source, output, timeout, cfg):
+                    calls.append((source, output))
+                    return "translated"
+                _, fields, _, _ = self.invoke(source_text, f'target_language="{target}"\n'+self.config_body(), fake)
+                self.assertEqual("ok", fields["status"])
+                self.assertEqual([expected_pair], calls)
+
+    def test_matching_language_is_identity_without_credentials_cache_or_network(self) -> None:
+        with mock.patch.object(tr, "engine_order", side_effect=AssertionError("credentials must not be read")), \
+             mock.patch.object(tr, "cache_get", side_effect=AssertionError("cache must not be read")), \
+             mock.patch.object(tr, "cache_put", side_effect=AssertionError("cache must not be written")), \
+             mock.patch.object(tr, "prune_cache", side_effect=AssertionError("cache must not be pruned")) as prune:
+            for text, language in [("  你好|世界\n第二行 😀  ", "zh"), ("Hello|world\nsecond 😀", "en")]:
+                with self.subTest(language=language):
+                    body = f'target_language="{language}"\n'+self.config_body(tencent_id="", tencent_key="")
+                    _, fields, _, _ = self.invoke(text, body)
+                    self.assertEqual("ok", fields["status"])
+                    self.assertEqual("identity", fields["engine"])
+                    self.assertEqual("0", fields["cached"])
+                    self.assertEqual(text.strip(), fields["text"])
+            prune.assert_not_called()
+
+    def test_invalid_language_config_fails_before_any_request(self) -> None:
+        for key in ("source_language", "target_language"):
+            for value in ('"ja"', '""', 'true', '42', '[]', '{}'):
+                with self.subTest(key=key, value=value), mock.patch.object(tr, "call_engine") as engine:
+                    _, fields, _, _ = self.invoke("hello", f'{key}={value}\n'+self.config_body())
+                    self.assertEqual("config", fields["code"])
+                    self.assertIn(key, fields["message"])
+                    engine.assert_not_called()
+
+    def test_cli_language_overrides_are_one_shot_and_do_not_modify_config(self) -> None:
+        seen = []
+        def fake(name, text, source, target, timeout, cfg):
+            seen.append((source, target))
+            return "译文"
+        body = 'source_language="zh"\ntarget_language="en"\n'+self.config_body()
+        _, fields, _, output = self.invoke("hello", body, fake,
+            extra_args=("--source-language", "EN", "--target-language", "zh-CN"))
+        self.assertEqual("ok", fields["status"])
+        self.assertEqual([("en", "zh-CN")], seen)
+        self.assertEqual(body, next(output.parent.glob("config-*.toml")).read_text("utf-8"))
+
+    def test_language_pairs_have_separate_caches_and_same_alias_pair_reuses_cache(self) -> None:
+        calls = []
+        def fake(name, text, source, target, timeout, cfg):
+            calls.append((source, target))
+            return f"{source} → {target}"
+        for source, target in [("en", "zh"), ("zh", "en"), ("EN", "zh-CN"), ("auto", "auto")]:
+            _, fields, _, _ = self.invoke("Hello 中文", f'source_language="{source}"\ntarget_language="{target}"\n'+self.config_body(), fake)
+            self.assertEqual("ok", fields["status"])
+        self.assertEqual([("en", "zh-CN"), ("zh-CN", "en")], calls)
+        self.assertEqual("1", fields["cached"])
+
+    def test_number_only_input_is_rejected_even_with_explicit_languages(self) -> None:
+        _, fields, _, _ = self.invoke("1234!?😀", 'source_language="en"\ntarget_language="zh"\n'+self.config_body())
+        self.assertEqual("detect", fields["code"])
+
+    def test_unknown_direction_is_rejected_instead_of_defaulting_to_chinese(self) -> None:
+        with self.assertRaises(tr.ConfigError):
+            tr.translate_with_cache("google_gtx", "hello", "ja-en", 1, {})
 
 
 class EnginePlanTests(TranslateTestBase):

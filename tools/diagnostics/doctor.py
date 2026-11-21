@@ -41,6 +41,16 @@ def config_summary(path: Path, component: str) -> dict:
             engine = TRANSLATE_ALIASES.get(engine, engine)
         if not isinstance(engine, str) or engine not in ENGINES[component]:
             return {'status': 'invalid', 'reason': 'unsupported-engine'}
+        if component == 'translate':
+            languages = {}
+            for field in ('source_language', 'target_language'):
+                raw = value.get(field, 'auto')
+                code = raw.strip().lower() if isinstance(raw, str) else ''
+                code = {'zh-cn': 'zh', 'zh-hans': 'zh'}.get(code, code)
+                if code not in {'auto', 'zh', 'en'}:
+                    return {'status': 'invalid', 'reason': 'unsupported-language', 'field': field}
+                languages[field] = code
+            return {'status': 'ok', 'engine': engine, **languages}
         return {'status': 'ok', 'engine': engine}
     except FileNotFoundError:
         return {'status': 'default', 'engine': {'ocr': 'system', 'translate': 'tencent', 'tts': 'auto'}[component]}

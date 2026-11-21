@@ -34,7 +34,7 @@ raise SystemExit(module.main())
         with tempfile.TemporaryDirectory() as folder:
             config = Path(folder)/'config.toml'
             config.write_text('engine="TMT"\nsecret_key="private-secret"\n', encoding='utf-8')
-            self.assertEqual({'status': 'ok', 'engine': 'tencent'}, doctor.config_summary(config, 'translate'))
+            self.assertEqual({'status': 'ok', 'engine': 'tencent', 'source_language': 'auto', 'target_language': 'auto'}, doctor.config_summary(config, 'translate'))
             for text in ('engine="private-secret"', 'engine=["private-secret"]', 'engine="broken-private-secret'):
                 config.write_text(text, encoding='utf-8')
                 result = doctor.config_summary(config, 'translate')
@@ -42,6 +42,23 @@ raise SystemExit(module.main())
                 self.assertNotIn('private-secret', json.dumps(result))
             config.unlink()
             self.assertEqual({'status': 'default', 'engine': 'system'}, doctor.config_summary(config, 'ocr'))
+
+    def test_translation_languages_export_only_canonical_enums(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder)/'config.toml'
+            config.write_text('source_language=" EN "\ntarget_language="ZH-Hans"\nsecret_key="private-secret"\n', encoding='utf-8')
+            self.assertEqual({'status': 'ok', 'engine': 'tencent', 'source_language': 'en', 'target_language': 'zh'}, doctor.config_summary(config, 'translate'))
+
+    def test_invalid_translation_language_exports_field_but_never_raw_value(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder)/'config.toml'
+            for field in ('source_language', 'target_language'):
+                for value in ('"private-secret"', '"ja"', 'true', '[]', '42'):
+                    with self.subTest(field=field, value=value):
+                        config.write_text(f'{field}={value}\n', encoding='utf-8')
+                        result = doctor.config_summary(config, 'translate')
+                        self.assertEqual({'status': 'invalid', 'reason': 'unsupported-language', 'field': field}, result)
+                        self.assertNotIn('private-secret', json.dumps(result))
 
     def test_log_exports_fixed_events_and_keeps_failure_separate_from_latest_success(self):
         with tempfile.TemporaryDirectory() as folder:

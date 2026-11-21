@@ -8,7 +8,7 @@ python tools/diagnostics/doctor.py
 python tools/diagnostics/doctor.py --json --output .tmp/diagnostics/report.json
 ```
 
-默认检查配置 TOML 语法与引擎名、当前仓库 AHK/HUD/光标助手/PowerPolicy 状态、OCR/翻译/TTS 解释器和依赖元数据、进程完整性及 TEMP 写入能力，并列出日志位置与最近可识别的终态/失败类别。`ok` 表示这些离线检查通过，退出码为 0；缺失、过期、依赖不匹配或无法判断时为 `attention`，退出码为 1。启动失败也返回 1。
+默认检查配置 TOML 语法、引擎名及翻译源／目标语言枚举、当前仓库 AHK/HUD/光标助手/PowerPolicy 状态、OCR/翻译/TTS 解释器和依赖元数据、进程完整性及 TEMP 写入能力，并列出日志位置与最近可识别的终态/失败类别。语言仅输出归一后的 `auto` / `zh` / `en`，非法值只报告字段名。`ok` 表示这些离线检查通过，退出码为 0；缺失、过期、依赖不匹配或无法判断时为 `attention`，退出码为 1。启动失败也返回 1。
 
 内部解释器探针以 JSON 交付观察结果，交付成功时退出 0，即使发现依赖不匹配或低完整性；外层命令再按这些字段返回健康退出码。这样依赖异常不会被丢弃为笼统的子进程失败。
 

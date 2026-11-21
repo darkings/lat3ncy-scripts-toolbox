@@ -429,3 +429,5 @@
 - 106 项 Python、完整 AHK/WinUI、自源构建助手及含空格路径干净候选三阶段通过，证据 .tmp/validation/20261121-text-workflow-final/；之后补充的后端启动失败保留原文回归通过，日志 .tmp/text-workflow-final-local.log。
 - 已正式替换面板产物并最终重载本仓库：AHK 6768 / WinUI 11244 / 光标助手 3060，PING 与只读诊断通过。发布备份 .tmp/releases/20261121-014751-50b599fe；元数据 .tmp/text-workflow-deploy-final.json。四份个人配置 SHA-256 保持保护基线，未提交。
 - Computer Use 未列出 WinUI 工具窗口，不能确认按钮视觉/实际点击。新 Caps+I 框选、Raycast 菜单与按钮实际播放保留手工验收；此前基础功能确认不替代这条新流程。下一步先验收联动，再评估语言设置、离线翻译适配及统一命令入口。
+
+- 远端首轮 offline 发现新安装器测试直接比较 TEMP 的 8.3 短路径与规范长路径，实际安装参数正确；改为按对应参数的规范路径比较，仍核对专用解释器和锁文件。OCR 20 项回归通过，推送后重新核对最终 SHA 的 offline/winui。

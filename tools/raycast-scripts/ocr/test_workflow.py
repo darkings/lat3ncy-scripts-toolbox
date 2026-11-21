@@ -107,8 +107,10 @@ class LockedRuntimeTests(unittest.TestCase):
                 self.assertEqual(0, installer.main())
             args = execute.call_args.args[0]
             self.assertIn('--require-hashes', args)
-            self.assertIn(str(root/'.venv314/Scripts/python.exe'), args)
-            self.assertIn(str(root/'requirements.lock'), args)
+            # Windows runners may spell TEMP with an 8.3 user directory while
+            # the installer canonicalizes __file__ to its long path.
+            self.assertEqual((root/'.venv314/Scripts/python.exe').resolve(), Path(args[args.index('--python')+1]).resolve())
+            self.assertEqual((root/'requirements.lock').resolve(), Path(args[args.index('-r')+1]).resolve())
             self.assertEqual('model="default"\n', config.read_text('utf-8'))
 
     def test_corrupted_model_download_never_replaces_existing_file(self):

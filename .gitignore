@@ -76,3 +76,4 @@ __pycache__/
 tools/raycast-scripts/ocr/.debug.log
 tools/raycast-scripts/ocr/.toast-*.ps1
 tools/raycast-scripts/ocr/.venv314/
+tools/raycast-scripts/ocr/.cache/

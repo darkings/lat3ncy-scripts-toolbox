@@ -1,4 +1,5 @@
 ﻿#Requires AutoHotkey v2.0
+#Warn VarUnset, StdOut
 #Include ..\main.ahk
 
 ; Task 1 contract harness. Run via run-tests.ps1 so stale results are removed and
@@ -1939,6 +1940,7 @@ AssertNotContains(smartPasteHelperSource, 'Remove-Item -LiteralPath $outputPath'
 #Include review-regressions.ahk
 #Include tts-lifecycle.ahk
 TtsLifecycleTests()
+#Include text-workflow.ahk
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

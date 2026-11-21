@@ -7,39 +7,19 @@
 # @raycast.description Install OCR dependencies (Pillow + RapidOCR), skip if already installed
 # @raycast.icon 📦
 
-"""Screenshot OCR 依赖安装脚本（跨平台）。
-
-按当前操作系统选择可用的 Python 解释器，通过 pip 安装 OCR 所需的
-Python 依赖（Pillow + RapidOCR）。依赖已存在时自动跳过。
-
-用法：
-    python install-deps.py            # 检测并安装缺失依赖，交互式选择是否下载移动端模型
-    python install-deps.py --check    # 只检测，不安装
-
-RapidOCR 为纯 pip 分发，无需系统包管理器；各平台差异主要体现在
-Python 解释器的查找方式上。移动端模型从 ModelScope 官方仓库下载。
-"""
+"""Install/check the Windows Python 3.14 OCR lock; optional model download is explicit."""
 
 import hashlib
+import argparse
+import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
 import urllib.error
 import urllib.request
-
-PIP_PACKAGES: list[str] = [
-    "pillow",
-    "rapidocr-onnxruntime",
-    "pyperclip",
-]
-
-# pip 包名 -> 模块导入名
-IMPORT_NAMES: dict[str, str] = {
-    "pillow": "PIL",
-    "rapidocr-onnxruntime": "rapidocr_onnxruntime",
-}
+from pathlib import Path
+from ocr_runtime import base_python, check_environment
 
 # 移动端模型：文件名 -> (ModelScope 仓库内路径, sha256)
 MOBILE_MODELS: dict[str, tuple[str, str]] = {
@@ -59,81 +39,6 @@ MOBILE_MODELS: dict[str, tuple[str, str]] = {
 
 MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 MODELSCOPE_BASE = "https://modelscope.cn/models/RapidAI/RapidOCR/resolve/master"
-
-
-def detect_platform() -> str:
-    system = platform.system()
-    release = platform.release()
-    detail = system
-    if system == "Linux" and sys.platform.startswith("linux"):
-        detail = f"{system} ({linux_distro_id()})"
-    return f"{detail} {release}"
-
-
-def linux_distro_id() -> str:
-    try:
-        with open("/etc/os-release", encoding="utf-8") as os_release:
-            for line in os_release:
-                if line.startswith("ID="):
-                    return line.strip()[3:].strip('"')
-    except OSError:
-        return "unknown"
-    return "unknown"
-
-
-def find_python() -> list[str] | None:
-    """返回安装依赖用的 Python 命令前缀。
-
-    Windows 上优先 `python`（与 Raycast OCR 脚本使用的 pythonw.exe 同一环境），
-    macOS/Linux 上优先 `python3`。
-    """
-    if sys.platform == "win32":
-        candidates = ["python", "py -3"]
-    else:
-        candidates = ["python3", "python"]
-    for candidate in candidates:
-        executable = candidate.split()[0]
-        if shutil.which(executable):
-            return candidate.split()
-    return None
-
-
-def module_installed(package: str) -> bool:
-    """真实 import 检测，而非 find_spec。
-
-    find_spec 只看模块是否存在，不加载二进制扩展；scoop 升级 Python 后
-    旧的 cp314 .pyd 还躺在 site-packages 里（persist junction），find_spec
-    会误报“已安装”，import 才会暴露 ModuleNotFoundError / DLL load failed。
-    """
-    import_name = IMPORT_NAMES.get(package, package)
-    if import_name is None:
-        return False
-    try:
-        __import__(import_name)
-    except Exception:
-        return False
-    return True
-
-
-def python_minor_supported() -> bool:
-    """onnxruntime 官方 wheel 通常滞后最新 Python 一个小版本。
-
-    此函数保留为扩展点；当前 pip 报“无匹配版本”时的指引已在
-    main() 的失败提示里给出（换上一个稳定版 Python 或改用 system 引擎）。
-    """
-    return True
-
-
-def run(
-    command: list[str], check_message: str | None = None
-) -> subprocess.CompletedProcess[bytes]:
-    if check_message:
-        print(f">> {check_message}")
-    print("$", " ".join(command))
-    result = subprocess.run(command, check=False)
-    if result.returncode != 0:
-        raise SystemExit(f"命令失败（exit {result.returncode}）：{' '.join(command)}")
-    return result
 
 
 def sha256_of(path: str) -> str:
@@ -172,104 +77,44 @@ def ensure_mobile_models() -> None:
         download_model(filename, remote_path, expected_sha256)
 
 
-def prompt_yes_no(question: str) -> bool:
-    """交互式提问，返回是否确认；无输入（管道/非交互）时默认否。"""
-    try:
-        answer = input(f"{question} [y/N] ").strip().lower()
-    except EOFError:
-        return False
-    return answer in ("y", "yes")
-
-
-def switch_model_to_mobile() -> None:
-    """把 config.toml 顶层 model 字段切换为 mobile。"""
-    config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "config.toml"
-    )
-    lines = open(config_path, encoding="utf-8").readlines()
-    for index, line in enumerate(lines):
-        if line.strip().startswith("model ="):
-            lines[index] = 'model = "mobile"\n'
-            break
-    open(config_path, "w", encoding="utf-8").writelines(lines)
-    print('已切换：model = "mobile"（修改 ocr/config.toml 可随时切回 default）')
-
-
-def verify_engine(python: list[str]) -> None:
-    print("\n验证 RapidOCR 引擎可加载（首次会加载模型，请稍候）：")
-    run(
-        python
-        + [
-            "-c",
-            (
-                "from rapidocr_onnxruntime import RapidOCR; "
-                "engine = RapidOCR(); print('  OK rapidocr engine ready')"
-            ),
-        ],
-        check_message="实例化 RapidOCR",
-    )
-
-
 def main() -> int:
-    print(f"检测到操作系统：{detect_platform()}")
-    print(f"Python：{sys.version.split()[0]}")
-
-    python = find_python()
-    if not python:
-        raise SystemExit(
-            "未找到 Python 3。请先安装 Python 3 并加入 PATH："
-            "https://www.python.org/downloads/"
-        )
-    print(f"使用解释器：{' '.join(python)}")
-
-    # import 检测会把“装了但二进制不兼容”的包也判为缺失（这是想要的）：
-    # scoop/conda 类包管理器升级 Python 后，旧解释器编译的 .pyd 无法 import，
-    # 必须强制重装当前版本的 wheel，find_spec 会漏报。
-    broken_or_missing = [pkg for pkg in PIP_PACKAGES if not module_installed(pkg)]
-    if broken_or_missing:
-        print("缺失或不可导入（可能为旧 Python 版本的二进制包）：" + ", ".join(broken_or_missing))
-        if "--check" in sys.argv:
-            print("--check 模式：跳过安装。")
-            return 1
-
-        run(
-            python + ["-m", "pip", "install", "--force-reinstall"] + broken_or_missing,
-            check_message="强制重装缺失/损坏依赖",
-        )
-
-        print("\n验证安装结果：")
-        still_broken = [pkg for pkg in broken_or_missing if not module_installed(pkg)]
-        if still_broken:
-            print(
-                "\n以下依赖安装后仍无法导入："
-                + ", ".join(still_broken)
-                + "\n常见原因："
-                + "\n  1. 当前 Python 版本还没有对应的二进制 wheel（onnxruntime 官方"
-                + "wheel 通常滞后最新 Python 一个小版本）"
-                + "\n     -> 换用上一个稳定版 Python，或把 ocr/config.toml 的 ocr 字段"
-                + "改为 \"system\" 用系统 OCR（Win+Shift+T）"
-            )
-            raise SystemExit("依赖验证失败")
-        for package in still_broken or broken_or_missing:
-            print(f"  OK {package}")
-    else:
-        print("依赖已全部就绪：" + ", ".join(PIP_PACKAGES))
-        if "--check" in sys.argv:
-            return 0
-
-    verify_engine(python)
-
-    if prompt_yes_no("是否下载 PP-OCRv4 移动端模型（识别更快、精度略降）？"):
-        print("\n下载 PP-OCRv4 移动端模型（mobile）：")
-        try:
+    parser = argparse.ArgumentParser(description='Install/check the locked module Python 3.14 OCR environment')
+    parser.add_argument('--check', action='store_true')
+    parser.add_argument('--mobile-models', action='store_true', help='Also download the existing hash-verified optional models; never changes config')
+    args = parser.parse_args()
+    if sys.platform != 'win32':
+        print(json.dumps({'status': 'unsupported', 'reason': 'windows-required'}))
+        return 1
+    root = Path(__file__).resolve().parent
+    try:
+        status = check_environment(root)
+        if args.check:
+            print(json.dumps(status))
+            return 0 if status['status'] == 'ready' else 1
+        if status['status'] != 'ready':
+            uv = shutil.which('uv')
+            if not uv:
+                raise RuntimeError('uv is required to create/install the locked OCR environment')
+            environment = root/'.venv314'
+            if not (environment/'pyvenv.cfg').is_file():
+                if environment.exists() and any(environment.iterdir()):
+                    raise ValueError('Refusing to replace a nonempty unrecognized environment')
+                subprocess.run([uv, 'venv', '--python', '3.14', str(environment)], check=True, timeout=180)
+            # Validate its declared base before modifying the module environment.
+            base_python(root)
+            command = [uv, 'pip', 'install', '--python', str(environment/'Scripts/python.exe'),
+                       '--require-hashes', '-r', str(root/'requirements.lock')]
+            if status['status'] == 'broken':
+                command.append('--reinstall')
+            subprocess.run(command, check=True, timeout=300)
+            status = check_environment(root)
+        if args.mobile_models:
             ensure_mobile_models()
-        except (OSError, urllib.error.URLError) as error:
-            raise SystemExit(f"移动端模型下载失败：{error}")
-        if prompt_yes_no("是否将 config.toml 的模型切换为 mobile？"):
-            switch_model_to_mobile()
-
-    print("\n依赖安装完成，可以运行 Screenshot OCR 了。")
-    return 0
+        print(json.dumps(status))
+        return 0 if status['status'] == 'ready' else 1
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(json.dumps({'status': 'failed', 'errorType': type(error).__name__}))
+        return 1
 
 
 if __name__ == "__main__":

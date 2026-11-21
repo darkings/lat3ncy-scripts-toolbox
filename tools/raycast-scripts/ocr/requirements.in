@@ -1,0 +1,17 @@
+# Windows Python 3.14. Preserve the versions verified with the actual model.
+rapidocr-onnxruntime==1.4.4
+pillow==13.0.0
+pyperclip==1.11.0
+onnxruntime==1.31.1
+# Validated transitive versions, pinned here so lock regeneration is repeatable.
+colorama==0.4.6
+flatbuffers==25.12.19
+numpy==2.5.4
+opencv-python==5.0.0.93
+packaging==26.3
+protobuf==7.36.2
+pyclipper==1.4.0
+pyyaml==6.0.3
+shapely==2.2.0
+six==1.17.0
+tqdm==4.70.1

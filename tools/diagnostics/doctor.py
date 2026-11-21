@@ -109,9 +109,9 @@ def probe(component: str, kind: str) -> dict:
         load_file('ocr_host', ROOT/MODULES['ocr']/'ocr_host.py').activate_environment()
     packages = {'ocr': ['rapidocr-onnxruntime', 'onnxruntime', 'Pillow', 'pyperclip'], 'translate': [], 'tts': []}[component]
     expected = {}
-    if component == 'tts':
-        expected = dict(re.findall(r'^([\w.-]+)==([^\s\\]+)', (ROOT/MODULES['tts']/'requirements.lock').read_text('utf-8'), re.MULTILINE))
-        if 'edge-tts' not in expected:
+    if component in {'tts', 'ocr'}:
+        expected = dict(re.findall(r'^([\w.-]+)==([^\s\\]+)', (ROOT/MODULES[component]/'requirements.lock').read_text('utf-8'), re.MULTILINE))
+        if ('edge-tts' if component == 'tts' else 'rapidocr-onnxruntime') not in expected:
             return {'status': 'invalid', 'reason': 'invalid-lock'}
         packages = list(expected)
     actual = {}

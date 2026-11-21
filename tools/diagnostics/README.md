@@ -18,7 +18,7 @@ python tools/diagnostics/doctor.py --json --output .tmp/diagnostics/report.json
 - 不联网、不加载 OCR 模型、不截图、不读取剪贴板、不播放声音。TEMP 可写性会创建并立即清理一个随机探测文件；Python 可能生成普通导入缓存。
 - 解释器选择依据**运行此命令的环境**。AHK 已启动时持有的 PATH 可能不同。报告分别列出所选 `pythonw.exe` 与用于元数据检查的同目录 `python.exe`，完整性也是后者的实测；不把它等同于后台宿主的端到端验证。`pyw.exe` 没有确定的 console sibling 时保留无法判断。
 - OCR 复用生产 `Get-OcrLaunchSpec`；同版基础宿主以 `-I -S` 验证并激活原依赖目录。系统 OCR 模式不需要 Python 模型依赖，标记 `not-applicable`；这不验证 Windows 截图应用的安装和使用。
-- TTS 优先就绪且仓库归属匹配的用户目录环境，其次旧 `.venv`、全局解释器，并逐项比较 `requirements.lock` 版本。翻译使用标准库，无第三方依赖要求。OCR 检查包是否存在；元数据正常不保证原生 DLL/模型可加载。
+- TTS 优先就绪且仓库归属匹配的用户目录环境，其次旧 `.venv`、全局解释器。OCR 和 TTS 均逐项比较完整 `requirements.lock` 的包版本；OCR 锁目标为 Windows Python 3.14。翻译使用标准库，无第三方依赖要求。元数据正常不保证原生 DLL/模型可加载，OCR 安装器 `--check` 另外验证实际导入。
 - 配置检查不验证密钥是否存在或有效，也不调用服务；无法判断进程身份时为 `query-failed`，不会推断进程缺失或自动修复。HUD 会执行最多 2.5 秒的 PING；PowerShell 快照与每个解释器探针各限时 15 秒。
 
 日志每份最多读取末尾 64 KiB，只提取固定格式的时间、终态、错误类别、退出码；未识别的格式不作推断。OCR 日志仅有本地时分秒，`completed` 可能包含空结果或取消。历史失败独立于最新终态，并且不影响本次环境检查结论。报告不包含日志原文、选中文字、译文、密钥、进程命令行或异常消息；包含本机路径与 PID。

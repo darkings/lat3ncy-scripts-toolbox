@@ -168,6 +168,7 @@ IsToolboxTestMode() {
 #Include features\caffeine-indicator.ahk
 
 ; 统一路由层必须在全部 feature 之后加载。
+#Include features\text-workflow.ahk
 #Include hotkey-router.ahk
 
 ; 启动时清掉丢失引用的自定义 HUD，避免旧弹窗一直钉在桌面上。
@@ -190,5 +191,8 @@ if !IsToolboxTestMode() {
     } catch {
     }
 }
+
+if !IsToolboxTestMode()
+    TextWorkflow.Init()
 
 ToolboxStarting := false

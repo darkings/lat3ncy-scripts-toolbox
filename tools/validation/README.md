@@ -35,6 +35,25 @@ $python = (python tools/tts/install-deps.py --check | ConvertFrom-Json).python
 
 2026-11-20 本地语音增量：按仓库隔离的用户目录环境为 medium/RID 8192，中英文 SAPI WAV、SSML 参数及转义、禁止在线的实际 auto 流水线通过；AHK 实际选择该 pythonw 并在必需 Job 内完成本地合成、终态与清理，onlineCalls=0。联合探针的 Edge 与 SAPI 文件均通过。恢复的是新宿主上的 SAPI 路径，旧 Low 环境和缺失的 WinRT 依赖保持原样；新路径听感仍待确认。证据 `.tmp/integration/20261120-local-host/`，干净 clone 构建/全量测试 `.tmp/validation/20261120-local-host/`。
 
+## 截图翻译工作流验证（2026-11-21）
+
+离线测试新增 OCR 等待、完整 Unicode 结果、锁定安装与错误隐私边界；全量 AHK 套件覆盖 OCR 任务归属/取消、受管翻译后端、面板朗读代次和旧操作隔离。当前合计 106 项 Python 测试。
+
+显式运行 `text-workflow-fixture.ahk` 可检查真实 WinUI → AHK 的空结果禁用、朗读、停止及关闭消息。它只使用固定中英文，语音边界被计数器替代，不联网、不播放、不改剪贴板；会打开并最终关闭当前翻译面板，要求本仓库 HUD 已运行：
+
+```powershell
+$ahk = 'C:\path\to\v2\AutoHotkey64.exe'
+$fixture = (Resolve-Path tools/validation/text-workflow-fixture.ahk).Path
+$log = Join-Path (Resolve-Path .tmp).Path 'text-workflow-native.log'
+$run = Start-Process -FilePath $ahk -ArgumentList @('/ErrorStdOut',('"'+$fixture+'"'),'--test',('"'+$log+'"')) -WindowStyle Hidden -Wait -PassThru
+$run.ExitCode
+Get-Content $log
+```
+
+实测发现 UIAccess AHK 会拒收普通 WinUI 的自定义消息（错误 5）；工作流现在只对自己的两个窗口放行这一条不含文本的消息。句柄统一按十进制编码。真实消息回传通过，不等同于播放按钮点击或截图框选验收。Computer Use 未列出 WinUI 工具窗口，因此本轮没有将按钮视觉/点击标记为通过。
+
+全新 Python 3.14 环境使用安装器和完整哈希锁安装 15 个包，通过版本/导入检查和真实固定图片的宿主→工作流结果验证；没有修改个人配置或已有环境包。截图框选、Raycast 菜单、联网翻译及新按钮实际播放仍可按 README 的 Caps+I / Alt+R 流程手工确认；此前确认的独立 OCR、翻译、朗读不代替这条新流程。
+
 ## 可见选区与真实剪贴板探针
 
 `desktop-fixture.ahk` 是显式执行的桌面验收入口，不加入 CI。先创建证据目录，再用本机 AHK v2 引擎运行：

@@ -28,6 +28,9 @@ internal sealed class TranslationPanel
     readonly ToggleButton _pinButton;
     readonly Button _copyResultButton;
     readonly Button _closeButton;
+    readonly Button _speechButton;
+    bool _speechReady;
+    bool _speechPlaying;
     readonly FrameworkElement _iconPinOutline;
     readonly FrameworkElement _iconPinFilled;
     readonly TextBlock _sourceText;
@@ -42,6 +45,7 @@ internal sealed class TranslationPanel
     public event EventHandler? CloseRequested;
     public event EventHandler<string>? CopyRequested;
     public event EventHandler? DragRequested;
+    public event EventHandler? SpeechRequested;
 
     public bool IsPinned => _pinButton.IsChecked == true;
     public TranslationSource.Result CurrentSource => _source;
@@ -124,12 +128,19 @@ internal sealed class TranslationPanel
         _copyResultButton = MakeCopyButton("result", "复制译文");
         _copyResultButton.Margin = new Thickness(0, 0, 2, 0);
 
+        _speechButton = MakeChromeButton<Button>(SpeechGlyph(false));
+        _speechButton.Margin = new Thickness(0, 0, 2, 0);
+        _speechButton.Click += (_, _) => SpeechRequested?.Invoke(this, EventArgs.Empty);
+        _speechButton.AccessKey = "R";
+        SetSpeechState(false, false);
+
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center
         };
+        buttons.Children.Add(_speechButton);
         buttons.Children.Add(_copyResultButton);
         buttons.Children.Add(_pinButton);
         buttons.Children.Add(_closeButton);
@@ -223,10 +234,34 @@ internal sealed class TranslationPanel
         AutomationProperties.SetName(_pinButton, label);
     }
 
+    public void SetSpeechState(bool ready, bool playing)
+    {
+        _speechReady = ready;
+        if (_speechPlaying != playing)
+            _speechButton.Content = SpeechGlyph(playing);
+        _speechPlaying = playing;
+        _speechButton.IsEnabled = ready && _result.Ok;
+        string label = playing ? "停止朗读" : "朗读译文";
+        if (!_speechButton.IsEnabled)
+            label += "（等待译文）";
+        ToolTipService.SetToolTip(_speechButton, label);
+        AutomationProperties.SetName(_speechButton, label);
+        AutomationProperties.SetHelpText(_speechButton, "朗读当前译文；再次按下停止。快捷键 Alt+R。");
+        AutomationProperties.SetItemStatus(_speechButton, playing ? "正在朗读" : ready ? "可朗读" : "等待译文");
+    }
+
+    static FrameworkElement SpeechGlyph(bool playing)
+    {
+        string data = playing ? "M4,4 H12 V12 H4 Z" : "M5,3.5 L12.5,8 L5,12.5 Z";
+        return BuildIcon("<Path Data=\"" + data + "\" Fill=\"Transparent\" Stroke=\"{ThemeResource TextFillColorPrimaryBrush}\" StrokeThickness=\"1.32\" StrokeLineJoin=\"Round\"/>",
+            fallback: new TextBlock { Text = playing ? "■" : "▷", FontSize = IconDip });
+    }
+
     void OnDragPressed(object sender, PointerRoutedEventArgs e)
     {
         if (e.OriginalSource is DependencyObject origin
-            && (IsInside(_copyResultButton, origin)
+            && (IsInside(_speechButton, origin)
+                || IsInside(_copyResultButton, origin)
                 || IsInside(_pinButton, origin)
                 || IsInside(_closeButton, origin)))
         {
@@ -242,6 +277,7 @@ internal sealed class TranslationPanel
     {
         TranslationCopy.Outcome resultCopy = TranslationCopy.Resolve("result", _source, _result);
         ApplyCopyButton(_copyResultButton, resultCopy.Ok, "复制译文");
+        SetSpeechState(_speechReady, _speechPlaying);
     }
 
     static void ApplyCopyButton(Button button, bool enabled, string label)

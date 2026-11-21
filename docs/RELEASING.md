@@ -24,14 +24,14 @@ python tools/tts/install-deps.py --check
 
 依赖按 `requirements.lock` 的版本和哈希安装，不安装到全局 Python。`auto` 的本地 WinRT/SAPI 路径失败后会在线回退，向语音服务发送待朗读文本；显式 `engine = "winrt"` 保持离线。已有环境检查正常时无需重装。
 
-需要 RapidOCR 时，在已安装 uv 的机器创建专用环境；已存在且正常的环境跳过创建与安装：
+需要 RapidOCR 或截图翻译时，在已安装 uv 的机器使用专用环境安装入口；已存在且版本/导入正常的环境不会重装：
 
 ```powershell
-uv venv --python 3.14 tools/raycast-scripts/ocr/.venv314
-uv pip install --python tools/raycast-scripts/ocr/.venv314/Scripts/python.exe rapidocr-onnxruntime pillow pyperclip
+python tools/raycast-scripts/ocr/install-deps.py
+python tools/raycast-scripts/ocr/install-deps.py --check
 ```
 
-将 `tools/raycast-scripts/ocr/config.toml` 的 `ocr` 设为 `rapidocr` 后，启动器优先使用该环境声明的同版基础 `pythonw.exe` 和原依赖目录。`system` 模式使用 Windows 截图文本操作，不需要这些模型依赖。OCR 包目前未提供完整哈希锁，以上安装不保证不同日期解析出相同版本；本轮实际版本见诊断报告。不要用全局 Python 3.15 替代已验证的 cp314 环境。
+将 `tools/raycast-scripts/ocr/config.toml` 的 `ocr` 设为 `rapidocr` 后，独立 OCR 启动器优先使用该环境声明的同版基础 `pythonw.exe` 和原依赖目录。`system` 模式使用 Windows 截图文本操作，不需要这些模型依赖；截图翻译单独使用本地 RapidOCR，不改变该配置。OCR 全部依赖已有版本/SHA-256 锁，安装只管理模块 `.venv314`；全局 Python 3.15 不加载 cp314 依赖。`--mobile-models` 仅显式下载原有可选模型，不更改配置。
 
 ## 构建与验证
 

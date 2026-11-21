@@ -420,3 +420,12 @@
 - 真实只读音频检查：生产/候选 --get/--list 一致，1 个活动设备，默认输出前后均 Realtek 扬声器；没有运行任何切换、恢复或建链命令。
 - 全量与离线回归通过，64 个 PowerShell AST/BOM 检查、55 个 Python 行为测试，以及新增部署和来源故障测试通过。既有未提交修改/个人配置保留，未 stage/commit/push，远端 CI 尚未运行。
 - 构建日志、只读音频 JSON、复现和测试日志在 `.tmp/continue-20261119/`。操作说明分别为 `tools/build/README.md`、`tools/startup/README.md`；真实设备矩阵仅增加已实测的只读部分。
+
+## 会话：2026-11-21 截图翻译与译文朗读工作流
+
+- 从已合并 PR #2 的 main（9d6ad01）建立 codex/text-workflow-20261121。新增 Caps+I / Raycast Screenshot Translate：原生框选 → 本地 OCR → 直接翻译文本入口 → 面板手动朗读/停止；文字不通过剪贴板中转。翻译后端错误和启动失败均保留 OCR 原文；取消、关闭与旧结果隔离，面板只停止自己拥有的语音代次。
+- OCR 15 个现有实测版本完整固定并生成 SHA-256 锁；安装器改为专用 Python 3.14、只读 --check 与显式可选模型下载，不更改模式/配置。全新环境实际哈希安装、版本/导入和真实模型固定图片（PowerShell → 隔离宿主 → 原子协议）通过，证据 .tmp/ocr-locked-fresh/probe-report.json。
+- 真实 WinUI 回传发现 PostMessage 错误 5：UIAccess AHK 拒收普通宿主消息。只对工作流自有窗口放行一条无文本消息；句柄统一十进制。固定文本空结果禁用、朗读/停止/关闭回传通过，语音计数器替代实际播放；可重复入口 tools/validation/text-workflow-fixture.ahk，证据 .tmp/text-workflow-native-final.log。
+- 106 项 Python、完整 AHK/WinUI、自源构建助手及含空格路径干净候选三阶段通过，证据 .tmp/validation/20261121-text-workflow-final/；之后补充的后端启动失败保留原文回归通过，日志 .tmp/text-workflow-final-local.log。
+- 已正式替换面板产物并最终重载本仓库：AHK 6768 / WinUI 11244 / 光标助手 3060，PING 与只读诊断通过。发布备份 .tmp/releases/20261121-014751-50b599fe；元数据 .tmp/text-workflow-deploy-final.json。四份个人配置 SHA-256 保持保护基线，未提交。
+- Computer Use 未列出 WinUI 工具窗口，不能确认按钮视觉/实际点击。新 Caps+I 框选、Raycast 菜单与按钮实际播放保留手工验收；此前基础功能确认不替代这条新流程。下一步先验收联动，再评估语言设置、离线翻译适配及统一命令入口。

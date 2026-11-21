@@ -514,17 +514,24 @@ class SpeakSelectedText {
                 return
             }
 
-            this.StopCurrent()
-            gen := this.Generation
-            if (this.IsAutoSwitchEnabled()) {
-                this.Log("检测到 tts.auto_switch_before_play=true，异步预热 AirPods")
-                this.StartHeadsetWarmup(raw)
-                return
-            }
-            this.LaunchTts(raw, gen)
+            this.SpeakText(raw)
         } finally {
             A_Clipboard := savedClipboard
         }
+    }
+
+    ; Direct text entry: workflows never synthesize Ctrl+C or change clipboard.
+    static SpeakText(raw) {
+        raw := this.Normalize(raw)
+        if !this.HasSpeakableText(raw)
+            return 0
+        this.StopCurrent()
+        gen := this.Generation
+        if this.IsAutoSwitchEnabled()
+            this.StartHeadsetWarmup(raw)
+        else
+            this.LaunchTts(raw, gen)
+        return gen
     }
 
     static ShortText(text, maxLength := 36) {

@@ -62,6 +62,7 @@ class TranslateSelectedText {
     static PollTimer := ""
     ; 测试注入用；生产保持 0。只影响面板/通知副作用，不影响轮询和状态机。
     static Hooks := 0
+    static Workflow := 0
 
     static RepoDir() {
         if (this.CachedRepoDir != "")
@@ -187,11 +188,17 @@ class TranslateSelectedText {
         if (selected = "")
             selected := this.Normalize(A_Clipboard)
 
+        return this.TranslateText(selected, hotkeyX, hotkeyY)
+    }
+
+    ; Shared backend entry; callers supply text directly, never through clipboard.
+    static TranslateText(selected, hotkeyX := 0, hotkeyY := 0, keepSourceOnError := false) {
+        selected := this.Normalize(selected)
         if (selected = "") {
             Notify.Error("!", "未选中文字")
             return
         }
-        if !this.HasTranslatableText(selected) {
+        if (!this.HasTranslatableText(selected) && !keepSourceOnError) {
             Notify.Error("!", "未包含可翻译文字")
             return
         }
@@ -208,6 +215,8 @@ class TranslateSelectedText {
         this.CancelCurrent()
 
         requestId := this.RequestGate.Begin()
+        if IsObject(this.Workflow)
+            this.Workflow.Begin(requestId)
         stamp := A_TickCount "-" requestId "-" Random(1000, 9999)
         inputFile := A_Temp "\lat3ncy-translate-in-" stamp ".txt"
         outputFile := A_Temp "\lat3ncy-translate-out-" stamp ".txt"
@@ -223,15 +232,18 @@ class TranslateSelectedText {
         try {
             FileAppend selected, inputFile, "UTF-8"
             ; 翻译一开始就打开 WinUI 面板显示原文。
-            panelOpened := TranslationPanel.OpenText(selected, hotkeyX, hotkeyY)
+            panelOpened := this.OpenPanel(selected, hotkeyX, hotkeyY)
+            if (panelOpened && IsObject(this.Workflow))
+                this.Workflow.Bind(requestId)
             ; 非等待启动：热键线程立刻返回，翻译在子进程里跑，AHK 定时器不受阻。
             job := ProcessNoWindow.StartAsync(cmd, "", this.ProcessTimeoutMs)
         } catch as err {
             try FileDelete inputFile
             try FileDelete outputFile
-            try TranslationPanel.Close()
+            if !(keepSourceOnError && panelOpened && this.IsPanelOpen())
+                try this.ClosePanel()
             this.Log("start-failed id=" requestId " error=" err.Message)
-            Notify.Error("×", "翻译失败")
+            this.ShowError("翻译失败")
             return
         }
 
@@ -241,12 +253,14 @@ class TranslateSelectedText {
             inputFile: inputFile,
             outputFile: outputFile,
             panelOpened: panelOpened,
-            dismissed: false
+            dismissed: false,
+            keepSourceOnError: keepSourceOnError
         }
         this.Tasks.Push(task)
         this.CurrentTask := task
         this.EnsurePoll()
         this.Log("begin id=" requestId " chars=" StrLen(selected) " pid=" job.Pid " panel=" panelOpened)
+        return requestId
     }
 
     static CancelCurrent() {
@@ -292,6 +306,12 @@ class TranslateSelectedText {
         if (IsObject(this.Hooks) && this.Hooks.Has("panelOpen"))
             return this.Hooks["panelOpen"].Call()
         return TranslationPanel.IsOpen()
+    }
+
+    static OpenPanel(text, x, y) {
+        if (IsObject(this.Hooks) && this.Hooks.Has("open"))
+            return this.Hooks["open"].Call(text, x, y)
+        return TranslationPanel.OpenText(text, x, y)
     }
 
     static ShowError(message) {
@@ -420,11 +440,14 @@ class TranslateSelectedText {
             return
         }
         this.SetPanelResult(text)
+        if IsObject(this.Workflow)
+            this.Workflow.Result(task.id, text)
         this.Log("ok id=" task.id " engine=" engine " cached=" cached " chars=" StrLen(text))
     }
 
     static Fail(task, message, diagnostic) {
-        try this.ClosePanel()
+        if !(task.HasOwnProp("keepSourceOnError") && task.keepSourceOnError && task.panelOpened && this.IsPanelOpen())
+            try this.ClosePanel()
         this.Log("fail id=" task.id " message=" message " diagnostic=" SubStr(diagnostic, 1, 240))
         this.ShowError(message)
     }

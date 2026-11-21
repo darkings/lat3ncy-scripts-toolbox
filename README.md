@@ -73,6 +73,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ahk\tests\run-tests.ps
 | `CapsLock` | 短按切中/英（记住，切窗口后恢复）；250–500ms 松开取消；长按进大写 |
 | `Caps + S` | 朗读选中文字，再按一次打断 |
 | `Caps + F` | 划词翻译（无选区则译剪贴板），光标处弹译文面板 |
+| `Caps + I` | 框选截图并翻译；识别期间再次按下取消任务 |
 | `Caps + G` | Google 搜索选中文字 |
 | `Caps + O` | 打开选中的文件、目录或 URL |
 | `Caps + E` | 在资源管理器中定位选中目标 |
@@ -109,6 +110,7 @@ Raycast 里添加 `tools/raycast-scripts` 目录即可用，可逐个绑 Hotkey�
 | `restart-autohotkey.ps1` | 重启本工具箱的 `main.ahk` |
 | `screenshot.ps1` / `record-screen.ps1` | 截图 / 录屏框选 |
 | `screenshot-ocr.ps1` | 屏幕区域 OCR（RapidOCR（默认，走 `ocr/.venv314`）或 `system`；引擎见 `ocr/config.toml`） |
+| `screenshot-translate.ps1` | 截图翻译，与 Caps+I 使用同一流程 |
 | `toggle-rgb.ps1` | 开关风扇 + 键盘灯 |
 | `next-wallpaper.ps1` | 换成图池里的下一张壁纸（同时设锁屏） |
 
@@ -127,15 +129,23 @@ Raycast 里添加 `tools/raycast-scripts` 目录即可用，可逐个绑 Hotkey�
 
 ```powershell
 python .\tools\tts\install-deps.py                 # 朗读
-python .\tools\raycast-scripts\ocr\install-deps.py # RapidOCR（全局 Python ≤3.14 时）
+python .\tools\raycast-scripts\ocr\install-deps.py # OCR 的锁定 Python 3.14 环境，需要 uv
+python .\tools\raycast-scripts\ocr\install-deps.py --check # 只检查版本和实际导入
 ```
 
-RapidOCR 的 onnxruntime wheel 滞后最新 Python 一个小版本；全局 Python 过新时用专用 3.14 venv（`screenshot-ocr.ps1` 会自动优先使用，详见 `ocr/config.toml` 注释）：
+OCR 依赖固定在专用 `.venv314`，使用 `requirements.lock` 的版本及 SHA-256，避免全局 Python 升级影响原生包。安装器不会更改 OCR 模式或模型配置；可用 `--mobile-models` 显式下载原有的哈希校验模型。仅安装/检查依赖不会加载模型或读取剪贴板。
 
-```powershell
-uv venv --python 3.14 .\tools\raycast-scripts\ocr\.venv314
-uv pip install --python .\tools\raycast-scripts\ocr\.venv314\Scripts\python.exe rapidocr-onnxruntime pillow pyperclip
-```
+## 截图翻译与译文朗读
+
+按 `Caps+I` 或运行 Raycast 的 **Screenshot Translate**，在 Windows 截图工具中框选区域。识别后面板显示原文并自动翻译；完成后可点标题栏的播放按钮 **朗读译文**（面板内 `Alt+R`），再次点按 **停止朗读**。复制按钮仍复制译文，原文可选中后复制。
+
+截图翻译使用本地 RapidOCR，要求上述锁定环境；原有独立 OCR 命令仍按自己的 `ocr` 模式工作。翻译沿用现有引擎、凭证和字数上限；失败时保留识别原文，朗读按钮保持禁用。文字通过任务文件交付，不用剪贴板中转，不模拟快捷键；Windows 截图工具自身仍会将截图放入系统剪贴板。
+
+截图识别阶段再次按 `Caps+I` 取消当前任务；未完成截图约 30 秒后静默取消，OCR 进程组硬预算 90 秒。翻译阶段沿用 14 秒预算，关面板或开始新翻译会取消旧请求。关闭或替换面板会停止该面板发起的朗读，但不会停止后来独立发起的 Caps+S 朗读。停止与完成后清理任务文件，进程异常退出留下的文件在后续启动核验旧 PID/创建时间后回收。
+
+朗读沿用既有本地/在线策略；点击播放才开始朗读，不自动播放译文。翻译会将识别出的文本发送给所选翻译服务。
+
+## 主题、RGB 与设备
 
 主题调度的五个计划任务用脚本注册，不要手写 `schtasks /create`：
 

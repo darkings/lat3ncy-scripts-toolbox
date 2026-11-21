@@ -130,6 +130,7 @@ class HotkeyRouter {
             Shortcuts.SearchSelectedText,
             SearchSelectedText.HotkeyCallback
         )
+        this.RegisterCapsChord("截图翻译", Shortcuts.ScreenshotTranslate, TextWorkflow.HotkeyCallback)
         this.RegisterCapsChord(
             "打开选中目标",
             Shortcuts.OpenSelectedTarget,

@@ -38,7 +38,9 @@ internal static class TranslationPanelProtocol
         Copy,
         Close,
         Pin,
-        Ping
+        Ping,
+        Actions,
+        Speak
     }
 
     public readonly struct Message
@@ -53,6 +55,10 @@ internal static class TranslationPanelProtocol
         public string CopyTarget { get; init; }
         public string Payload { get; init; }
         public bool Pin { get; init; }
+        public long ActionOwner { get; init; }
+        public int RequestId { get; init; }
+        public bool ActionReady { get; init; }
+        public bool Speaking { get; init; }
         public bool HasPoint => X != 0 || Y != 0;
     }
 
@@ -82,6 +88,8 @@ internal static class TranslationPanelProtocol
             "TEXT" => ReadText(parts),
             "RESULT" => ReadResult(parts),
             "COPY" => ReadCopy(parts),
+            "ACTIONS" => ReadActions(parts),
+            "SPEAK" => parts.Length == 3 && parts[2] == "result" ? Empty(Kind.Speak) : default,
             "CLOSE" => Empty(Kind.Close),
             "PIN" => new Message
             {
@@ -161,7 +169,30 @@ internal static class TranslationPanelProtocol
             return 124;
         if (Parse("PANEL|COPY").Kind != Kind.Copy || Parse("PANEL|COPY").CopyTarget.Length != 0)
             return 125;
+        Message actions = Parse("PANEL|ACTIONS|123|7|1|1");
+        if (actions.Kind != Kind.Actions || actions.ActionOwner != 123 || actions.RequestId != 7 || !actions.ActionReady || !actions.Speaking)
+            return 126;
+        if (Parse("PANEL|ACTIONS|123|7|0|1").Kind != Kind.None
+            || Parse("PANEL|ACTIONS|-1|7|1|0").Kind != Kind.None
+            || Parse("PANEL|ACTIONS|123|0|1|0").Kind != Kind.None
+            || Parse("PANEL|ACTIONS|123|7|x|0").Kind != Kind.None)
+            return 127;
+        if (Parse("PANEL|SPEAK|result").Kind != Kind.Speak
+            || Parse("PANEL|SPEAK|source").Kind != Kind.None)
+            return 128;
         return 0;
+    }
+
+    static Message ReadActions(string[] parts)
+    {
+        if (parts.Length != 6 || !long.TryParse(parts[2], out long owner) || owner <= 0
+            || !int.TryParse(parts[3], out int request) || request <= 0
+            || parts[4] is not ("0" or "1") || parts[5] is not ("0" or "1")
+            || (parts[5] == "1" && parts[4] != "1"))
+            return default;
+        return new Message { Kind = Kind.Actions, ActionOwner = owner, RequestId = request,
+            ActionReady = parts[4] == "1", Speaking = parts[5] == "1",
+            Source = "", TextSource = "", ResultSource = "", CopyTarget = "", Payload = "" };
     }
 
     static Message Empty(Kind kind)

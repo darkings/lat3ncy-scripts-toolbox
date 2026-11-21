@@ -41,6 +41,16 @@ def config_summary(path: Path, component: str) -> dict:
             engine = TRANSLATE_ALIASES.get(engine, engine)
         if not isinstance(engine, str) or engine not in ENGINES[component]:
             return {'status': 'invalid', 'reason': 'unsupported-engine'}
+        if component == 'translate':
+            languages = {}
+            for field in ('source_language', 'target_language'):
+                raw = value.get(field, 'auto')
+                code = raw.strip().lower() if isinstance(raw, str) else ''
+                code = {'zh-cn': 'zh', 'zh-hans': 'zh'}.get(code, code)
+                if code not in {'auto', 'zh', 'en'}:
+                    return {'status': 'invalid', 'reason': 'unsupported-language', 'field': field}
+                languages[field] = code
+            return {'status': 'ok', 'engine': engine, **languages}
         return {'status': 'ok', 'engine': engine}
     except FileNotFoundError:
         return {'status': 'default', 'engine': {'ocr': 'system', 'translate': 'tencent', 'tts': 'auto'}[component]}
@@ -109,9 +119,9 @@ def probe(component: str, kind: str) -> dict:
         load_file('ocr_host', ROOT/MODULES['ocr']/'ocr_host.py').activate_environment()
     packages = {'ocr': ['rapidocr-onnxruntime', 'onnxruntime', 'Pillow', 'pyperclip'], 'translate': [], 'tts': []}[component]
     expected = {}
-    if component == 'tts':
-        expected = dict(re.findall(r'^([\w.-]+)==([^\s\\]+)', (ROOT/MODULES['tts']/'requirements.lock').read_text('utf-8'), re.MULTILINE))
-        if 'edge-tts' not in expected:
+    if component in {'tts', 'ocr'}:
+        expected = dict(re.findall(r'^([\w.-]+)==([^\s\\]+)', (ROOT/MODULES[component]/'requirements.lock').read_text('utf-8'), re.MULTILINE))
+        if ('edge-tts' if component == 'tts' else 'rapidocr-onnxruntime') not in expected:
             return {'status': 'invalid', 'reason': 'invalid-lock'}
         packages = list(expected)
     actual = {}

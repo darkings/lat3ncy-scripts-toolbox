@@ -120,6 +120,7 @@ class TranslateTestBase(unittest.TestCase):
         fake_engine: Callable[..., str] | None = None,
         *,
         input_file: str | None = None,
+        extra_args: tuple[str, ...] = (),
     ) -> tuple[int, dict[str, str], str, Path]:
         config_path = self.write_config(config_body)
         output = self._next_path("out", ".txt")
@@ -129,6 +130,7 @@ class TranslateTestBase(unittest.TestCase):
         else:
             argv.extend(["--input-file", input_file])
         argv.extend(["--config", str(config_path)])
+        argv.extend(extra_args)
         if fake_engine is None:
             return_code = tr.main(argv)
         else:
@@ -202,7 +204,163 @@ class TranslateTestBase(unittest.TestCase):
         test.assertEqual(leftovers, [], f"temporary cache files left behind: {leftovers}")
 
 
+class LanguagePolicyTests(TranslateTestBase):
+    def test_defaults_keep_legacy_detection_and_cache_directions(self) -> None:
+        settings = tr.load_settings({})
+        for text, expected in [("hello", "en-zh"), ("你好", "zh-en"), ("今天使用 Windows", "en-zh"), ("123!", None)]:
+            with self.subTest(text=text):
+                self.assertEqual(expected, tr.resolve_direction(text, settings))
+
+    def test_language_aliases_are_normalized(self) -> None:
+        settings = tr.load_settings({"source_language": " EN ", "target_language": "ZH-Hans"})
+        self.assertEqual(("en", "zh"), (settings.source_language, settings.target_language))
+        self.assertEqual("zh", tr.load_settings({"source_language": "zh-CN"}).source_language)
+
+    def test_fixed_source_overrides_the_character_majority(self) -> None:
+        calls = []
+        def fake(name, text, source, target, timeout, cfg):
+            calls.append((source, target))
+            return "fixed translation"
+        for source, target, text, pair in [("en", "zh", "中文很多 Hello", ("en", "zh-CN")),
+                                           ("zh", "auto", "Windows 中文", ("zh-CN", "en"))]:
+            with self.subTest(source=source):
+                body = f'source_language="{source}"\ntarget_language="{target}"\n'+self.config_body()
+                _, fields, _, _ = self.invoke(text, body, fake)
+                self.assertEqual("ok", fields["status"])
+                self.assertEqual(pair, calls[-1])
+                self.assertEqual(pair, tr.direction_langs(fields["direction"]))
+
+    def test_fixed_target_applies_to_both_input_directions(self) -> None:
+        for target, source_text, expected_pair in [("zh", "Hello", ("en", "zh-CN")), ("en", "你好", ("zh-CN", "en"))]:
+            with self.subTest(target=target):
+                calls = []
+                def fake(name, text, source, output, timeout, cfg):
+                    calls.append((source, output))
+                    return "translated"
+                _, fields, _, _ = self.invoke(source_text, f'target_language="{target}"\n'+self.config_body(), fake)
+                self.assertEqual("ok", fields["status"])
+                self.assertEqual([expected_pair], calls)
+
+    def test_matching_language_is_identity_without_credentials_cache_or_network(self) -> None:
+        with mock.patch.object(tr, "engine_order", side_effect=AssertionError("credentials must not be read")), \
+             mock.patch.object(tr, "cache_get", side_effect=AssertionError("cache must not be read")), \
+             mock.patch.object(tr, "cache_put", side_effect=AssertionError("cache must not be written")), \
+             mock.patch.object(tr, "prune_cache", side_effect=AssertionError("cache must not be pruned")) as prune:
+            for text, language in [("  你好|世界\n第二行 😀  ", "zh"), ("Hello|world\nsecond 😀", "en")]:
+                with self.subTest(language=language):
+                    body = f'target_language="{language}"\n'+self.config_body(tencent_id="", tencent_key="")
+                    _, fields, _, _ = self.invoke(text, body)
+                    self.assertEqual("ok", fields["status"])
+                    self.assertEqual("identity", fields["engine"])
+                    self.assertEqual("0", fields["cached"])
+                    self.assertEqual(text.strip(), fields["text"])
+            prune.assert_not_called()
+
+    def test_invalid_language_config_fails_before_any_request(self) -> None:
+        for key in ("source_language", "target_language"):
+            for value in ('"ja"', '""', 'true', '42', '[]', '{}'):
+                with self.subTest(key=key, value=value), mock.patch.object(tr, "call_engine") as engine:
+                    _, fields, _, _ = self.invoke("hello", f'{key}={value}\n'+self.config_body())
+                    self.assertEqual("config", fields["code"])
+                    self.assertIn(key, fields["message"])
+                    engine.assert_not_called()
+
+    def test_cli_language_overrides_are_one_shot_and_do_not_modify_config(self) -> None:
+        seen = []
+        def fake(name, text, source, target, timeout, cfg):
+            seen.append((source, target))
+            return "译文"
+        body = 'source_language="zh"\ntarget_language="en"\n'+self.config_body()
+        _, fields, _, output = self.invoke("hello", body, fake,
+            extra_args=("--source-language", "EN", "--target-language", "zh-CN"))
+        self.assertEqual("ok", fields["status"])
+        self.assertEqual([("en", "zh-CN")], seen)
+        self.assertEqual(body, next(output.parent.glob("config-*.toml")).read_text("utf-8"))
+
+    def test_language_pairs_have_separate_caches_and_same_alias_pair_reuses_cache(self) -> None:
+        calls = []
+        def fake(name, text, source, target, timeout, cfg):
+            calls.append((source, target))
+            return f"{source} → {target}"
+        for source, target in [("en", "zh"), ("zh", "en"), ("EN", "zh-CN"), ("auto", "auto")]:
+            _, fields, _, _ = self.invoke("Hello 中文", f'source_language="{source}"\ntarget_language="{target}"\n'+self.config_body(), fake)
+            self.assertEqual("ok", fields["status"])
+        self.assertEqual([("en", "zh-CN"), ("zh-CN", "en")], calls)
+        self.assertEqual("1", fields["cached"])
+
+    def test_number_only_input_is_rejected_even_with_explicit_languages(self) -> None:
+        _, fields, _, _ = self.invoke("1234!?😀", 'source_language="en"\ntarget_language="zh"\n'+self.config_body())
+        self.assertEqual("detect", fields["code"])
+
+    def test_unknown_direction_is_rejected_instead_of_defaulting_to_chinese(self) -> None:
+        with self.assertRaises(tr.ConfigError):
+            tr.translate_with_cache("google_gtx", "hello", "ja-en", 1, {})
+
+
 class EnginePlanTests(TranslateTestBase):
+    def test_auth_fallback_requires_explicit_boolean_opt_in(self) -> None:
+        for enabled in (True, False, "true", None):
+            cfg = self.tencent_cfg()
+            cfg['fallback_on_auth_error'] = enabled
+            calls = []
+            def fake(name, text, source, target, timeout, settings):
+                calls.append(name)
+                if name == 'tencent':
+                    raise tr.AuthError('invalid private-secret')
+                return '谷歌译文'
+            with self.subTest(enabled=enabled), mock.patch.object(tr, 'call_engine', side_effect=fake):
+                if enabled is True:
+                    result = tr.translate_with_cache('tencent', str(enabled), 'en-zh', 1, cfg)
+                    self.assertEqual(('google_gtx', 'tencent', 'auth'), (result.engine, result.preferred_engine, result.fallback_reason))
+                    self.assertEqual(['tencent', 'google_gtx'], calls)
+                else:
+                    with self.assertRaises(tr.AuthError):
+                        tr.translate_with_cache('tencent', str(enabled), 'en-zh', 1, cfg)
+                    self.assertEqual(['tencent'], calls)
+
+    def test_auth_fallback_can_use_free_cache_and_keeps_its_reason(self) -> None:
+        cfg = self.tencent_cfg(); cfg['fallback_on_auth_error'] = True
+        tr.cache_put('google_gtx', 'en-zh', 'hello', '缓存谷歌译文', cfg)
+        with mock.patch.object(tr, 'call_engine', side_effect=tr.AuthError('invalid')) as call:
+            result = tr.translate_with_cache('tencent', 'hello', 'en-zh', 1, cfg)
+        self.assertEqual(1, call.call_count)
+        self.assertTrue(result.cached)
+        self.assertEqual(('google_gtx', 'auth', '缓存谷歌译文'), (result.engine, result.fallback_reason, result.text))
+
+    def test_recovered_primary_wins_over_cached_fallback_with_auth_opt_in(self) -> None:
+        cfg = self.tencent_cfg(); cfg['fallback_on_auth_error'] = True
+        tr.cache_put('google_gtx', 'en-zh', 'hello', '旧谷歌译文', cfg)
+        with mock.patch.object(tr, 'call_engine', return_value='恢复后的腾讯译文') as call:
+            result = tr.translate_with_cache('tencent', 'hello', 'en-zh', 1, cfg)
+        self.assertEqual('tencent', call.call_args.args[0])
+        self.assertEqual(('tencent', '', '恢复后的腾讯译文'), (result.engine, result.fallback_reason, result.text))
+
+    def test_fallback_protocol_has_fixed_reason_and_text_remains_last(self) -> None:
+        for reason in ('auth', 'credentials', 'timeout'):
+            calls = []
+            def fake(name, text, source, target, timeout, settings):
+                calls.append(name)
+                if name == 'tencent':
+                    raise tr.AuthError('private-secret') if reason == 'auth' else TimeoutError('private-secret')
+                return '完整谷歌译文|😀\n第二行'
+            body = 'fallback_on_auth_error=true\n'+self.config_body(
+                fallback=reason == 'credentials', tencent_id='' if reason == 'credentials' else 'test-id')
+            with self.subTest(reason=reason):
+                _, fields, raw, _ = self.invoke(reason, body, fake)
+                self.assertEqual('ok', fields['status'])
+                self.assertEqual(('tencent', 'google_gtx', reason), (fields['preferred_engine'], fields['engine'], fields['fallback_reason']))
+                self.assertEqual('完整谷歌译文|😀\n第二行', fields['text'])
+                self.assertTrue(raw.endswith('text=完整谷歌译文|😀\n第二行\n'))
+                self.assertNotIn('private-secret', raw)
+                self.assertEqual(['google_gtx'] if reason == 'credentials' else ['tencent', 'google_gtx'], calls)
+
+    def test_invalid_auth_fallback_policy_is_config_error_before_request(self) -> None:
+        for value in ('"true"', '1', '[]'):
+            with self.subTest(value=value), mock.patch.object(tr, 'call_engine') as call:
+                _, fields, _, _ = self.invoke('hello', f'fallback_on_auth_error={value}\n'+self.config_body())
+                self.assertEqual('config', fields['code'])
+                call.assert_not_called()
+
     def test_missing_cloud_credentials_is_config_error_by_default(self) -> None:
         cfg = {
             "fallback_without_credentials": False,

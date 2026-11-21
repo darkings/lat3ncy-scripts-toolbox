@@ -18,6 +18,15 @@ with patch.dict(sys.modules, {
 
 
 class NotificationTests(unittest.TestCase):
+    def test_text_extraction_has_no_clipboard_notification_or_file_delivery(self):
+        image = types.SimpleNamespace(size=(320, 100))
+        engine = Mock(return_value=([([], 'fixed OCR', .99), ([], '中文|😀', .99)], None))
+        with patch.dict(sys.modules, {'numpy': types.SimpleNamespace(array=lambda value: value)}), \
+             patch.object(ocr, '_debug'), patch.object(ocr, 'copy_to_clipboard') as copy, \
+             patch.object(ocr, 'notify') as notify, patch.object(ocr, 'write_result') as write:
+            self.assertEqual('fixed OCR\n中文|😀', ocr.extract_text(engine, image))
+        copy.assert_not_called(); notify.assert_not_called(); write.assert_not_called()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

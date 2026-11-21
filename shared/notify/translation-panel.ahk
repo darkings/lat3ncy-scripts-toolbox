@@ -75,6 +75,11 @@ class TranslationPanel {
         return "PANEL|CLOSE"
     }
 
+    static BuildActionsCommand(owner, requestId, ready, speaking) {
+        ; AHK handles may be hexadecimal strings; the wire protocol is decimal.
+        return "PANEL|ACTIONS|" Integer(owner) "|" Integer(requestId) "|" (ready ? 1 : 0) "|" (ready && speaking ? 1 : 0)
+    }
+
     ; 已有窗口直接 COPYDATA；没有窗口就无控制台拉起 exe，再等主 HWND。
     ; 不要 Trim：原文/译文两端空白和换行都属于 payload。
     static Send(command) {

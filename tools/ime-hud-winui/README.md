@@ -4,6 +4,10 @@
 
 AHK CapsLock IME 状态芯片和 Caps+F 翻译链都打本进程主窗口 `Lat3ncyImeHudWinUi`。
 
+截图翻译也使用现有面板。标题栏新增“朗读译文 / 停止朗读”按钮（Alt+R），等待译文时禁用，沿用原有尺寸/ThemeResource 与键盘焦点样式。按钮只回传请求编号，不读取选区或剪贴板；实际 TTS 任务由 AHK 管理。
+
+新增协议 `PANEL|ACTIONS|<ownerHwnd>|<requestId>|<ready 0/1>|<speaking 0/1>` 绑定操作上下文；`PANEL|SPEAK|result` 与按钮共用处理入口。仅可见且有译文时请求朗读，以 `WM_APP+76` 异步通知 owner，wParam 为请求号，lParam=1 为播放/停止、2 为关闭。换原文/关闭会清除旧操作上下文；AHK 再核验当前请求号与语音 generation，防止过期事件影响新任务。
+
 ```text
 Win32 HWND  32×32 DIP
   WS_POPUP / NOACTIVATE / TOOLWINDOW

@@ -420,3 +420,49 @@
 - 真实只读音频检查：生产/候选 --get/--list 一致，1 个活动设备，默认输出前后均 Realtek 扬声器；没有运行任何切换、恢复或建链命令。
 - 全量与离线回归通过，64 个 PowerShell AST/BOM 检查、55 个 Python 行为测试，以及新增部署和来源故障测试通过。既有未提交修改/个人配置保留，未 stage/commit/push，远端 CI 尚未运行。
 - 构建日志、只读音频 JSON、复现和测试日志在 `.tmp/continue-20261119/`。操作说明分别为 `tools/build/README.md`、`tools/startup/README.md`；真实设备矩阵仅增加已实测的只读部分。
+
+## 会话：2026-11-21 截图翻译与译文朗读工作流
+
+- 从已合并 PR #2 的 main（9d6ad01）建立 codex/text-workflow-20261121。新增 Caps+I / Raycast Screenshot Translate：原生框选 → 本地 OCR → 直接翻译文本入口 → 面板手动朗读/停止；文字不通过剪贴板中转。翻译后端错误和启动失败均保留 OCR 原文；取消、关闭与旧结果隔离，面板只停止自己拥有的语音代次。
+- OCR 15 个现有实测版本完整固定并生成 SHA-256 锁；安装器改为专用 Python 3.14、只读 --check 与显式可选模型下载，不更改模式/配置。全新环境实际哈希安装、版本/导入和真实模型固定图片（PowerShell → 隔离宿主 → 原子协议）通过，证据 .tmp/ocr-locked-fresh/probe-report.json。
+- 真实 WinUI 回传发现 PostMessage 错误 5：UIAccess AHK 拒收普通宿主消息。只对工作流自有窗口放行一条无文本消息；句柄统一十进制。固定文本空结果禁用、朗读/停止/关闭回传通过，语音计数器替代实际播放；可重复入口 tools/validation/text-workflow-fixture.ahk，证据 .tmp/text-workflow-native-final.log。
+- 106 项 Python、完整 AHK/WinUI、自源构建助手及含空格路径干净候选三阶段通过，证据 .tmp/validation/20261121-text-workflow-final/；之后补充的后端启动失败保留原文回归通过，日志 .tmp/text-workflow-final-local.log。
+- 已正式替换面板产物并最终重载本仓库：AHK 6768 / WinUI 11244 / 光标助手 3060，PING 与只读诊断通过。发布备份 .tmp/releases/20261121-014751-50b599fe；元数据 .tmp/text-workflow-deploy-final.json。四份个人配置 SHA-256 保持保护基线，未提交。
+- Computer Use 未列出 WinUI 工具窗口，不能确认按钮视觉/实际点击。新 Caps+I 框选、Raycast 菜单与按钮实际播放保留手工验收；此前基础功能确认不替代这条新流程。下一步先验收联动，再评估语言设置、离线翻译适配及统一命令入口。
+
+- 远端首轮 offline 发现新安装器测试直接比较 TEMP 的 8.3 短路径与规范长路径，实际安装参数正确；改为按对应参数的规范路径比较，仍核对专用解释器和锁文件。OCR 20 项回归通过，推送后重新核对最终 SHA 的 offline/winui。
+
+## 会话：2026-11-21 中英输入／输出语言策略
+
+- 在现有工作流分支继续加入 source_language / target_language 顶层设置与本次 CLI 覆盖；Caps+F / Caps+I 共用一次性后端，每次读取。保留默认 auto/auto 的原中英计数和缓存方向；显式源语言覆盖计数，固定目标可统一译中文/英文。当前范围只包含中英，不把其他语言默认为英文。
+- 同语种返回 identity 原文，保留换行/竖线/emoji，不查凭证、不读写或清理缓存、不请求服务。字数上限和纯数字/符号拒绝保持；不同方向隔离，规范别名和默认等价方向复用缓存。成功协议仍以 text 最后交付。
+- 新增无密钥 config.example.toml；诊断输出归一后的语言枚举，非法值仅报告字段名。翻译 43 项、诊断/验证 13 项，全部 Python 共 118 项；受限网络/凭证桩验证无新增服务调用。
+- 含空格路径的干净候选离线、助手源码构建、完整 WinUI/AHK 三阶段通过：.tmp/validation/20261121-language-policy/report.json。真实一次性文件入口的固定中文 identity 完整交付、输入回收通过：.tmp/translation-language-probe/report.json。只读诊断 ok，四份个人配置 SHA-256 维持保护基线；未触发截图/真实播放或更改常驻。
+- 新后端按需生效，无需重载。补充到现有草稿 PR #3，推送后按最终 SHA 核对 offline/winui；新工作流实际框选和按钮点击的待验收状态继续保留。
+
+## 会话：2026-11-21 连续工作流验收入口
+
+- 新增 text_workflow_smoke.py + text-workflow-pipeline.ahk，以固定图片通过实际 OCR Job、生产 TextWorkflow.Poll/SubmitText、实际翻译进程和真实 WinUI 回传连续验证。默认 identity 不调用翻译服务；语音边界由计数器替代，不截图、读剪贴板、注入按键或播放声音。
+- 10 项默认验收全通过：识别、翻译交付、朗读开始/停止、关闭、实际 Job 取消、OCR 失败、翻译配置失败保留原文、句柄关闭和任务清理；含空格路径、多次重复运行通过。最新证据 .tmp/integration/20261121-workflow-pipeline-lease with spaces/report.json。
+- 启动前验证 HUD 可执行文件属于当前仓库，查询隐藏窗口时临时启用后恢复 DetectHiddenWindows。仓库级探针互斥，不靠 SingleInstance Force 结束其他测试；失败退出只清理本探针的 Job/文件，仅在归属确认后关闭面板。图片/配置/缓存/临时环境隔离到新证据目录，不覆盖已有目录。
+- 在线检查如实未通过：固定文本免费接口遭遇 TLS 握手超时；使用原有配置的新进程未发现可用腾讯云密钥。最终报告 translationOutcome=config，证据 .tmp/integration/20261121-workflow-online-final/report.json；不复制凭证、不更改网络/引擎/个人配置，不用 identity 充当在线验收。
+- 新增 6 项报告聚合、首个终态固定分类、隐私、显式网络开关和已有目录拒绝测试。Python 合计 124 项，含空格路径干净候选离线、助手源码构建、完整 AHK/WinUI 三阶段通过：.tmp/validation/20261121-workflow-smoke/report.json。最终只读诊断 ok，四份个人配置 SHA-256 保持保护基线，无遗留探针进程；未替换或重载常驻。
+- 新入口补入 README/验证说明，仍不覆盖原生框选、Raycast 菜单、按钮实际点击和声音；后续优先恢复有效在线翻译配置再复测。提交到现有草稿 PR #3 并按最终 SHA 核对远端 CI。
+
+## 会话：2026-11-21 Google 静默保底
+
+- 用户先要求退回 Google，实际未命中缓存的 Google 在线联动 10 项通过；随后确认腾讯云密钥配置好后优先腾讯，并明确密钥异常无需系统通知、直接回退 Google。按授权仅修改个人翻译配置的 engine=tencent / fallback_without_credentials=true / fallback_on_auth_error=true，其他设置及另三份个人配置不变，配置不提交。
+- 后端新增显式鉴权失败回退，默认 false 保持旧配置兼容。缺密钥可直接跳过首选，显式开启后鉴权错误尝试 Google，Google 不可用时沿用 MyMemory；首选恢复后不会被免费缓存遮住。回退成功保留实际引擎、首选和固定原因，text 仍在最后；缓存不保存历史回退原因。
+- AHK 成功回退只写白名单诊断，无任何系统通知调用。新增固定日志隐私回归；5 项 Python 行为测试覆盖显式布尔授权、鉴权回退缓存、首选恢复、协议及非法开关。翻译 48 项，全仓库 Python 129 项。鉴权路径用隔离桩验证，不发送伪造凭证。
+- 真实在线连续联动 10 项全部通过：.tmp/integration/20261121-google-fallback-silent/report.json；首个请求 engine=google_gtx cached=0，原因 credentials。用户旧配置此前缺密钥/TLS 超时记录保留为历史，不代表当前回退状态。
+- 含空格路径干净候选离线、助手源码构建、完整 AHK/WinUI 三阶段通过：.tmp/validation/20261121-silent-google-fallback/report.json。正式 ForceReload 无需替换 WinUI 字节，AHK 34752 / HUD 32204 / 光标助手 744，PING 与只读诊断 ok；证据 .tmp/google-fallback-deploy.json，备份 .tmp/releases/20261121-113907-29ff85ee。
+- 本轮只对成功回退保持静默；全部引擎失败沿用原有错误处理。未新增通知、网络设置、密钥或供应商。提交后更新草稿 PR #3 并核对最终 SHA 的 CI。
+
+## 会话：2026-11-22 自动复核与 Computer Use 验收重试
+
+- 用户不在电脑旁后要求继续，并明确尝试 computer-use 技能。已读完整 SKILL.md / guidance / api / confirmations，通过 @oai/sky 实际检查：固定 WinUI 面板协议已打开但三次目标枚举为 0，launch_app 超时；普通桌面固定文本 GUI 可枚举并读 UIA 树，截图失败 0x80070057，click/activate 都因 GetCursorPos 0x80070005 被拒绝。没有成功输入，没有把协议通过视作点击/视觉/声音通过。没有尝试安全桌面、提权或权限设置；自有 GUI 测试进程已清理，证据 .tmp/computer-use-20261122/report.json。
+- 继续无须交互的代码复核。最小复现发现正文伪造元数据与 UI 回调异常残留，修复前 metadata_from_body / callback_escaped / input_retained / output_retained 均为 1，修复后均为 0；证据 .tmp/review-20261122-before.txt / review-20261122-evidence.txt。
+- ParseField 以首个 text= 行为边界，所有其他字段仅查头部；保留正文 CRLF/emoji/竖线及类似字段的行。实际 OCR 状态机补缺少真实 request_id、仅正文伪造身份的拒绝回归。
+- 完成任务的 UI 交付置于 try/catch/finally，显示/通知异常仅记固定 internal，不重复通知、不记录潜在正文异常消息；始终回收输入与结果文件，并继续清空完成任务。新增真实状态机回调故障注入回归。
+- 129 项 Python、完整 AHK/WinUI 及含空格路径干净候选离线/助手构建/全量三阶段通过，证据 .tmp/validation/20261122-protocol-cleanup/report.json。正式 ForceReload 无 WinUI 字节变化，AHK 6756 / HUD 9200 / 光标 12392，PING 与归属健康；.tmp/review-20261122-deploy.json。四份个人配置字节保持本轮基线，包括已授权的 Google 静默保底策略。
+- 实机项目继续待办，保留草稿 PR #3；同步修复后核对最终 SHA 的远端 CI，不要求用户当下回到电脑旁。

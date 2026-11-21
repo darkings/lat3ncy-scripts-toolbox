@@ -62,6 +62,7 @@ class TranslateSelectedText {
     static PollTimer := ""
     ; 测试注入用；生产保持 0。只影响面板/通知副作用，不影响轮询和状态机。
     static Hooks := 0
+    static Workflow := 0
 
     static RepoDir() {
         if (this.CachedRepoDir != "")
@@ -119,13 +120,16 @@ class TranslateSelectedText {
     }
 
     static ParseField(content, name) {
+        ; text consumes the remainder, including lines that look like headers.
+        hasText := RegExMatch(content, "m)^text=", &body)
+        if (name = "text")
+            return hasText ? SubStr(content, body.Pos + body.Len) : ""
+        header := hasText ? SubStr(content, 1, body.Pos - 1) : content
         needle := "m)^" name "="
-        if !RegExMatch(content, needle, &match)
+        if !RegExMatch(header, needle, &match)
             return ""
         start := match.Pos + match.Len
-        rest := SubStr(content, start)
-        if (name = "text")
-            return rest
+        rest := SubStr(header, start)
         lineEnd := InStr(rest, "`n")
         if !lineEnd
             return Trim(rest, "`r")
@@ -187,11 +191,17 @@ class TranslateSelectedText {
         if (selected = "")
             selected := this.Normalize(A_Clipboard)
 
+        return this.TranslateText(selected, hotkeyX, hotkeyY)
+    }
+
+    ; Shared backend entry; callers supply text directly, never through clipboard.
+    static TranslateText(selected, hotkeyX := 0, hotkeyY := 0, keepSourceOnError := false) {
+        selected := this.Normalize(selected)
         if (selected = "") {
             Notify.Error("!", "未选中文字")
             return
         }
-        if !this.HasTranslatableText(selected) {
+        if (!this.HasTranslatableText(selected) && !keepSourceOnError) {
             Notify.Error("!", "未包含可翻译文字")
             return
         }
@@ -208,6 +218,8 @@ class TranslateSelectedText {
         this.CancelCurrent()
 
         requestId := this.RequestGate.Begin()
+        if IsObject(this.Workflow)
+            this.Workflow.Begin(requestId)
         stamp := A_TickCount "-" requestId "-" Random(1000, 9999)
         inputFile := A_Temp "\lat3ncy-translate-in-" stamp ".txt"
         outputFile := A_Temp "\lat3ncy-translate-out-" stamp ".txt"
@@ -223,15 +235,18 @@ class TranslateSelectedText {
         try {
             FileAppend selected, inputFile, "UTF-8"
             ; 翻译一开始就打开 WinUI 面板显示原文。
-            panelOpened := TranslationPanel.OpenText(selected, hotkeyX, hotkeyY)
+            panelOpened := this.OpenPanel(selected, hotkeyX, hotkeyY)
+            if (panelOpened && IsObject(this.Workflow))
+                this.Workflow.Bind(requestId)
             ; 非等待启动：热键线程立刻返回，翻译在子进程里跑，AHK 定时器不受阻。
             job := ProcessNoWindow.StartAsync(cmd, "", this.ProcessTimeoutMs)
         } catch as err {
             try FileDelete inputFile
             try FileDelete outputFile
-            try TranslationPanel.Close()
+            if !(keepSourceOnError && panelOpened && this.IsPanelOpen())
+                try this.ClosePanel()
             this.Log("start-failed id=" requestId " error=" err.Message)
-            Notify.Error("×", "翻译失败")
+            this.ShowError("翻译失败")
             return
         }
 
@@ -241,12 +256,14 @@ class TranslateSelectedText {
             inputFile: inputFile,
             outputFile: outputFile,
             panelOpened: panelOpened,
-            dismissed: false
+            dismissed: false,
+            keepSourceOnError: keepSourceOnError
         }
         this.Tasks.Push(task)
         this.CurrentTask := task
         this.EnsurePoll()
         this.Log("begin id=" requestId " chars=" StrLen(selected) " pid=" job.Pid " panel=" panelOpened)
+        return requestId
     }
 
     static CancelCurrent() {
@@ -294,12 +311,26 @@ class TranslateSelectedText {
         return TranslationPanel.IsOpen()
     }
 
+    static OpenPanel(text, x, y) {
+        if (IsObject(this.Hooks) && this.Hooks.Has("open"))
+            return this.Hooks["open"].Call(text, x, y)
+        return TranslationPanel.OpenText(text, x, y)
+    }
+
     static ShowError(message) {
         if (IsObject(this.Hooks) && this.Hooks.Has("error")) {
             this.Hooks["error"].Call(message)
             return
         }
         Notify.Error("×", message)
+    }
+
+    static LogFallback(preferred, actual, reason) {
+        engines := Map("tencent", true, "aliyun", true, "google_gtx", true, "mymemory", true)
+        if (!engines.Has(preferred) || !engines.Has(actual) || preferred = actual
+            || !RegExMatch(reason, "^(credentials|auth|network|timeout|too_long)$"))
+            return
+        this.Log("fallback preferred=" preferred " engine=" actual " reason=" reason)
     }
 
     static ShowPopup(text) {
@@ -359,24 +390,31 @@ class TranslateSelectedText {
                 this.RequestGate.CancelCurrent()
             }
 
-            switch decision {
-                case "apply", "apply-fallback":
-                    this.ApplyResult(task, decision = "apply-fallback")
-                case "timeout":
-                    this.Fail(task, "翻译超时", "timeout")
-                case "error":
-                    this.Fail(task, "翻译失败", status)
-                case "discard-stale":
-                    this.Log("discard-stale id=" task.id " status=" status)
-                case "discard-dismissed":
-                    this.Log("discard-dismissed id=" task.id)
-                case "discard-cancelled":
-                    this.Log("discard-cancelled id=" task.id)
-                default:
-                    this.Log("discard-unknown id=" task.id " decision=" decision)
+            try {
+                switch decision {
+                    case "apply", "apply-fallback":
+                        this.ApplyResult(task, decision = "apply-fallback")
+                    case "timeout":
+                        this.Fail(task, "翻译超时", "timeout")
+                    case "error":
+                        this.Fail(task, "翻译失败", status)
+                    case "discard-stale":
+                        this.Log("discard-stale id=" task.id " status=" status)
+                    case "discard-dismissed":
+                        this.Log("discard-dismissed id=" task.id)
+                    case "discard-cancelled":
+                        this.Log("discard-cancelled id=" task.id)
+                    default:
+                        this.Log("discard-unknown id=" task.id " decision=" decision)
+                }
+            } catch {
+                ; A failed UI callback must not escape a timer or expose its
+                ; potentially private exception text. Do not retry notifications.
+                this.Log("delivery-failed id=" task.id " diagnostic=internal")
+            } finally {
+                ; The protocol must be read first, then removed on every path.
+                this.CleanupTaskFiles(task)
             }
-            ; 结果文件必须先读后删。
-            this.CleanupTaskFiles(task)
         }
 
         this.Tasks := remaining
@@ -407,6 +445,7 @@ class TranslateSelectedText {
 
         engine := this.ParseField(content, "engine")
         cached := this.ParseField(content, "cached")
+        this.LogFallback(this.ParseField(content, "preferred_engine"), engine, this.ParseField(content, "fallback_reason"))
         if fallback {
             ; 面板不可用（HUD 未启动成功）时保留翻译能力，用 AHK popup 兜底。
             try this.ShowPopup(text)
@@ -420,11 +459,14 @@ class TranslateSelectedText {
             return
         }
         this.SetPanelResult(text)
+        if IsObject(this.Workflow)
+            this.Workflow.Result(task.id, text)
         this.Log("ok id=" task.id " engine=" engine " cached=" cached " chars=" StrLen(text))
     }
 
     static Fail(task, message, diagnostic) {
-        try this.ClosePanel()
+        if !(task.HasOwnProp("keepSourceOnError") && task.keepSourceOnError && task.panelOpened && this.IsPanelOpen())
+            try this.ClosePanel()
         this.Log("fail id=" task.id " message=" message " diagnostic=" SubStr(diagnostic, 1, 240))
         this.ShowError(message)
     }

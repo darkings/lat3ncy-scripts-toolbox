@@ -168,6 +168,7 @@ function Test-FeatureLoadsIndependently
   $pythonHelper = Join-Path (Split-Path $NotifyRoot -Parent) 'python.ahk'
   $stub = @"
 #Requires AutoHotkey v2.0
+#Warn VarUnset, StdOut
 #SingleInstance Off
 #NoTrayIcon
 OnError (*) => ExitApp(1)
@@ -246,6 +247,7 @@ try
     (Join-Path $featureRoot 'open-selected-target.ahk'),
     (Join-Path $featureRoot 'locate-selected-target.ahk'),
     (Join-Path $featureRoot 'speak-selected-text.ahk'),
+    (Join-Path $featureRoot 'text-workflow.ahk'),
     (Join-Path $featureRoot 'translate-selected-text.ahk'),
     (Join-Path $featureRoot 'audio-switcher.ahk'),
     (Join-Path $featureRoot 'switch-app-window.ahk'),

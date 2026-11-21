@@ -246,12 +246,8 @@ def write_result(result_file: str, text: str) -> None:
         result.write(text)
 
 
-def recognize(
-    engine: Any,
-    image: Image.Image,
-    result_file: str | None = None,
-    notify_on_done: bool = False,
-) -> int:
+def extract_text(engine: Any, image: Image.Image) -> str:
+    """Pure recognition boundary: no clipboard writes, notifications or files."""
     import numpy as np
 
     # 大图先降采样：RapidOCR 的耗时随像素数近似线性增长。
@@ -278,6 +274,17 @@ def recognize(
     text = ""
     if result:
         text = "\n".join(line[1] for line in result).strip()
+
+    return text
+
+
+def recognize(
+    engine: Any,
+    image: Image.Image,
+    result_file: str | None = None,
+    notify_on_done: bool = False,
+) -> int:
+    text = extract_text(engine, image)
 
     if result_file is not None:
         # Raycast detached 流程：先交付用户可见的结果（剪贴板 + Toast），

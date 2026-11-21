@@ -4,6 +4,8 @@
 
 2026-11-21 用户反馈 OCR、翻译及朗读基础使用均正常，基础使用验收已确认。下文 2026-11-20 的工具阻塞和听感未确认是历史记录；未获逐项确认的异常路径、多屏、物理设备及自动保护探针保留各自状态。
 
+语言策略增量将 Python 回归总数增至 118 项：覆盖默认方向兼容、固定源/目标、CLI 只覆盖本次、同语种跳过凭证/缓存/网络、错误配置和诊断隐私，以及方向缓存隔离/复用。真实文件入口另以固定中文验证 identity 完整交付与输入回收，不调用服务；不据此宣称新增多语言、联网翻译或声音验收。
+
 ```powershell
 # 不读取现有 out/obj/venv；个人 config.toml 改动使用 HEAD 中的版本替代
 python tools/validation/clean_checkout.py --full
@@ -34,6 +36,44 @@ $python = (python tools/tts/install-deps.py --check | ConvertFrom-Json).python
 当前已验证真实 OCR 文字/空白图片、TTS 在线恢复、MCI 播放/连续替换以及受管 Python 请求的错误交付，面板协议的真实剪贴板探针见下文；本地低完整性 SAPI 限制如实保留为失败。UIA、多屏/DPI、跨应用交付、朗读听感、合盖/睡眠及设备断连仍按 `tools/startup/README.md` 的矩阵执行。
 
 2026-11-20 本地语音增量：按仓库隔离的用户目录环境为 medium/RID 8192，中英文 SAPI WAV、SSML 参数及转义、禁止在线的实际 auto 流水线通过；AHK 实际选择该 pythonw 并在必需 Job 内完成本地合成、终态与清理，onlineCalls=0。联合探针的 Edge 与 SAPI 文件均通过。恢复的是新宿主上的 SAPI 路径，旧 Low 环境和缺失的 WinRT 依赖保持原样；新路径听感仍待确认。证据 `.tmp/integration/20261120-local-host/`，干净 clone 构建/全量测试 `.tmp/validation/20261120-local-host/`。
+
+## 截图翻译工作流验证（2026-11-21）
+
+离线测试新增 OCR 等待、完整 Unicode 结果、锁定安装与错误隐私边界；全量 AHK 套件覆盖 OCR 任务归属/取消、受管翻译后端、面板朗读代次和旧操作隔离。当前合计 106 项 Python 测试。
+
+显式运行 `text-workflow-fixture.ahk` 可检查真实 WinUI → AHK 的空结果禁用、朗读、停止及关闭消息。它只使用固定中英文，语音边界被计数器替代，不联网、不播放、不改剪贴板；会打开并最终关闭当前翻译面板，要求本仓库 HUD 已运行：
+
+```powershell
+$ahk = 'C:\path\to\v2\AutoHotkey64.exe'
+$fixture = (Resolve-Path tools/validation/text-workflow-fixture.ahk).Path
+$log = Join-Path (Resolve-Path .tmp).Path 'text-workflow-native.log'
+$run = Start-Process -FilePath $ahk -ArgumentList @('/ErrorStdOut',('"'+$fixture+'"'),'--test',('"'+$log+'"')) -WindowStyle Hidden -Wait -PassThru
+$run.ExitCode
+Get-Content $log
+```
+
+实测发现 UIAccess AHK 会拒收普通 WinUI 的自定义消息（错误 5）；工作流现在只对自己的两个窗口放行这一条不含文本的消息。句柄统一按十进制编码。真实消息回传通过，不等同于播放按钮点击或截图框选验收。Computer Use 未列出 WinUI 工具窗口，因此本轮没有将按钮视觉/点击标记为通过。
+
+全新 Python 3.14 环境使用安装器和完整哈希锁安装 15 个包，通过版本/导入检查和真实固定图片的宿主→工作流结果验证；没有修改个人配置或已有环境包。截图框选、Raycast 菜单、联网翻译及新按钮实际播放仍可按 README 的 Caps+I / Alt+R 流程手工确认；此前确认的独立 OCR、翻译、朗读不代替这条新流程。
+
+### 连续联动探针
+
+`text_workflow_smoke.py` 将真实 OCR 模型、AHK 工作流轮询、真实翻译进程、WinUI 结果和朗读/停止/关闭回传连续运行，并检查实际 Job 取消、OCR 失败、翻译配置失败保留原文、句柄关闭和任务文件清理。使用固定图片 `Hello workflow42`，不读剪贴板、不打开截图工具、不模拟按键或播放声音。要求当前仓库 HUD 已运行；会替换并最终关闭当前翻译面板，启动前核对其可执行文件归属。
+
+```powershell
+$ahk = 'C:\path\to\v2\AutoHotkey64.exe'
+# 默认用临时 identity 配置；只验证交付，不访问翻译服务或凭证
+python tools/validation/text_workflow_smoke.py --ahk $ahk
+# 显式在线：直接使用当前翻译配置和原有密钥读取，不复制密钥；预期译为中文
+python tools/validation/text_workflow_smoke.py --ahk $ahk --online
+# 可选 --output 指定全新的证据目录；已有目录会被拒绝
+```
+
+图片、临时配置、临时环境和缓存隔离在证据目录，个人配置不修改；AHK 以 `--test` 加载，不初始化生产常驻。同仓库探针互斥，重复运行会失败退出，不终止前一个探针或关闭其面板。`report.json` 中的布尔项只有实际完成且通过才为 true，中途退出后未执行项也为 false；`translationOutcome` 只提取首个翻译请求的固定类别，不被随后注入的配置失败覆盖。不调用这些探针的离线 CI 只测试报告、隐私和输出隔离边界。
+
+2026-11-21 默认联动在含空格路径实测 10 项全通过：`.tmp/integration/20261121-workflow-pipeline-complete with spaces/`。在线检查未通过：免费接口 TLS 握手超时；当前配置引擎在新请求进程中缺少可用腾讯云密钥。失败如实保留，不更改网络/密钥或用 identity 代替在线成功。此探针仍不覆盖原生框选、Raycast 菜单、按钮实际点击或声音。报告/隐私/输出隔离新增 6 项离线测试后，当前 Python 回归共 124 项。
+
+随后用户授权切回 Google，并选择腾讯云密钥恢复后优先腾讯、失败时静默使用 Google：实际在线探针 `.tmp/integration/20261121-google-fallback-silent/` 的 10 项全部通过，首个请求 `engine=google_gtx cached=0`，固定诊断 `preferred=tencent reason=credentials`。没有发回退通知，密钥和网络设置未改；腾讯实际鉴权失败回退由隔离桩覆盖，不把缺密钥跳过等同于鉴权请求成功。补齐 5 项回退行为测试后，Python 回归总数 129 项。
 
 ## 可见选区与真实剪贴板探针
 
@@ -97,3 +137,9 @@ $python = Join-Path (Split-Path $spec.Python -Parent) 'python.exe'
 同版基础 `python.exe/pythonw.exe` 的真实模型及通知探针均通过；无窗口宿主确认 RID=8192，临时 runner 全部清理。证据 `.tmp/integration/20261120-ocr-notify/windowless-notify/report.json`、`host-model/report.json`。新宿主的完整剪贴板复测本轮未执行成功：原 ClipboardAll 备份失败，原生 `OpenClipboard` 返回拒绝访问，保护入口在写入前退出。既有旧宿主成功证据不替代这次待复测项。
 
 剪贴板保护入口现在对备份作约 2 秒的有界重试，失败记录元数据并退出，避免后台错误对话框无限等待。接口访问恢复后再运行 `--ocr-clipboard-smoke`；浏览器控制接口仍超时，Maestro 列出的 Chromium 未连接，因此浏览器验收继续待办。
+
+## 2026-11-22 协议与异常交付复核
+
+AHK 全量回归新增：译文正文的 request_id / preferred_engine 等不能伪造头部元数据；OCR 缺少头部身份时拒绝正文伪造身份；结果 UI 回调抛异常时仍回收输入/结果文件、清空完成任务，并仅记录固定 internal 类别，不输出私有异常正文或重复通知。Python 总数仍为 129。干净候选全量证据 .tmp/validation/20261122-protocol-cleanup/。
+
+本轮实际重试 Computer Use：WinUI 工具窗口没有可控目标，启动重试超时；普通固定测试 GUI 的控件树可读，但截图返回 CreateForMonitor 0x80070057，点击及激活返回 GetCursorPos 0x80070005。成功输入次数为 0，不能宣称选区、真实快捷键、按钮或视觉已验收。自有测试窗口已清理，未修改桌面权限；证据 .tmp/computer-use-20261122/report.json。用户离开电脑不阻塞无交互回归，实机待办继续保留。

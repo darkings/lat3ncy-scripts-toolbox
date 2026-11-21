@@ -17,6 +17,11 @@ internal sealed class TranslationPanelHost : IDisposable
 {
     public const string ClassName = "Lat3ncyImeHudWinUiPanel";
     public const string WindowTitle = "Lat3ncyImeHudWinUiPanel";
+    const uint WorkflowMessage = 0x8000 + 76;
+    IntPtr _actionOwner;
+    int _actionRequest;
+    [DllImport("user32.dll", EntryPoint = "PostMessageW", SetLastError = true)]
+    static extern bool PostWorkflowMessage(IntPtr hwnd, uint message, IntPtr request, IntPtr action);
 
     readonly Native.WndProc _wndProc;
     readonly GCHandle _wndProcPin;
@@ -94,6 +99,7 @@ internal sealed class TranslationPanelHost : IDisposable
         _content.PinChanged += OnPinChanged;
         _content.CloseRequested += (_, _) => Hide();
         _content.CopyRequested += (_, target) => Copy(target);
+        _content.SpeechRequested += (_, _) => RequestSpeech();
         _content.DragRequested += (_, _) => BeginCaptionDrag();
         _xamlSource.Content = _content.Root;
         ResizeIsland();
@@ -126,6 +132,19 @@ internal sealed class TranslationPanelHost : IDisposable
                 break;
             case TranslationPanelProtocol.Kind.Copy:
                 Copy(message.CopyTarget);
+                break;
+            case TranslationPanelProtocol.Kind.Actions:
+                if (_visible && Native.IsWindow(new IntPtr(message.ActionOwner)))
+                {
+                    _actionOwner = new IntPtr(message.ActionOwner);
+                    _actionRequest = message.RequestId;
+                    _content.SetSpeechState(message.ActionReady && _result.Ok, message.Speaking);
+                    HudLog.Line("translation-actions request=" + _actionRequest
+                        + " ready=" + message.ActionReady + " speaking=" + message.Speaking);
+                }
+                break;
+            case TranslationPanelProtocol.Kind.Speak:
+                RequestSpeech();
                 break;
             case TranslationPanelProtocol.Kind.Close:
                 Hide();
@@ -212,6 +231,8 @@ internal sealed class TranslationPanelHost : IDisposable
 
     void ApplySource(string textSource, string payload)
     {
+        NotifyAction(2);
+        ResetActions();
         TranslationSource.Result source = TranslationSource.Resolve(textSource, payload, _hwnd);
         // 换原文时默认打回 Empty 译文，不能沿用上一次 RESULT。
         _source = source;
@@ -276,6 +297,9 @@ internal sealed class TranslationPanelHost : IDisposable
 
     void Hide()
     {
+        if (_visible)
+            NotifyAction(2);
+        ResetActions();
         // 隐藏后旧的前台回调全部作废，避免 ShowNoActivate 的编辑器快照把新一轮面板关掉。
         Interlocked.Increment(ref _dismissEpoch);
         _openForeground = IntPtr.Zero;
@@ -286,6 +310,29 @@ internal sealed class TranslationPanelHost : IDisposable
         HudLog.Line("translation-hide pinned=" + _pinned
             + " remembered=" + _hasPinnedRect
             + " rect=" + DescribePinnedRect());
+    }
+
+    void NotifyAction(int action)
+    {
+        if (_actionOwner != IntPtr.Zero && _actionRequest > 0)
+        {
+            bool posted = PostWorkflowMessage(_actionOwner, WorkflowMessage, new IntPtr(_actionRequest), new IntPtr(action));
+            HudLog.Line("translation-action request=" + _actionRequest + " action=" + action + " posted=" + posted
+                + " error=" + (posted ? 0 : Marshal.GetLastWin32Error()));
+        }
+    }
+
+    void RequestSpeech()
+    {
+        if (_visible && _result.Ok)
+            NotifyAction(1);
+    }
+
+    void ResetActions()
+    {
+        _actionOwner = IntPtr.Zero;
+        _actionRequest = 0;
+        _content.SetSpeechState(false, false);
     }
 
     void SetPinned(bool pinned)

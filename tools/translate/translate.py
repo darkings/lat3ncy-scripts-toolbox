@@ -94,7 +94,7 @@ ENGINE_ALIASES = {
 KNOWN_ENGINES = ("tencent", "aliyun", "google_gtx", "mymemory")
 FALLBACK_ENGINES = ("google_gtx", "mymemory")
 CLOUD_ENGINES = ("tencent", "aliyun")
-# 可回退的失败：网络 / 超时 / 配额 / 服务端与响应格式。AuthError 永远不回退。
+# 可回退的失败：网络 / 超时 / 配额 / 服务端与响应格式。鉴权需显式配置才回退。
 FALLBACK_ERRORS = (
     urllib.error.URLError,
     urllib.error.HTTPError,
@@ -102,7 +102,7 @@ FALLBACK_ERRORS = (
     OSError,
     ValueError,
 )
-# 阿里云鉴权失败：密钥错/签名错。这类错误不回退，交给 AHK 弹系统 Toast。
+# 阿里云鉴权失败：密钥错/签名错，由显式回退策略决定是否使用免费引擎。
 ALIYUN_AUTH_MARKERS = (
     "invalidaccesskeyid",
     "signaturedoesnotmatch",
@@ -114,7 +114,7 @@ ALIYUN_AUTH_MARKERS = (
     "request signature does not conform",
     "未配置 accesskey",
 )
-# 腾讯云 TC3 鉴权失败。同样不回退。
+# 腾讯云 TC3 鉴权失败，使用相同的显式回退策略。
 TENCENT_AUTH_MARKERS = (
     "authfailure",
     "secretidnotfound",
@@ -136,7 +136,7 @@ class ConfigError(Exception):
 
 
 class AuthError(ValueError):
-    """云厂商密钥或签名无效。不回退 Google/MyMemory。"""
+    """云厂商密钥或签名无效；默认报错，显式开启后可回退。"""
 
 
 class FreeEngineLimitError(ValueError):
@@ -177,6 +177,7 @@ class Settings:
     fallback_without_credentials: bool
     source_language: str = "auto"
     target_language: str = "auto"
+    fallback_on_auth_error: bool = False
 
 
 @dataclass(frozen=True)
@@ -187,6 +188,8 @@ class TranslationResult:
     engine: str
     cached: bool
     direction: str
+    preferred_engine: str = ""
+    fallback_reason: str = ""
 
 
 def detect_direction(text: str) -> str | None:
@@ -263,6 +266,7 @@ def load_config(config_path: str | None) -> dict:
         "source_language": "auto",
         "target_language": "auto",
         "fallback_without_credentials": False,
+        "fallback_on_auth_error": False,
         "timeout_s": int(DEFAULT_TIMEOUT_S),
         "max_chars": DEFAULT_MAX_CHARS,
         "cache": {
@@ -336,6 +340,9 @@ def load_settings(cfg: dict) -> Settings:
     fallback_raw = _cfg_value(cfg, "fallback_without_credentials", False)
     if not isinstance(fallback_raw, bool):
         raise ConfigError("配置项 fallback_without_credentials 无效")
+    auth_fallback = _cfg_value(cfg, "fallback_on_auth_error", False)
+    if not isinstance(auth_fallback, bool):
+        raise ConfigError("配置项 fallback_on_auth_error 无效")
     tencent_section = _section_dict(cfg, "tencent")
     _require_int(
         _cfg_value(tencent_section, "project_id", DEFAULT_TENCENT_PROJECT_ID),
@@ -352,6 +359,7 @@ def load_settings(cfg: dict) -> Settings:
         fallback_without_credentials=fallback_raw,
         source_language=normalize_language(_cfg_value(cfg, "source_language", "auto"), "source_language"),
         target_language=normalize_language(_cfg_value(cfg, "target_language", "auto"), "target_language"),
+        fallback_on_auth_error=auth_fallback,
     )
 
 
@@ -901,7 +909,7 @@ def _fallback_allowed(cfg: dict) -> bool:
 def engine_order(preferred: str, cfg: dict) -> list[str]:
     """首选在前；云引擎缺密钥时默认报配置错误，只有显式 opt-in 才回退。
 
-    鉴权失败（AuthError）由 translate_with_cache 直接抛出，绝不回退；
+    鉴权失败（AuthError）由 translate_with_cache 按显式开关处理；
     网络 / 超时 / 配额错误才继续走 google_gtx -> mymemory。
     """
     name = normalize_engine(preferred)
@@ -1076,6 +1084,8 @@ def translate_with_cache(
     if source == target:
         return TranslationResult(text=text, engine="identity", cached=False, direction=direction)
     engines = engine_order(engine, settings)
+    preferred = normalize_engine(engine)
+    reason = "credentials" if engines[0] != preferred else ""
 
     last_error: Exception | None = None
     for name in engines:
@@ -1086,17 +1096,24 @@ def translate_with_cache(
                 engine=name,
                 cached=True,
                 direction=direction,
+                preferred_engine=preferred,
+                fallback_reason=reason,
             )
         try:
             translated = call_engine(name, text, source, target, timeout, settings)
-        except AuthError:
-            # 密钥错了再回退，只会把配置问题藏起来。交给上层报 auth。
-            raise
+        except AuthError as exc:
+            if settings.get("fallback_on_auth_error", False) is not True:
+                raise
+            last_error = exc
+            reason = reason or "auth"
+            continue
         except FALLBACK_ERRORS as exc:
             last_error = exc
+            reason = reason or ("timeout" if _is_timeout(exc) else "too_long" if isinstance(exc, FreeEngineLimitError) else "network")
             continue
         if not translated.strip():
             last_error = ValueError(f"{name} 返回空译文")
+            reason = reason or "network"
             continue
         cache_put(name, direction, text, translated, settings)
         return TranslationResult(
@@ -1104,6 +1121,8 @@ def translate_with_cache(
             engine=name,
             cached=False,
             direction=direction,
+            preferred_engine=preferred,
+            fallback_reason=reason,
         )
     if last_error is not None:
         raise last_error
@@ -1565,7 +1584,7 @@ def _run_translation(
     if direction is None:
         return write_error(output, "detect", "未包含可翻译文字", engine_label)
 
-    # 4) 翻译：鉴权失败绝不回退；网络/超时/配额可回退并报告实际引擎。
+    # 4) 翻译：鉴权回退必须显式开启；成功回退保留固定原因和实际引擎。
     try:
         result = translate_with_cache(
             settings.engine,
@@ -1616,14 +1635,11 @@ def _run_translation(
             # 清缓存失败不该让已经成功的翻译失败。
             pass
     try:
-        write_output(
-            output,
-            "ok",
-            direction=direction,
-            engine=result.engine,
-            cached="1" if result.cached else "0",
-            text=result.text,
-        )
+        fields = {"direction": direction, "engine": result.engine, "cached": "1" if result.cached else "0"}
+        if result.fallback_reason:
+            fields.update(preferred_engine=result.preferred_engine, fallback_reason=result.fallback_reason)
+        fields["text"] = result.text
+        write_output(output, "ok", **fields)
     except OSError:
         return 1
     return 0

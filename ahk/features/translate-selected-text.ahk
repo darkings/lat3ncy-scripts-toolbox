@@ -322,6 +322,14 @@ class TranslateSelectedText {
         Notify.Error("×", message)
     }
 
+    static LogFallback(preferred, actual, reason) {
+        engines := Map("tencent", true, "aliyun", true, "google_gtx", true, "mymemory", true)
+        if (!engines.Has(preferred) || !engines.Has(actual) || preferred = actual
+            || !RegExMatch(reason, "^(credentials|auth|network|timeout|too_long)$"))
+            return
+        this.Log("fallback preferred=" preferred " engine=" actual " reason=" reason)
+    }
+
     static ShowPopup(text) {
         if (IsObject(this.Hooks) && this.Hooks.Has("popup")) {
             this.Hooks["popup"].Call(text)
@@ -427,6 +435,7 @@ class TranslateSelectedText {
 
         engine := this.ParseField(content, "engine")
         cached := this.ParseField(content, "cached")
+        this.LogFallback(this.ParseField(content, "preferred_engine"), engine, this.ParseField(content, "fallback_reason"))
         if fallback {
             ; 面板不可用（HUD 未启动成功）时保留翻译能力，用 AHK popup 兜底。
             try this.ShowPopup(text)

@@ -4,6 +4,7 @@ engine = "tencent"
 source_language = "auto" # auto / zh / en (zh-CN and zh-Hans are aliases)
 target_language = "auto" # auto = opposite of source; zh / en = fixed target
 fallback_without_credentials = false
+fallback_on_auth_error = false # Set both fallback flags true for silent Google fallback.
 timeout_s = 4
 max_chars = 2000 # Reject longer input; never truncate.
 

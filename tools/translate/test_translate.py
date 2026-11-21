@@ -298,6 +298,69 @@ class LanguagePolicyTests(TranslateTestBase):
 
 
 class EnginePlanTests(TranslateTestBase):
+    def test_auth_fallback_requires_explicit_boolean_opt_in(self) -> None:
+        for enabled in (True, False, "true", None):
+            cfg = self.tencent_cfg()
+            cfg['fallback_on_auth_error'] = enabled
+            calls = []
+            def fake(name, text, source, target, timeout, settings):
+                calls.append(name)
+                if name == 'tencent':
+                    raise tr.AuthError('invalid private-secret')
+                return '谷歌译文'
+            with self.subTest(enabled=enabled), mock.patch.object(tr, 'call_engine', side_effect=fake):
+                if enabled is True:
+                    result = tr.translate_with_cache('tencent', str(enabled), 'en-zh', 1, cfg)
+                    self.assertEqual(('google_gtx', 'tencent', 'auth'), (result.engine, result.preferred_engine, result.fallback_reason))
+                    self.assertEqual(['tencent', 'google_gtx'], calls)
+                else:
+                    with self.assertRaises(tr.AuthError):
+                        tr.translate_with_cache('tencent', str(enabled), 'en-zh', 1, cfg)
+                    self.assertEqual(['tencent'], calls)
+
+    def test_auth_fallback_can_use_free_cache_and_keeps_its_reason(self) -> None:
+        cfg = self.tencent_cfg(); cfg['fallback_on_auth_error'] = True
+        tr.cache_put('google_gtx', 'en-zh', 'hello', '缓存谷歌译文', cfg)
+        with mock.patch.object(tr, 'call_engine', side_effect=tr.AuthError('invalid')) as call:
+            result = tr.translate_with_cache('tencent', 'hello', 'en-zh', 1, cfg)
+        self.assertEqual(1, call.call_count)
+        self.assertTrue(result.cached)
+        self.assertEqual(('google_gtx', 'auth', '缓存谷歌译文'), (result.engine, result.fallback_reason, result.text))
+
+    def test_recovered_primary_wins_over_cached_fallback_with_auth_opt_in(self) -> None:
+        cfg = self.tencent_cfg(); cfg['fallback_on_auth_error'] = True
+        tr.cache_put('google_gtx', 'en-zh', 'hello', '旧谷歌译文', cfg)
+        with mock.patch.object(tr, 'call_engine', return_value='恢复后的腾讯译文') as call:
+            result = tr.translate_with_cache('tencent', 'hello', 'en-zh', 1, cfg)
+        self.assertEqual('tencent', call.call_args.args[0])
+        self.assertEqual(('tencent', '', '恢复后的腾讯译文'), (result.engine, result.fallback_reason, result.text))
+
+    def test_fallback_protocol_has_fixed_reason_and_text_remains_last(self) -> None:
+        for reason in ('auth', 'credentials', 'timeout'):
+            calls = []
+            def fake(name, text, source, target, timeout, settings):
+                calls.append(name)
+                if name == 'tencent':
+                    raise tr.AuthError('private-secret') if reason == 'auth' else TimeoutError('private-secret')
+                return '完整谷歌译文|😀\n第二行'
+            body = 'fallback_on_auth_error=true\n'+self.config_body(
+                fallback=reason == 'credentials', tencent_id='' if reason == 'credentials' else 'test-id')
+            with self.subTest(reason=reason):
+                _, fields, raw, _ = self.invoke(reason, body, fake)
+                self.assertEqual('ok', fields['status'])
+                self.assertEqual(('tencent', 'google_gtx', reason), (fields['preferred_engine'], fields['engine'], fields['fallback_reason']))
+                self.assertEqual('完整谷歌译文|😀\n第二行', fields['text'])
+                self.assertTrue(raw.endswith('text=完整谷歌译文|😀\n第二行\n'))
+                self.assertNotIn('private-secret', raw)
+                self.assertEqual(['google_gtx'] if reason == 'credentials' else ['tencent', 'google_gtx'], calls)
+
+    def test_invalid_auth_fallback_policy_is_config_error_before_request(self) -> None:
+        for value in ('"true"', '1', '[]'):
+            with self.subTest(value=value), mock.patch.object(tr, 'call_engine') as call:
+                _, fields, _, _ = self.invoke('hello', f'fallback_on_auth_error={value}\n'+self.config_body())
+                self.assertEqual('config', fields['code'])
+                call.assert_not_called()
+
     def test_missing_cloud_credentials_is_config_error_by_default(self) -> None:
         cfg = {
             "fallback_without_credentials": False,

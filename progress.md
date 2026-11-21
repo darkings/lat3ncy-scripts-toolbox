@@ -448,3 +448,12 @@
 - 在线检查如实未通过：固定文本免费接口遭遇 TLS 握手超时；使用原有配置的新进程未发现可用腾讯云密钥。最终报告 translationOutcome=config，证据 .tmp/integration/20261121-workflow-online-final/report.json；不复制凭证、不更改网络/引擎/个人配置，不用 identity 充当在线验收。
 - 新增 6 项报告聚合、首个终态固定分类、隐私、显式网络开关和已有目录拒绝测试。Python 合计 124 项，含空格路径干净候选离线、助手源码构建、完整 AHK/WinUI 三阶段通过：.tmp/validation/20261121-workflow-smoke/report.json。最终只读诊断 ok，四份个人配置 SHA-256 保持保护基线，无遗留探针进程；未替换或重载常驻。
 - 新入口补入 README/验证说明，仍不覆盖原生框选、Raycast 菜单、按钮实际点击和声音；后续优先恢复有效在线翻译配置再复测。提交到现有草稿 PR #3 并按最终 SHA 核对远端 CI。
+
+## 会话：2026-11-21 Google 静默保底
+
+- 用户先要求退回 Google，实际未命中缓存的 Google 在线联动 10 项通过；随后确认腾讯云密钥配置好后优先腾讯，并明确密钥异常无需系统通知、直接回退 Google。按授权仅修改个人翻译配置的 engine=tencent / fallback_without_credentials=true / fallback_on_auth_error=true，其他设置及另三份个人配置不变，配置不提交。
+- 后端新增显式鉴权失败回退，默认 false 保持旧配置兼容。缺密钥可直接跳过首选，显式开启后鉴权错误尝试 Google，Google 不可用时沿用 MyMemory；首选恢复后不会被免费缓存遮住。回退成功保留实际引擎、首选和固定原因，text 仍在最后；缓存不保存历史回退原因。
+- AHK 成功回退只写白名单诊断，无任何系统通知调用。新增固定日志隐私回归；5 项 Python 行为测试覆盖显式布尔授权、鉴权回退缓存、首选恢复、协议及非法开关。翻译 48 项，全仓库 Python 129 项。鉴权路径用隔离桩验证，不发送伪造凭证。
+- 真实在线连续联动 10 项全部通过：.tmp/integration/20261121-google-fallback-silent/report.json；首个请求 engine=google_gtx cached=0，原因 credentials。用户旧配置此前缺密钥/TLS 超时记录保留为历史，不代表当前回退状态。
+- 含空格路径干净候选离线、助手源码构建、完整 AHK/WinUI 三阶段通过：.tmp/validation/20261121-silent-google-fallback/report.json。正式 ForceReload 无需替换 WinUI 字节，AHK 34752 / HUD 32204 / 光标助手 744，PING 与只读诊断 ok；证据 .tmp/google-fallback-deploy.json，备份 .tmp/releases/20261121-113907-29ff85ee。
+- 本轮只对成功回退保持静默；全部引擎失败沿用原有错误处理。未新增通知、网络设置、密钥或供应商。提交后更新草稿 PR #3 并核对最终 SHA 的 CI。

@@ -73,6 +73,8 @@ python tools/validation/text_workflow_smoke.py --ahk $ahk --online
 
 2026-11-21 默认联动在含空格路径实测 10 项全通过：`.tmp/integration/20261121-workflow-pipeline-complete with spaces/`。在线检查未通过：免费接口 TLS 握手超时；当前配置引擎在新请求进程中缺少可用腾讯云密钥。失败如实保留，不更改网络/密钥或用 identity 代替在线成功。此探针仍不覆盖原生框选、Raycast 菜单、按钮实际点击或声音。报告/隐私/输出隔离新增 6 项离线测试后，当前 Python 回归共 124 项。
 
+随后用户授权切回 Google，并选择腾讯云密钥恢复后优先腾讯、失败时静默使用 Google：实际在线探针 `.tmp/integration/20261121-google-fallback-silent/` 的 10 项全部通过，首个请求 `engine=google_gtx cached=0`，固定诊断 `preferred=tencent reason=credentials`。没有发回退通知，密钥和网络设置未改；腾讯实际鉴权失败回退由隔离桩覆盖，不把缺密钥跳过等同于鉴权请求成功。补齐 5 项回退行为测试后，Python 回归总数 129 项。
+
 ## 可见选区与真实剪贴板探针
 
 `desktop-fixture.ahk` 是显式执行的桌面验收入口，不加入 CI。先创建证据目录，再用本机 AHK v2 引擎运行：

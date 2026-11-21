@@ -88,6 +88,14 @@ WorkflowBackendEntryTests(root) {
         "error", (message) => WorkflowTranslationEntry.ErrorText := message,
         "close", () => WorkflowTranslationEntry.Closed += 1)
     try {
+        entry.LogFallback("tencent", "google_gtx", "auth")
+        entry.LogFallback("tencent", "google_gtx", "credentials")
+        entry.LogFallback("private", "google_gtx", "auth")
+        entry.LogFallback("tencent", "google_gtx", "private")
+        fallbackLog := FileRead(entry.LogPath(), "UTF-8")
+        AssertContains(fallbackLog, "engine=google_gtx reason=auth", "silent auth fallback keeps a fixed diagnostic")
+        AssertContains(fallbackLog, "reason=credentials", "silent missing-key fallback keeps its cause")
+        AssertEqual(false, !!InStr(fallbackLog, "private"), "fallback log rejects arbitrary protocol metadata")
         for source in ["  OCR source 中文  ", "OCR error 中文"] {
             entry.TranslateText(source, 11, 22, true)
             deadline := A_TickCount + 5000

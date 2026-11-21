@@ -1,5 +1,13 @@
 # 任务计划：切换播放器自动连接 AirPods 完善
 
+## 2026-11-21 腾讯首选与 Google 静默保底
+
+- 用户确认腾讯云配置好密钥后优先使用，并明确密钥有问题时直接回退 Google，不用系统通知。当前个人配置仅按授权修改 engine=tencent、fallback_without_credentials=true、fallback_on_auth_error=true；其余设置和另外三份配置保持。
+- 新增显式鉴权回退开关，默认 false 保留兼容；开启后缺密钥跳过腾讯，鉴权失败或网络问题尝试 Google，再沿用 MyMemory 末级回退。恢复腾讯后优先取腾讯结果，不被免费缓存遮住。
+- 成功回退额外交付固定 preferred_engine / fallback_reason，text 仍在最后，缓存不保存旧回退原因。AHK 仅记固定枚举诊断，不发系统通知；所有引擎均失败时保留原有错误处理。
+- 翻译 48 项回归通过，Python 总数 129；真实在线联动 10 项通过，确认 Google 缓存未命中并返回译文，日志 reason=credentials。鉴权失败路径用隔离桩验证，不发送伪造密钥。证据 .tmp/integration/20261121-google-fallback-silent/。
+- 干净候选及全量回归通过，已通过正式入口重载 AHK，PING 与诊断正常；提交后核对最终 SHA 远端 CI。无需重新提供密钥来维持 Google 可用。
+
 ## 2026-11-21 连续联动验收
 
 - 新增可显式运行的 text_workflow_smoke.py / text-workflow-pipeline.ahk：固定图片 → 实际 OCR Job → 生产 AHK 轮询 → 实际翻译进程 → WinUI 结果及朗读/停止/关闭回传。语音用计数器替代，不截图、不读取剪贴板或模拟按键。

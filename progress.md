@@ -439,3 +439,12 @@
 - 新增无密钥 config.example.toml；诊断输出归一后的语言枚举，非法值仅报告字段名。翻译 43 项、诊断/验证 13 项，全部 Python 共 118 项；受限网络/凭证桩验证无新增服务调用。
 - 含空格路径的干净候选离线、助手源码构建、完整 WinUI/AHK 三阶段通过：.tmp/validation/20261121-language-policy/report.json。真实一次性文件入口的固定中文 identity 完整交付、输入回收通过：.tmp/translation-language-probe/report.json。只读诊断 ok，四份个人配置 SHA-256 维持保护基线；未触发截图/真实播放或更改常驻。
 - 新后端按需生效，无需重载。补充到现有草稿 PR #3，推送后按最终 SHA 核对 offline/winui；新工作流实际框选和按钮点击的待验收状态继续保留。
+
+## 会话：2026-11-21 连续工作流验收入口
+
+- 新增 text_workflow_smoke.py + text-workflow-pipeline.ahk，以固定图片通过实际 OCR Job、生产 TextWorkflow.Poll/SubmitText、实际翻译进程和真实 WinUI 回传连续验证。默认 identity 不调用翻译服务；语音边界由计数器替代，不截图、读剪贴板、注入按键或播放声音。
+- 10 项默认验收全通过：识别、翻译交付、朗读开始/停止、关闭、实际 Job 取消、OCR 失败、翻译配置失败保留原文、句柄关闭和任务清理；含空格路径、多次重复运行通过。最新证据 .tmp/integration/20261121-workflow-pipeline-lease with spaces/report.json。
+- 启动前验证 HUD 可执行文件属于当前仓库，查询隐藏窗口时临时启用后恢复 DetectHiddenWindows。仓库级探针互斥，不靠 SingleInstance Force 结束其他测试；失败退出只清理本探针的 Job/文件，仅在归属确认后关闭面板。图片/配置/缓存/临时环境隔离到新证据目录，不覆盖已有目录。
+- 在线检查如实未通过：固定文本免费接口遭遇 TLS 握手超时；使用原有配置的新进程未发现可用腾讯云密钥。最终报告 translationOutcome=config，证据 .tmp/integration/20261121-workflow-online-final/report.json；不复制凭证、不更改网络/引擎/个人配置，不用 identity 充当在线验收。
+- 新增 6 项报告聚合、首个终态固定分类、隐私、显式网络开关和已有目录拒绝测试。Python 合计 124 项，含空格路径干净候选离线、助手源码构建、完整 AHK/WinUI 三阶段通过：.tmp/validation/20261121-workflow-smoke/report.json。最终只读诊断 ok，四份个人配置 SHA-256 保持保护基线，无遗留探针进程；未替换或重载常驻。
+- 新入口补入 README/验证说明，仍不覆盖原生框选、Raycast 菜单、按钮实际点击和声音；后续优先恢复有效在线翻译配置再复测。提交到现有草稿 PR #3 并按最终 SHA 核对远端 CI。

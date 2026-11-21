@@ -147,6 +147,8 @@ OCR 依赖固定在专用 `.venv314`，使用 `requirements.lock` 的版本及 S
 
 划词和截图翻译共用语言设置：在 `tools/translate/config.toml` 顶层设置 `source_language = "auto"`、`target_language = "zh"` 可固定译为中文；目标改成 `en` 固定译英文，两项均为 `auto` 保留原有中英互译。每次请求读取，无需重载；同语种直接返回原文。完整选项见 [翻译说明](tools/translate/README.md#配置)，本轮未修改个人配置。
 
+固定图片的连续联动验收入口为 `python tools/validation/text_workflow_smoke.py --ahk <AHK-v2路径>`，默认不联网、不播放声音，会替换并关闭当前翻译面板；覆盖真实 OCR、翻译进程、面板回传及失败/取消清理。显式 `--online` 才使用现有引擎发送固定测试文本，操作及验收边界见 [联动探针](tools/validation/README.md#连续联动探针)。
+
 ## 主题、RGB 与设备
 
 主题调度的五个计划任务用脚本注册，不要手写 `schtasks /create`：

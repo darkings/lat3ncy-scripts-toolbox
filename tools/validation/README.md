@@ -56,6 +56,23 @@ Get-Content $log
 
 全新 Python 3.14 环境使用安装器和完整哈希锁安装 15 个包，通过版本/导入检查和真实固定图片的宿主→工作流结果验证；没有修改个人配置或已有环境包。截图框选、Raycast 菜单、联网翻译及新按钮实际播放仍可按 README 的 Caps+I / Alt+R 流程手工确认；此前确认的独立 OCR、翻译、朗读不代替这条新流程。
 
+### 连续联动探针
+
+`text_workflow_smoke.py` 将真实 OCR 模型、AHK 工作流轮询、真实翻译进程、WinUI 结果和朗读/停止/关闭回传连续运行，并检查实际 Job 取消、OCR 失败、翻译配置失败保留原文、句柄关闭和任务文件清理。使用固定图片 `Hello workflow42`，不读剪贴板、不打开截图工具、不模拟按键或播放声音。要求当前仓库 HUD 已运行；会替换并最终关闭当前翻译面板，启动前核对其可执行文件归属。
+
+```powershell
+$ahk = 'C:\path\to\v2\AutoHotkey64.exe'
+# 默认用临时 identity 配置；只验证交付，不访问翻译服务或凭证
+python tools/validation/text_workflow_smoke.py --ahk $ahk
+# 显式在线：直接使用当前翻译配置和原有密钥读取，不复制密钥；预期译为中文
+python tools/validation/text_workflow_smoke.py --ahk $ahk --online
+# 可选 --output 指定全新的证据目录；已有目录会被拒绝
+```
+
+图片、临时配置、临时环境和缓存隔离在证据目录，个人配置不修改；AHK 以 `--test` 加载，不初始化生产常驻。同仓库探针互斥，重复运行会失败退出，不终止前一个探针或关闭其面板。`report.json` 中的布尔项只有实际完成且通过才为 true，中途退出后未执行项也为 false；`translationOutcome` 只提取首个翻译请求的固定类别，不被随后注入的配置失败覆盖。不调用这些探针的离线 CI 只测试报告、隐私和输出隔离边界。
+
+2026-11-21 默认联动在含空格路径实测 10 项全通过：`.tmp/integration/20261121-workflow-pipeline-complete with spaces/`。在线检查未通过：免费接口 TLS 握手超时；当前配置引擎在新请求进程中缺少可用腾讯云密钥。失败如实保留，不更改网络/密钥或用 identity 代替在线成功。此探针仍不覆盖原生框选、Raycast 菜单、按钮实际点击或声音。报告/隐私/输出隔离新增 6 项离线测试后，当前 Python 回归共 124 项。
+
 ## 可见选区与真实剪贴板探针
 
 `desktop-fixture.ahk` 是显式执行的桌面验收入口，不加入 CI。先创建证据目录，再用本机 AHK v2 引擎运行：

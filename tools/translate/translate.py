@@ -13,6 +13,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import sys
@@ -22,12 +23,53 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 
 ZH_CHAR_PATTERN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
 EN_CHAR_PATTERN = re.compile(r"[A-Za-z]")
+
+# 诊断信息脱敏：密钥键值、URL 里的原文、Authorization/Bearer。
+_CREDENTIAL_PATTERN = re.compile(
+    r"(?i)\b(secret[_-]?(?:id|key)|access[_-]?key(?:[_-]?(?:id|secret))?"
+    r"|credential|authorization|signature|password|token)\b\s*[=:]\s*[^\s,;]+"
+)
+_SOURCE_QUERY_PATTERN = re.compile(r"(?i)([?&](?:q|sourceText)=)[^&\s]+")
+_BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+\S+")
+
+DEFAULT_ENGINE = "tencent"
+DEFAULT_MAX_CHARS = 2000
+DEFAULT_TIMEOUT_S = 4.0
+DEFAULT_CACHE_MAX_SIZE_MB = 10
+DEFAULT_CACHE_MAX_FILES = 500
+DEFAULT_TENCENT_ENDPOINT = "tmt.tencentcloudapi.com"
+DEFAULT_TENCENT_REGION = "ap-guangzhou"
+DEFAULT_TENCENT_PROJECT_ID = 0
+DEFAULT_ALIYUN_ENDPOINT = "mt.cn-hangzhou.aliyuncs.com"
+
+# 缓存格式版本。旧版是无结构的 .txt 纯文本；现在只认 .json 记录。
+CACHE_VERSION = 2
+CACHE_SUFFIX = ".json"
+LEGACY_CACHE_SUFFIX = ".txt"
+DETAIL_MAX_LEN = 200
+
+# 这些环境变量可能包含密钥，诊断信息里出现时必须打码。
+CREDENTIAL_ENV_NAMES = (
+    "ALIBABA_CLOUD_ACCESS_KEY_ID",
+    "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+    "ALIYUN_ACCESS_KEY_ID",
+    "ALIYUN_ACCESS_KEY_SECRET",
+    "ALIBABA_ACCESS_KEY_ID",
+    "ALIBABA_ACCESS_KEY_SECRET",
+    "TENCENTCLOUD_SECRET_ID",
+    "TENCENTCLOUD_SECRET_KEY",
+    "TENCENT_SECRET_ID",
+    "TENCENT_SECRET_KEY",
+    "QCLOUD_SECRET_ID",
+    "QCLOUD_SECRET_KEY",
+)
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -51,6 +93,15 @@ ENGINE_ALIASES = {
 # 不把另一家云 MT 塞进默认回退，避免无效密钥把「网络失败」变成鉴权 Toast。
 KNOWN_ENGINES = ("tencent", "aliyun", "google_gtx", "mymemory")
 FALLBACK_ENGINES = ("google_gtx", "mymemory")
+CLOUD_ENGINES = ("tencent", "aliyun")
+# 可回退的失败：网络 / 超时 / 配额 / 服务端与响应格式。AuthError 永远不回退。
+FALLBACK_ERRORS = (
+    urllib.error.URLError,
+    urllib.error.HTTPError,
+    TimeoutError,
+    OSError,
+    ValueError,
+)
 # 阿里云鉴权失败：密钥错/签名错。这类错误不回退，交给 AHK 弹系统 Toast。
 ALIYUN_AUTH_MARKERS = (
     "invalidaccesskeyid",
@@ -80,8 +131,60 @@ TENCENT_AUTH_MARKERS = (
 )
 
 
+class ConfigError(Exception):
+    """配置缺失或取值非法。必须报 config，不能伪装成网络错误。"""
+
+
 class AuthError(ValueError):
     """云厂商密钥或签名无效。不回退 Google/MyMemory。"""
+
+
+class FreeEngineLimitError(ValueError):
+    """免费回退引擎只走 GET，查询串有硬上限：超长必须报 too_long，不能伪装成网络错误。"""
+
+
+# 免费回退引擎的 UTF-8 字节上限。超过必然 414 / 查不到，先验比发出去再失败清楚得多。
+#   mymemory：q 参数官方上限约 500 字节。
+#   google_gtx：GET URL 长度上限，留 4 KB 余量（汉字 3 字节/字）。
+FREE_ENGINE_MAX_BYTES = {"google_gtx": 4000, "mymemory": 480}
+
+
+def free_engine_limit(engine: str) -> int:
+    return FREE_ENGINE_MAX_BYTES.get(engine, 0)
+
+
+def require_free_engine_budget(engine: str, text: str) -> None:
+    """超长直接抛 FreeEngineLimitError；调用方会把它归类成 too_long。"""
+    limit = free_engine_limit(engine)
+    if limit <= 0:
+        return
+    used = len(text.encode("utf-8"))
+    if used > limit:
+        raise FreeEngineLimitError(
+            f"免费引擎 {engine} 单次上限 {limit} 字节，当前 {used} 字节"
+        )
+
+
+@dataclass(frozen=True)
+class Settings:
+    """校验后的运行期配置。数值非法时在 load_settings 直接报 ConfigError。"""
+
+    engine: str
+    max_chars: int
+    timeout_s: float
+    max_size_mb: int
+    max_files: int
+    fallback_without_credentials: bool
+
+
+@dataclass(frozen=True)
+class TranslationResult:
+    """带来源的翻译结果：实际使用的引擎与是否命中缓存。"""
+
+    text: str
+    engine: str
+    cached: bool
+    direction: str
 
 
 def detect_direction(text: str) -> str | None:
@@ -99,56 +202,134 @@ def direction_langs(direction: str) -> tuple[str, str]:
     return "zh-CN", "en"
 
 
+def _cfg_value(cfg: dict, key: str, default: object) -> object:
+    value = cfg.get(key, default)
+    return default if value is None else value
+
+
+def _require_int(value: object, label: str, *, minimum: int = 1) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"配置项 {label} 无效")
+    if value < minimum:
+        raise ConfigError(f"配置项 {label} 无效")
+    return value
+
+
+def _require_positive_float(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"配置项 {label} 无效")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ConfigError(f"配置项 {label} 无效")
+    return parsed
+
+
+def _section_dict(cfg: dict, name: str) -> dict:
+    value = cfg.get(name)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(f"配置节 {name} 无效")
+    return value
+
+
 def load_config(config_path: str | None) -> dict:
     cfg: dict = {
-        "engine": "tencent",
-        "timeout_s": 4,
-        "max_chars": 2000,
-        "cache": {"max_size_mb": 10, "max_files": 500},
+        "engine": DEFAULT_ENGINE,
+        "fallback_without_credentials": False,
+        "timeout_s": int(DEFAULT_TIMEOUT_S),
+        "max_chars": DEFAULT_MAX_CHARS,
+        "cache": {
+            "max_size_mb": DEFAULT_CACHE_MAX_SIZE_MB,
+            "max_files": DEFAULT_CACHE_MAX_FILES,
+        },
         "aliyun": {
             "access_key_id": "",
             "access_key_secret": "",
-            "endpoint": "mt.cn-hangzhou.aliyuncs.com",
+            "endpoint": DEFAULT_ALIYUN_ENDPOINT,
         },
         "tencent": {
             "secret_id": "",
             "secret_key": "",
-            "region": "ap-guangzhou",
-            "endpoint": "tmt.tencentcloudapi.com",
-            "project_id": 0,
+            "region": DEFAULT_TENCENT_REGION,
+            "endpoint": DEFAULT_TENCENT_ENDPOINT,
+            "project_id": DEFAULT_TENCENT_PROJECT_ID,
         },
     }
     path = Path(config_path) if config_path else Path(__file__).with_name("config.toml")
-    if path.is_file():
-        try:
-            with path.open("rb") as handle:
-                loaded = tomllib.load(handle)
-            if isinstance(loaded, dict):
-                cache = cfg["cache"]
-                aliyun = cfg["aliyun"]
-                tencent = cfg["tencent"]
-                cfg.update(loaded)
-                if isinstance(cfg.get("cache"), dict):
-                    merged = dict(cache)
-                    merged.update(cfg["cache"])
-                    cfg["cache"] = merged
-                else:
-                    cfg["cache"] = cache
-                if isinstance(cfg.get("aliyun"), dict):
-                    merged_aliyun = dict(aliyun)
-                    merged_aliyun.update(cfg["aliyun"])
-                    cfg["aliyun"] = merged_aliyun
-                else:
-                    cfg["aliyun"] = aliyun
-                if isinstance(cfg.get("tencent"), dict):
-                    merged_tencent = dict(tencent)
-                    merged_tencent.update(cfg["tencent"])
-                    cfg["tencent"] = merged_tencent
-                else:
-                    cfg["tencent"] = tencent
-        except OSError:
-            pass
+    if not path.is_file():
+        return cfg
+    try:
+        with path.open("rb") as handle:
+            loaded = tomllib.load(handle)
+    except (tomllib.TOMLDecodeError, UnicodeError) as exc:
+        # 配置语法/编码错误必须报 config；不能落到 main 的 network 兜底。
+        raise ConfigError("配置文件格式无效") from exc
+    except OSError:
+        # 文件读不了时保持旧行为：忽略并使用默认值。
+        return cfg
+    if not isinstance(loaded, dict):
+        raise ConfigError("配置文件格式无效")
+    defaults = {name: dict(cfg[name]) for name in ("cache", "aliyun", "tencent")}
+    cfg.update(loaded)
+    for name, default in defaults.items():
+        value = cfg.get(name)
+        if not isinstance(value, dict):
+            raise ConfigError(f"配置节 {name} 无效")
+        merged = dict(default)
+        merged.update(value)
+        cfg[name] = merged
     return cfg
+
+
+def load_settings(cfg: dict) -> Settings:
+    """校验并归一化数值配置；非法值直接抛 ConfigError，不静默夹紧。"""
+    raw_engine = _cfg_value(cfg, "engine", DEFAULT_ENGINE)
+    if not isinstance(raw_engine, str):
+        raise ConfigError("配置项 engine 无效")
+    max_chars = _require_int(
+        _cfg_value(cfg, "max_chars", DEFAULT_MAX_CHARS),
+        "max_chars",
+        minimum=1,
+    )
+    timeout_s = _require_positive_float(
+        _cfg_value(cfg, "timeout_s", DEFAULT_TIMEOUT_S),
+        "timeout_s",
+    )
+    cache_section = _section_dict(cfg, "cache")
+    max_size_mb = _require_int(
+        _cfg_value(cache_section, "max_size_mb", DEFAULT_CACHE_MAX_SIZE_MB),
+        "cache.max_size_mb",
+        minimum=0,
+    )
+    max_files = _require_int(
+        _cfg_value(cache_section, "max_files", DEFAULT_CACHE_MAX_FILES),
+        "cache.max_files",
+        minimum=0,
+    )
+    fallback_raw = _cfg_value(cfg, "fallback_without_credentials", False)
+    if not isinstance(fallback_raw, bool):
+        raise ConfigError("配置项 fallback_without_credentials 无效")
+    tencent_section = _section_dict(cfg, "tencent")
+    _require_int(
+        _cfg_value(tencent_section, "project_id", DEFAULT_TENCENT_PROJECT_ID),
+        "tencent.project_id",
+        minimum=0,
+    )
+    _section_dict(cfg, "aliyun")
+    return Settings(
+        engine=normalize_engine(raw_engine),
+        max_chars=max_chars,
+        timeout_s=timeout_s,
+        max_size_mb=max_size_mb,
+        max_files=max_files,
+        fallback_without_credentials=fallback_raw,
+    )
+
+
+def text_is_too_long(text: str, max_chars: int) -> bool:
+    """边界严格：len == max_chars 可以翻，len == max_chars + 1 就报错。"""
+    return len(text) > max_chars
 
 
 def cache_dir() -> Path:
@@ -158,37 +339,152 @@ def cache_dir() -> Path:
     return path
 
 
-def cache_key(direction: str, text: str) -> str:
-    payload = f"{direction}\n{text}".encode("utf-8")
+def _section(cfg: dict | None, name: str) -> dict:
+    if not isinstance(cfg, dict):
+        return {}
+    value = cfg.get(name)
+    return value if isinstance(value, dict) else {}
+
+
+def _clean_endpoint(value: object, default: str) -> str:
+    """统一成真正生效的 host，避免 scheme/trailing slash 制造重复缓存键。"""
+    host = str(value or default).strip()
+    host = host.replace("https://", "").replace("http://", "").strip("/")
+    return host or default
+
+
+def cache_scope(engine: str, cfg: dict | None = None) -> dict[str, object]:
+    """参与缓存键、且会影响该引擎输出的配置字段。"""
+    name = normalize_engine(engine)
+    if name == "tencent":
+        section = _section(cfg, "tencent")
+        project_id: object = section.get("project_id", DEFAULT_TENCENT_PROJECT_ID)
+        if project_id is None:
+            project_id = DEFAULT_TENCENT_PROJECT_ID
+        if isinstance(project_id, bool) or not isinstance(project_id, int):
+            project_id = str(project_id)
+        return {
+            "endpoint": _clean_endpoint(section.get("endpoint"), DEFAULT_TENCENT_ENDPOINT),
+            "region": str(section.get("region") or DEFAULT_TENCENT_REGION).strip()
+            or DEFAULT_TENCENT_REGION,
+            "project_id": project_id,
+        }
+    if name == "aliyun":
+        return {
+            "endpoint": _clean_endpoint(
+                _section(cfg, "aliyun").get("endpoint"),
+                DEFAULT_ALIYUN_ENDPOINT,
+            )
+        }
+    # 免费引擎没有影响输出的配置。
+    return {}
+
+
+def cache_key(
+    engine: str,
+    direction: str,
+    text: str,
+    cfg: dict | None = None,
+) -> str:
+    payload = json.dumps(
+        {
+            "version": CACHE_VERSION,
+            "engine": normalize_engine(engine),
+            "direction": direction,
+            "text": text,
+            "scope": cache_scope(engine, cfg),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
-def cache_get(direction: str, text: str) -> str | None:
-    path = cache_dir() / f"{cache_key(direction, text)}.txt"
-    if not path.is_file():
-        return None
-    try:
-        translated = path.read_text(encoding="utf-8")
-        if translated.strip():
-            try:
-                os.utime(path, None)
-            except OSError:
-                pass
-            return translated
-    except OSError:
-        return None
-    return None
+def _cache_record(engine: str, direction: str, translated: str) -> dict[str, object]:
+    return {
+        "version": CACHE_VERSION,
+        "engine": normalize_engine(engine),
+        "direction": direction,
+        "translated": translated,
+    }
 
 
-def cache_put(direction: str, text: str, translated: str) -> None:
-    path = cache_dir() / f"{cache_key(direction, text)}.txt"
-    tmp = path.with_suffix(f".tmp.{os.getpid()}")
+def _cache_record_valid(record: object, engine: str, direction: str) -> bool:
+    if not isinstance(record, dict):
+        return False
+    if record.get("version") != CACHE_VERSION:
+        return False
+    if record.get("engine") != normalize_engine(engine):
+        return False
+    stored_direction = record.get("direction", direction)
+    if stored_direction != direction:
+        return False
+    translated = record.get("translated")
+    return isinstance(translated, str) and bool(translated.strip())
+
+
+def cache_get(
+    engine: str,
+    direction: str,
+    text: str,
+    cfg: dict | None = None,
+) -> str | None:
+    """只读新格式 .json；旧 .txt 与损坏记录一律当作未命中。"""
     try:
-        tmp.write_text(translated, encoding="utf-8")
-        if path.exists():
-            path.unlink()
-        tmp.replace(path)
+        folder = Path(cache_dir())
     except OSError:
+        return None
+    path = folder / f"{cache_key(engine, direction, text, cfg)}{CACHE_SUFFIX}"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    try:
+        record = json.loads(raw)
+    except ValueError:
+        return None
+    if not _cache_record_valid(record, engine, direction):
+        return None
+    translated = record.get("translated") if isinstance(record, dict) else None
+    if not isinstance(translated, str):
+        return None
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+    return translated
+
+
+def cache_put(
+    engine: str,
+    direction: str,
+    text: str,
+    translated: str,
+    cfg: dict | None = None,
+) -> None:
+    """同目录临时文件 + os.replace 原子落盘，读者永远看不到半个文件。"""
+    name = normalize_engine(engine)
+    try:
+        folder = Path(cache_dir())
+    except OSError:
+        return
+    path = folder / f"{cache_key(name, direction, text, cfg)}{CACHE_SUFFIX}"
+    try:
+        payload = json.dumps(
+            _cache_record(name, direction, translated),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        return
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    finally:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
@@ -196,12 +492,16 @@ def cache_put(direction: str, text: str, translated: str) -> None:
 
 
 def prune_cache(max_size_mb: int = 10, max_files: int = 500) -> None:
-    folder = cache_dir()
+    try:
+        folder = Path(cache_dir())
+    except OSError:
+        return
     try:
         entries: list[tuple[float, int, Path]] = []
         total = 0
         for item in folder.iterdir():
-            if not item.is_file() or item.suffix != ".txt":
+            # 顺带清理旧版 .txt 纯文本缓存；临时文件后缀不同，不受影响。
+            if not item.is_file() or item.suffix not in (CACHE_SUFFIX, LEGACY_CACHE_SUFFIX):
                 continue
             stat = item.stat()
             total += stat.st_size
@@ -274,6 +574,7 @@ def http_get_json(url: str, timeout: float) -> object:
 
 
 def translate_google_gtx(text: str, source: str, target: str, timeout: float) -> str:
+    require_free_engine_budget("google_gtx", text)
     query = urllib.parse.urlencode(
         {
             "client": "gtx",
@@ -298,6 +599,7 @@ def translate_google_gtx(text: str, source: str, target: str, timeout: float) ->
 
 
 def translate_mymemory(text: str, source: str, target: str, timeout: float) -> str:
+    require_free_engine_budget("mymemory", text)
     pair_source = "zh-CN" if source.lower().startswith("zh") else source
     pair_target = "zh-CN" if target.lower().startswith("zh") else target
     query = urllib.parse.urlencode(
@@ -310,6 +612,17 @@ def translate_mymemory(text: str, source: str, target: str, timeout: float) -> s
     data = http_get_json(url, timeout)
     if not isinstance(data, dict):
         raise ValueError("mymemory 返回格式无效")
+    status_text = str(data.get("responseStatus") or "").strip()
+    details_text = str(data.get("responseDetails") or "").strip()
+    try:
+        status_code = int(status_text) if status_text else 200
+    except ValueError:
+        status_code = 200
+    if status_code != 200:
+        # MyMemory 用 HTTP 200 + responseStatus != 200 表达「超长 / 超额 / 无配额」，
+        # 此时 responseData.translatedText 里放的是一句错误说明。当成译文返回会被
+        # translate_with_cache 写进缓存，之后每次都命中这句错误。
+        raise ValueError(details_text or f"mymemory responseStatus={status_text}")
     payload = data.get("responseData")
     if not isinstance(payload, dict):
         raise ValueError("mymemory 缺少 responseData")
@@ -536,19 +849,41 @@ def normalize_engine(engine: str) -> str:
     return preferred
 
 
-def engine_order(preferred: str, cfg: dict) -> list[str]:
-    """首选在前，其余只回退免费接口；没 Key 就跳过对应云引擎。"""
-    name = normalize_engine(preferred)
-    ordered = [name] + [item for item in FALLBACK_ENGINES if item != name]
-    if name == "aliyun":
+def _has_credentials(engine: str, cfg: dict) -> bool:
+    if engine == "aliyun":
         key_id, key_secret = resolve_aliyun_keys(cfg)
-        if not key_id or not key_secret:
-            ordered = [item for item in ordered if item != "aliyun"]
-    elif name == "tencent":
+        return bool(key_id and key_secret)
+    if engine == "tencent":
         secret_id, secret_key = resolve_tencent_keys(cfg)
-        if not secret_id or not secret_key:
-            ordered = [item for item in ordered if item != "tencent"]
-    return ordered or ["google_gtx", "mymemory"]
+        return bool(secret_id and secret_key)
+    return True
+
+
+def _missing_credentials_message(engine: str) -> str:
+    if engine == "aliyun":
+        return "未配置阿里云 AccessKey"
+    return "未配置腾讯云密钥"
+
+
+def _fallback_allowed(cfg: dict) -> bool:
+    # 只有显式写 true 才允许「没密钥也走免费接口」。
+    return cfg.get("fallback_without_credentials", False) is True
+
+
+def engine_order(preferred: str, cfg: dict) -> list[str]:
+    """首选在前；云引擎缺密钥时默认报配置错误，只有显式 opt-in 才回退。
+
+    鉴权失败（AuthError）由 translate_with_cache 直接抛出，绝不回退；
+    网络 / 超时 / 配额错误才继续走 google_gtx -> mymemory。
+    """
+    name = normalize_engine(preferred)
+    if name in CLOUD_ENGINES:
+        if not _has_credentials(name, cfg):
+            if not _fallback_allowed(cfg):
+                raise ConfigError(_missing_credentials_message(name))
+            return list(FALLBACK_ENGINES)
+        return [name, *FALLBACK_ENGINES]
+    return [name, *[item for item in FALLBACK_ENGINES if item != name]]
 
 
 def translate_aliyun(
@@ -563,8 +898,7 @@ def translate_aliyun(
     if not key_id or not key_secret:
         raise AuthError("阿里云未配置 AccessKey")
     section = cfg.get("aliyun", {}) if isinstance(cfg.get("aliyun"), dict) else {}
-    endpoint = str(section.get("endpoint") or "mt.cn-hangzhou.aliyuncs.com").strip()
-    endpoint = endpoint.replace("https://", "").replace("http://", "").strip("/")
+    endpoint = _clean_endpoint(section.get("endpoint"), DEFAULT_ALIYUN_ENDPOINT)
     params = {
         "Format": "JSON",
         "Version": "2018-10-12",
@@ -618,13 +952,15 @@ def translate_tencent(
     if not secret_id or not secret_key:
         raise AuthError("腾讯云未配置密钥")
     section = cfg.get("tencent", {}) if isinstance(cfg.get("tencent"), dict) else {}
-    host = str(section.get("endpoint") or "tmt.tencentcloudapi.com").strip()
-    host = host.replace("https://", "").replace("http://", "").strip("/")
-    region = str(section.get("region") or "ap-guangzhou").strip() or "ap-guangzhou"
-    try:
-        project_id = int(section.get("project_id", 0) or 0)
-    except (TypeError, ValueError):
-        project_id = 0
+    host = _clean_endpoint(section.get("endpoint"), DEFAULT_TENCENT_ENDPOINT)
+    region = str(section.get("region") or DEFAULT_TENCENT_REGION).strip()
+    region = region or DEFAULT_TENCENT_REGION
+    # 不静默夹紧：非法 project_id 属于配置错误。
+    project_id = _require_int(
+        _cfg_value(section, "project_id", DEFAULT_TENCENT_PROJECT_ID),
+        "tencent.project_id",
+        minimum=0,
+    )
     # separators 固定，保证签名哈希的正文和实际发送的正文一致。
     payload = json.dumps(
         {
@@ -673,6 +1009,75 @@ def translate_tencent(
     return translated
 
 
+def call_engine(
+    name: str,
+    text: str,
+    source: str,
+    target: str,
+    timeout: float,
+    cfg: dict,
+) -> str:
+    """单引擎调用。测试与自测只替换这个函数即可完全断网。"""
+    if name == "tencent":
+        return translate_tencent(text, source, target, timeout, cfg)
+    if name == "aliyun":
+        return translate_aliyun(text, source, target, timeout, cfg)
+    if name == "google_gtx":
+        return translate_google_gtx(text, source, target, timeout)
+    if name == "mymemory":
+        return translate_mymemory(text, source, target, timeout)
+    raise ValueError(f"未知翻译引擎：{name}")
+
+
+def translate_with_cache(
+    engine: str,
+    text: str,
+    direction: str,
+    timeout: float,
+    cfg: dict | None = None,
+) -> TranslationResult:
+    """按引擎计划翻译，缓存始终按实际引擎隔离。
+
+    缓存读取规则：计划里的第一个引擎先查缓存；后续回退引擎只在前面
+    真的失败后才查自己的缓存，避免免费引擎的旧缓存遮住可用的付费引擎。
+    """
+    settings = cfg if cfg is not None else {}
+    engines = engine_order(engine, settings)
+    source, target = direction_langs(direction)
+
+    last_error: Exception | None = None
+    for name in engines:
+        cached = cache_get(name, direction, text, settings)
+        if cached is not None:
+            return TranslationResult(
+                text=cached,
+                engine=name,
+                cached=True,
+                direction=direction,
+            )
+        try:
+            translated = call_engine(name, text, source, target, timeout, settings)
+        except AuthError:
+            # 密钥错了再回退，只会把配置问题藏起来。交给上层报 auth。
+            raise
+        except FALLBACK_ERRORS as exc:
+            last_error = exc
+            continue
+        if not translated.strip():
+            last_error = ValueError(f"{name} 返回空译文")
+            continue
+        cache_put(name, direction, text, translated, settings)
+        return TranslationResult(
+            text=translated,
+            engine=name,
+            cached=False,
+            direction=direction,
+        )
+    if last_error is not None:
+        raise last_error
+    raise ConfigError("没有可用的翻译引擎")
+
+
 def translate_text(
     engine: str,
     text: str,
@@ -680,50 +1085,135 @@ def translate_text(
     timeout: float,
     cfg: dict | None = None,
 ) -> str:
-    source, target = direction_langs(direction)
-    settings = cfg or {}
-    engines = engine_order(engine, settings)
+    """兼容旧调用：只要译文，不关心来源引擎和缓存状态。"""
+    return translate_with_cache(engine, text, direction, timeout, cfg).text
 
-    last_error: Exception | None = None
-    for name in engines:
-        try:
-            if name == "tencent":
-                return translate_tencent(text, source, target, timeout, settings)
-            if name == "aliyun":
-                return translate_aliyun(text, source, target, timeout, settings)
-            if name == "google_gtx":
-                return translate_google_gtx(text, source, target, timeout)
-            return translate_mymemory(text, source, target, timeout)
-        except AuthError:
-            # 密钥错了再回退，会把配置问题藏起来。交给上层弹 Toast。
-            raise
-        except (
-            urllib.error.URLError,
-            urllib.error.HTTPError,
-            TimeoutError,
-            ValueError,
-            json.JSONDecodeError,
-            OSError,
-        ) as exc:
-            last_error = exc
-            continue
-    raise RuntimeError(str(last_error) if last_error else "翻译失败")
+
+def _single_line(value: str) -> str:
+    return value.replace("\r", " ").replace("\n", " ")
 
 
 def write_output(path: str, status: str, **fields: str) -> None:
-    lines = [f"status={status}"]
+    """key=value 协议；text 永远最后，其它字段强制单行。"""
+    lines = [f"status={_single_line(status)}"]
+    body: str | None = None
     for key, value in fields.items():
         if key == "text":
+            body = value.replace("\r\n", "\n").replace("\r", "\n")
             continue
-        cleaned = value.replace("\r", "").replace("\n", " ")
-        lines.append(f"{key}={cleaned}")
-    if "text" in fields:
-        body = fields["text"].replace("\r\n", "\n").replace("\r", "\n")
+        lines.append(f"{key}={_single_line(value)}")
+    if body is not None:
         lines.append("text=" + body)
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _credential_values(cfg: dict | None) -> list[str]:
+    values: list[str] = []
+    for section_name, keys in (
+        ("tencent", ("secret_id", "secret_key")),
+        ("aliyun", ("access_key_id", "access_key_secret")),
+    ):
+        section = _section(cfg, section_name)
+        for key in keys:
+            value = section.get(key)
+            if isinstance(value, str) and value.strip():
+                values.append(value.strip())
+    # 只读进程环境，不读 HKCU；避免错误路径再触发环境读取。
+    for name in CREDENTIAL_ENV_NAMES:
+        value = os.environ.get(name, "").strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def _source_variants(source_text: str) -> list[str]:
+    """原文可能以 LF/CRLF、URL 编码或折成单行的形式出现在异常里。"""
+    variants = {
+        source_text,
+        source_text.replace("\r\n", "\n").replace("\r", "\n"),
+        " ".join(source_text.split()),
+        urllib.parse.quote(source_text, safe=""),
+        urllib.parse.quote_plus(source_text),
+    }
+    return sorted((item for item in variants if item), key=len, reverse=True)
+
+
+def sanitize_detail(
+    exc: BaseException,
+    *,
+    source_text: str = "",
+    cfg: dict | None = None,
+) -> str:
+    """异常类型 + 截断消息，单行；原文和密钥一律打码。"""
+    raw = f"{type(exc).__name__}: {exc}"
+    for secret in _credential_values(cfg):
+        if secret:
+            raw = raw.replace(secret, "<redacted>")
+    # 必须在压成单行之前替换，否则多行原文会变成 "line1 line2" 而漏网。
+    for variant in _source_variants(source_text):
+        raw = raw.replace(variant, "<text>")
+    detail = " ".join(raw.split())
+    # Bearer 先处理，否则 Authorization 规则会只吃掉 "Bearer" 留下 token。
+    detail = _BEARER_PATTERN.sub("Bearer <redacted>", detail)
+    detail = _CREDENTIAL_PATTERN.sub(r"\1=<redacted>", detail)
+    detail = _SOURCE_QUERY_PATTERN.sub(r"\1<redacted>", detail)
+    if not detail:
+        detail = type(exc).__name__
+    return detail[:DETAIL_MAX_LEN]
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        return isinstance(reason, TimeoutError) or "timed out" in str(reason).lower()
+    return False
+
+
+def _engine_label(cfg: dict | None) -> str:
+    if not isinstance(cfg, dict):
+        return DEFAULT_ENGINE
+    raw = cfg.get("engine", DEFAULT_ENGINE)
+    if isinstance(raw, str) and raw.strip():
+        return normalize_engine(raw)
+    return DEFAULT_ENGINE
+
+
+def write_error(
+    path: str,
+    code: str,
+    message: str,
+    engine: str,
+    detail: str = "",
+    **extra: str,
+) -> int:
+    """写错误协议并返回进程码；写不了文件只能返回 1。"""
+    try:
+        write_output(
+            path,
+            "error",
+            code=code,
+            message=message,
+            engine=engine,
+            detail=detail,
+            **extra,
+        )
+    except OSError:
+        return 1
+    return 0
+
+
 def run_self_test() -> int:
+    """离线自测：不联网、不读 HKCU、不写真实缓存。"""
+    failed = 0
+
+    def check(condition: bool, message: str) -> None:
+        nonlocal failed
+        if not condition:
+            print(f"FAIL {message}", file=sys.stderr)
+            failed += 1
+
     cases = [
         ("你好", "zh-en"),
         ("Hello world", "en-zh"),
@@ -736,52 +1226,54 @@ def run_self_test() -> int:
         ("   ", None),
         ("!@#$%", None),
     ]
-    failed = 0
     for text, expected in cases:
         actual = detect_direction(text)
-        if actual != expected:
-            print(f"FAIL detect {text!r}: expected {expected!r} got {actual!r}", file=sys.stderr)
-            failed += 1
+        check(actual == expected, f"detect {text!r}: expected {expected!r} got {actual!r}")
     source, target = direction_langs("zh-en")
-    if source != "zh-CN" or target != "en":
-        print(f"FAIL langs zh-en: {source} {target}", file=sys.stderr)
-        failed += 1
+    check(source == "zh-CN" and target == "en", f"langs zh-en: {source} {target}")
     source, target = direction_langs("en-zh")
-    if source != "en" or target != "zh-CN":
-        print(f"FAIL langs en-zh: {source} {target}", file=sys.stderr)
-        failed += 1
-    if aliyun_lang("zh-CN") != "zh" or aliyun_lang("en") != "en":
-        print("FAIL aliyun_lang", file=sys.stderr)
-        failed += 1
-    if tencent_lang("zh-CN") != "zh" or tencent_lang("en") != "en":
-        print("FAIL tencent_lang", file=sys.stderr)
-        failed += 1
+    check(source == "en" and target == "zh-CN", f"langs en-zh: {source} {target}")
+    check(aliyun_lang("zh-CN") == "zh" and aliyun_lang("en") == "en", "aliyun_lang")
+    check(tencent_lang("zh-CN") == "zh" and tencent_lang("en") == "en", "tencent_lang")
     encoded = aliyun_percent_encode("a b*c~d")
-    if encoded != "a%20b%2Ac~d":
-        print(f"FAIL aliyun_percent_encode: {encoded}", file=sys.stderr)
-        failed += 1
+    check(encoded == "a%20b%2Ac~d", f"aliyun_percent_encode: {encoded}")
+
+    # 截断边界：等于上限可以翻，多一个字就必须报 too_long。
+    check(not text_is_too_long("abcde", 5), "text_is_too_long len == max")
+    check(text_is_too_long("abcdef", 5), "text_is_too_long len == max + 1")
+
+    # 非法数值配置必须是 ConfigError，不能静默夹紧。
+    for bad in (
+        {"max_chars": "2000"},
+        {"max_chars": 0},
+        {"timeout_s": "fast"},
+        {"timeout_s": 0},
+        {"tencent": {"project_id": "zero"}},
+        {"fallback_without_credentials": "false"},
+    ):
+        try:
+            load_settings(bad)
+            print(f"FAIL load_settings accepted invalid config: {bad}", file=sys.stderr)
+            failed += 1
+        except ConfigError:
+            pass
+    valid_settings = load_settings(
+        {
+            "max_chars": 5,
+            "timeout_s": 2.5,
+            "fallback_without_credentials": True,
+        }
+    )
+    check(valid_settings.max_chars == 5, "load_settings max_chars")
+    check(valid_settings.timeout_s == 2.5, "load_settings timeout_s")
+    check(valid_settings.fallback_without_credentials, "load_settings fallback flag")
+
     empty_cfg: dict = {
         "aliyun": {"access_key_id": "", "access_key_secret": ""},
         "tencent": {"secret_id": "", "secret_key": ""},
     }
     # 本机可能已有云厂商环境变量 / 用户环境；自测必须临时摘掉。
-    env_backup = {
-        name: os.environ.pop(name, None)
-        for name in (
-            "ALIBABA_CLOUD_ACCESS_KEY_ID",
-            "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
-            "ALIYUN_ACCESS_KEY_ID",
-            "ALIYUN_ACCESS_KEY_SECRET",
-            "ALIBABA_ACCESS_KEY_ID",
-            "ALIBABA_ACCESS_KEY_SECRET",
-            "TENCENTCLOUD_SECRET_ID",
-            "TENCENTCLOUD_SECRET_KEY",
-            "TENCENT_SECRET_ID",
-            "TENCENT_SECRET_KEY",
-            "QCLOUD_SECRET_ID",
-            "QCLOUD_SECRET_KEY",
-        )
-    }
+    env_backup = {name: os.environ.pop(name, None) for name in CREDENTIAL_ENV_NAMES}
     original_read_user_env = read_user_env
 
     def _no_user_env(_name: str) -> str:
@@ -789,40 +1281,55 @@ def run_self_test() -> int:
 
     globals()["read_user_env"] = _no_user_env
     try:
-        order = engine_order("tencent", empty_cfg)
-        if "tencent" in order:
-            print(f"FAIL skip tencent without keys: {order}", file=sys.stderr)
+        # 缺密钥默认必须报配置错误，而不是悄悄换成 Google。
+        try:
+            engine_order("tencent", empty_cfg)
+            print("FAIL missing tencent keys did not raise", file=sys.stderr)
             failed += 1
-        if "aliyun" in order:
-            print(f"FAIL default order must not include aliyun: {order}", file=sys.stderr)
+        except ConfigError:
+            pass
+        try:
+            engine_order("aliyun", empty_cfg)
+            print("FAIL missing aliyun keys did not raise", file=sys.stderr)
             failed += 1
-        if order[:2] != ["google_gtx", "mymemory"]:
-            print(f"FAIL fallback order: {order}", file=sys.stderr)
-            failed += 1
-        keyed_tencent = {"tencent": {"secret_id": "id", "secret_key": "secret"}}
-        if engine_order("tencent", keyed_tencent)[0] != "tencent":
-            print("FAIL tencent preferred with keys", file=sys.stderr)
-            failed += 1
+        except ConfigError:
+            pass
+        opt_in_cfg = dict(empty_cfg)
+        opt_in_cfg["fallback_without_credentials"] = True
+        check(
+            engine_order("tencent", opt_in_cfg) == ["google_gtx", "mymemory"],
+            "opt-in fallback order",
+        )
+        keyed_tencent = {
+            "tencent": {
+                "secret_id": "id",
+                "secret_key": "secret",
+                "endpoint": DEFAULT_TENCENT_ENDPOINT,
+                "region": DEFAULT_TENCENT_REGION,
+                "project_id": 0,
+            }
+        }
         keyed_aliyun = {"aliyun": {"access_key_id": "id", "access_key_secret": "secret"}}
-        if engine_order("aliyun", keyed_aliyun)[0] != "aliyun":
-            print("FAIL aliyun preferred with keys", file=sys.stderr)
-            failed += 1
-        if engine_order("google", keyed_tencent)[0] != "google_gtx":
-            print("FAIL google alias", file=sys.stderr)
-            failed += 1
-        if engine_order("tmt", keyed_tencent)[0] != "tencent":
-            print("FAIL tmt alias", file=sys.stderr)
-            failed += 1
+        check(engine_order("tencent", keyed_tencent)[0] == "tencent", "tencent preferred")
+        check(engine_order("aliyun", keyed_aliyun)[0] == "aliyun", "aliyun preferred")
+        check(engine_order("google", keyed_tencent)[0] == "google_gtx", "google alias")
+        check(engine_order("tmt", keyed_tencent)[0] == "tencent", "tmt alias")
+        check(
+            engine_order("mymemory", keyed_tencent)[:2] == ["mymemory", "google_gtx"],
+            "mymemory fallback order",
+        )
         file_id, file_secret = resolve_tencent_keys(keyed_tencent)
-        if file_id != "id" or file_secret != "secret":
-            print("FAIL config keys used when env empty", file=sys.stderr)
-            failed += 1
+        check(
+            file_id == "id" and file_secret == "secret",
+            "config keys used when env empty",
+        )
         os.environ["TENCENTCLOUD_SECRET_ID"] = "env-id"
         os.environ["TENCENTCLOUD_SECRET_KEY"] = "env-secret"
         env_id, env_secret = resolve_tencent_keys(keyed_tencent)
-        if env_id != "env-id" or env_secret != "env-secret":
-            print(f"FAIL env keys override config: {env_id!r} {env_secret!r}", file=sys.stderr)
-            failed += 1
+        check(
+            env_id == "env-id" and env_secret == "env-secret",
+            f"env keys override config: {env_id!r} {env_secret!r}",
+        )
     finally:
         globals()["read_user_env"] = original_read_user_env
         for name, value in env_backup.items():
@@ -830,10 +1337,65 @@ def run_self_test() -> int:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+    # 缓存键必须按实际引擎 + 影响输出的配置隔离。
+    other_tencent = {
+        "tencent": {
+            "secret_id": "id",
+            "secret_key": "secret",
+            "endpoint": DEFAULT_TENCENT_ENDPOINT,
+            "region": "ap-shanghai",
+            "project_id": 0,
+        }
+    }
+    tencent_key = cache_key("tencent", "en-zh", "hello", keyed_tencent)
+    check(
+        tencent_key != cache_key("tencent", "en-zh", "hello", other_tencent),
+        "cache key must include tencent region",
+    )
+    check(
+        tencent_key != cache_key("google_gtx", "en-zh", "hello", keyed_tencent),
+        "cache key must include engine",
+    )
+    check(
+        cache_key("google_gtx", "en-zh", "hello", keyed_tencent)
+        == cache_key("google_gtx", "en-zh", "hello", other_tencent),
+        "free engine cache key ignores cloud config",
+    )
+    record = _cache_record("tencent", "en-zh", "你好")
+    check(_cache_record_valid(record, "tencent", "en-zh"), "cache record valid")
+    check(
+        not _cache_record_valid({"version": 1, "engine": "tencent", "translated": "x"}, "tencent", "en-zh"),
+        "old cache version rejected",
+    )
+    check(
+        not _cache_record_valid(
+            {"version": CACHE_VERSION, "engine": "aliyun", "translated": "x"},
+            "tencent",
+            "en-zh",
+        ),
+        "cache engine mismatch rejected",
+    )
+
+    # 诊断信息必须单行、无原文、无密钥。
+    detail = sanitize_detail(
+        ValueError("boom 机密原文 AKIDselftest"),
+        source_text="机密原文",
+        cfg={"tencent": {"secret_id": "AKIDselftest"}},
+    )
+    check("机密原文" not in detail, f"detail leaked source: {detail}")
+    check("AKIDselftest" not in detail, f"detail leaked secret: {detail}")
+    check("\n" not in detail, "detail must be single line")
+    check(
+        sanitize_detail(ValueError("Authorization: Bearer abcdef")).find("abcdef") < 0,
+        "detail must redact bearer token",
+    )
+    check(_is_timeout(TimeoutError("x")), "TimeoutError classified as timeout")
+    check(_is_timeout(urllib.error.URLError(TimeoutError("x"))), "URLError timeout reason")
+    check(not _is_timeout(urllib.error.URLError("offline")), "plain URLError is not timeout")
+
     signed = aliyun_sign("secret", "POST", {"AccessKeyId": "id", "Action": "TranslateGeneral"})
-    if not signed:
-        print("FAIL aliyun_sign empty", file=sys.stderr)
-        failed += 1
+    check(bool(signed), "aliyun_sign empty")
     headers = tencent_tc3_headers(
         "AKIDtest",
         "secret",
@@ -846,12 +1408,11 @@ def run_self_test() -> int:
         timestamp=1700000000,
     )
     auth = headers.get("Authorization", "")
-    if not auth.startswith("TC3-HMAC-SHA256 Credential=AKIDtest/"):
-        print(f"FAIL tencent auth prefix: {auth[:80]}", file=sys.stderr)
-        failed += 1
-    if "Signature=" not in auth or len(auth.rsplit("Signature=", 1)[-1]) != 64:
-        print("FAIL tencent signature length", file=sys.stderr)
-        failed += 1
+    check(auth.startswith("TC3-HMAC-SHA256 Credential=AKIDtest/"), f"tencent auth prefix: {auth[:80]}")
+    check(
+        "Signature=" in auth and len(auth.rsplit("Signature=", 1)[-1]) == 64,
+        "tencent signature length",
+    )
     again = tencent_tc3_headers(
         "AKIDtest",
         "secret",
@@ -863,30 +1424,29 @@ def run_self_test() -> int:
         payload='{"SourceText":"hello","Source":"en","Target":"zh","ProjectId":0}',
         timestamp=1700000000,
     )
-    if again.get("Authorization") != auth:
-        print("FAIL tencent signature not stable", file=sys.stderr)
-        failed += 1
-    if headers.get("X-TC-Action") != "TextTranslate":
-        print("FAIL tencent action header", file=sys.stderr)
-        failed += 1
-    if not is_aliyun_auth_error("InvalidAccessKeyId.NotFound", ""):
-        print("FAIL auth detect InvalidAccessKeyId", file=sys.stderr)
-        failed += 1
-    if not is_aliyun_auth_error("", "Specified access key is not found."):
-        print("FAIL auth detect access key message", file=sys.stderr)
-        failed += 1
-    if is_aliyun_auth_error("Throttling", "Request was denied due to throttling"):
-        print("FAIL throttling is not auth", file=sys.stderr)
-        failed += 1
-    if not is_tencent_auth_error("AuthFailure.SecretIdNotFound", ""):
-        print("FAIL tencent auth detect SecretIdNotFound", file=sys.stderr)
-        failed += 1
-    if not is_tencent_auth_error("AuthFailure.SignatureFailure", "The provided credentials could not be validated"):
-        print("FAIL tencent auth detect SignatureFailure", file=sys.stderr)
-        failed += 1
-    if is_tencent_auth_error("FailedOperation.NoFreeAmount", "free quota exceeded"):
-        print("FAIL tencent quota is not auth", file=sys.stderr)
-        failed += 1
+    check(again.get("Authorization") == auth, "tencent signature not stable")
+    check(headers.get("X-TC-Action") == "TextTranslate", "tencent action header")
+    check(is_aliyun_auth_error("InvalidAccessKeyId.NotFound", ""), "auth detect InvalidAccessKeyId")
+    check(
+        is_aliyun_auth_error("", "Specified access key is not found."),
+        "auth detect access key message",
+    )
+    check(
+        not is_aliyun_auth_error("Throttling", "Request was denied due to throttling"),
+        "throttling is not auth",
+    )
+    check(is_tencent_auth_error("AuthFailure.SecretIdNotFound", ""), "tencent SecretIdNotFound")
+    check(
+        is_tencent_auth_error(
+            "AuthFailure.SignatureFailure",
+            "The provided credentials could not be validated",
+        ),
+        "tencent SignatureFailure",
+    )
+    check(
+        not is_tencent_auth_error("FailedOperation.NoFreeAmount", "free quota exceeded"),
+        "tencent quota is not auth",
+    )
     try:
         raise_aliyun_error("InvalidAccessKeyId.NotFound", "Specified access key is not found.")
         print("FAIL raise_aliyun_error did not raise", file=sys.stderr)
@@ -910,9 +1470,7 @@ def run_self_test() -> int:
         print("FAIL raise_tencent_error did not raise", file=sys.stderr)
         failed += 1
     except AuthError as exc:
-        if str(exc) != "腾讯云密钥无效":
-            print(f"FAIL tencent auth message: {exc}", file=sys.stderr)
-            failed += 1
+        check(str(exc) == "腾讯云密钥无效", f"tencent auth message: {exc}")
     except Exception as exc:
         print(f"FAIL raise_tencent_error type: {type(exc)}", file=sys.stderr)
         failed += 1
@@ -923,14 +1481,129 @@ def run_self_test() -> int:
     return 0
 
 
-def main() -> int:
+def _state_source_text(state: dict[str, object]) -> str:
+    value = state.get("text")
+    return value if isinstance(value, str) else ""
+
+
+def _run_translation(
+    args: argparse.Namespace,
+    output: str,
+    settings: Settings,
+    cfg: dict,
+    engine_label: str,
+    state: dict[str, object],
+) -> int:
+    # 2) 输入：读失败归 io。
+    text = args.text
+    state["text"] = text
+    if args.input_file:
+        try:
+            text = Path(args.input_file).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            return write_error(
+                output,
+                "io",
+                "读取文本失败",
+                engine_label,
+                sanitize_detail(exc),
+            )
+        state["text"] = text
+        try:
+            Path(args.input_file).unlink(missing_ok=True)
+        except OSError:
+            pass
+    text = text.lstrip("\ufeff").strip()
+    state["text"] = text
+
+    if not text:
+        return write_error(output, "empty", "未包含可翻译文字", engine_label)
+    # 3) 超长直接报错，不再静默截断；AHK 面板仍显示完整原文。
+    if text_is_too_long(text, settings.max_chars):
+        return write_error(
+            output,
+            "too_long",
+            f"文本过长（上限 {settings.max_chars} 字符）",
+            engine_label,
+            "",
+            length=str(len(text)),
+            max_chars=str(settings.max_chars),
+        )
+    direction = detect_direction(text)
+    if direction is None:
+        return write_error(output, "detect", "未包含可翻译文字", engine_label)
+
+    # 4) 翻译：鉴权失败绝不回退；网络/超时/配额可回退并报告实际引擎。
+    try:
+        result = translate_with_cache(
+            settings.engine,
+            text,
+            direction,
+            settings.timeout_s,
+            cfg,
+        )
+    except AuthError as exc:
+        return write_error(
+            output,
+            "auth",
+            str(exc).strip() or "翻译密钥无效",
+            engine_label,
+            sanitize_detail(exc, source_text=text, cfg=cfg),
+        )
+    except ConfigError as exc:
+        return write_error(
+            output,
+            "config",
+            str(exc).strip() or "配置无效",
+            engine_label,
+            sanitize_detail(exc, source_text=text, cfg=cfg),
+        )
+    except Exception as exc:
+        if _is_timeout(exc):
+            code, message = "timeout", "翻译超时"
+        elif isinstance(exc, FreeEngineLimitError):
+            # 云引擎不可用、免费回退引擎又装不下这段文本：真实原因是「太长」，
+            # 报 network 会让用户一直去查网络。
+            code, message = "too_long", str(exc).strip() or "文本过长，免费引擎不支持"
+        elif isinstance(exc, FALLBACK_ERRORS):
+            code, message = "network", "网络请求失败"
+        else:
+            code, message = "internal", "翻译失败"
+        return write_error(
+            output,
+            code,
+            message,
+            engine_label,
+            sanitize_detail(exc, source_text=text, cfg=cfg),
+        )
+
+    try:
+        prune_cache(max_size_mb=settings.max_size_mb, max_files=settings.max_files)
+    except Exception:
+        # 清缓存失败不该让已经成功的翻译失败。
+        pass
+    try:
+        write_output(
+            output,
+            "ok",
+            direction=direction,
+            engine=result.engine,
+            cached="1" if result.cached else "0",
+            text=result.text,
+        )
+    except OSError:
+        return 1
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Lat3ncy 划词翻译")
     parser.add_argument("--text", default="", help="要翻译的文本")
     parser.add_argument("--input-file", default="", help="包含待译文本的 UTF-8 文件")
     parser.add_argument("--output-file", default="", help="结果文件路径")
     parser.add_argument("--config", default=None, help="config.toml 路径")
-    parser.add_argument("--self-test", action="store_true", help="只跑语言判定单测，不联网")
-    args = parser.parse_args()
+    parser.add_argument("--self-test", action="store_true", help="只跑判定/配置/缓存单测，不联网")
+    args = parser.parse_args(argv)
 
     if args.self_test:
         return run_self_test()
@@ -940,62 +1613,74 @@ def main() -> int:
         print("missing --output-file", file=sys.stderr)
         return 1
 
+    # 1) 配置：TOML 语法、非法数值都归 config，不能混进 network。
     try:
-        text = args.text
-        if args.input_file:
-            text = Path(args.input_file).read_text(encoding="utf-8")
-            try:
-                Path(args.input_file).unlink(missing_ok=True)
-            except OSError:
-                pass
-        text = text.lstrip("\ufeff").strip()
         cfg = load_config(args.config)
-        max_chars = max(1, int(cfg.get("max_chars", 2000) or 2000))
-        timeout_s = max(1.0, float(cfg.get("timeout_s", 4) or 4))
-        engine = str(cfg.get("engine", "tencent") or "tencent")
-        cache_cfg = cfg.get("cache", {})
-        max_size_mb = int(cache_cfg.get("max_size_mb", 10) or 10)
-        max_files = int(cache_cfg.get("max_files", 500) or 500)
+    except ConfigError as exc:
+        return write_error(
+            output,
+            "config",
+            str(exc).strip() or "配置无效",
+            DEFAULT_ENGINE,
+            sanitize_detail(exc),
+        )
+    except Exception as exc:
+        return write_error(
+            output,
+            "internal",
+            "翻译失败",
+            DEFAULT_ENGINE,
+            sanitize_detail(exc),
+        )
+    engine_label = _engine_label(cfg)
+    try:
+        settings = load_settings(cfg)
+    except ConfigError as exc:
+        return write_error(
+            output,
+            "config",
+            str(exc).strip() or "配置无效",
+            engine_label,
+            sanitize_detail(exc, cfg=cfg),
+        )
+    except Exception as exc:
+        return write_error(
+            output,
+            "internal",
+            "翻译失败",
+            engine_label,
+            sanitize_detail(exc, cfg=cfg),
+        )
+    engine_label = settings.engine
 
-        if not text:
-            write_output(output, "error", code="empty", message="未包含可翻译文字")
-            return 0
-
-        if len(text) > max_chars:
-            text = text[:max_chars]
-
-        direction = detect_direction(text)
-        if direction is None:
-            write_output(output, "error", code="detect", message="未包含可翻译文字")
-            return 0
-
-        cached = cache_get(direction, text)
-        if cached is not None:
-            write_output(output, "ok", direction=direction, text=cached)
-            return 0
-
-        translated = translate_text(engine, text, direction, timeout_s, cfg)
-        cache_put(direction, text, translated)
-        prune_cache(max_size_mb=max_size_mb, max_files=max_files)
-        write_output(output, "ok", direction=direction, text=translated)
-        return 0
+    # 兜底：正常路径都在 _run_translation 内分类；这里只接住真正未预期的异常。
+    state: dict[str, object] = {"text": ""}
+    try:
+        return _run_translation(args, output, settings, cfg, engine_label, state)
     except AuthError as exc:
-        try:
-            write_output(
-                output,
-                "error",
-                code="auth",
-                message=str(exc).strip() or "翻译密钥无效",
-            )
-        except OSError:
-            return 1
-        return 0
-    except Exception:
-        try:
-            write_output(output, "error", code="network", message="翻译失败")
-        except OSError:
-            return 1
-        return 0
+        return write_error(
+            output,
+            "auth",
+            str(exc).strip() or "翻译密钥无效",
+            engine_label,
+            sanitize_detail(exc, source_text=_state_source_text(state), cfg=cfg),
+        )
+    except ConfigError as exc:
+        return write_error(
+            output,
+            "config",
+            str(exc).strip() or "配置无效",
+            engine_label,
+            sanitize_detail(exc, source_text=_state_source_text(state), cfg=cfg),
+        )
+    except Exception as exc:
+        return write_error(
+            output,
+            "internal",
+            "翻译失败",
+            engine_label,
+            sanitize_detail(exc, source_text=_state_source_text(state), cfg=cfg),
+        )
 
 
 if __name__ == "__main__":

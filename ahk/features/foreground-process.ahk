@@ -87,7 +87,7 @@ class ForegroundProcess {
         return info
     }
 
-    static Inspect() {
+    static Inspect(needCommandLine := false) {
         hwnd := WinExist("A")
         if !hwnd
             return {ok: false, reason: "无前台窗口"}
@@ -108,9 +108,15 @@ class ForegroundProcess {
         path := ""
         try path := WinGetProcessPath("ahk_id " hwnd)
 
-        wmi := this.QueryWmi(pid)
-        if (path = "" && wmi.path != "")
-            path := wmi.path
+        ; 只在真的缺信息时才打 WMI：一次同步 CIM 查询 50-300ms，全压在热键线程上。
+        ; Caps+Q 只要 pid，根本用不到命令行。
+        commandLine := ""
+        if (needCommandLine || path = "") {
+            wmi := this.QueryWmi(pid)
+            if (path = "" && wmi.path != "")
+                path := wmi.path
+            commandLine := wmi.commandLine
+        }
 
         return {
             ok: true,
@@ -118,7 +124,7 @@ class ForegroundProcess {
             pid: pid,
             name: name,
             path: path,
-            commandLine: wmi.commandLine
+            commandLine: commandLine
         }
     }
 
@@ -234,7 +240,8 @@ class ForegroundProcess {
             return
 
         try {
-            info := this.Inspect()
+            ; Restart 需要命令行，这时才允许打 WMI（Caps+Q 不需要）。
+            info := this.Inspect(true)
             if !info.ok {
                 Notify.Error("!", info.reason)
                 return

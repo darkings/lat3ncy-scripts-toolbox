@@ -25,16 +25,26 @@ engine. Read-back verifies the attribute actually stuck.
 ASCII only on purpose (PowerShell 5.1 parses BOM-less files as ANSI).
 #>
 
+[CmdletBinding()]
 param(
   [switch]$Light,
   [switch]$Reset,
+  [switch]$Silent,
   [string[]]$ProcessNames = @('Androws', 'AndrowsStore', 'AndrowsAssistant', 'AndrowsLauncher')
 )
+
+# Sanitize ProcessNames in case caller passed flags as positional arguments
+$cleanNames = @($ProcessNames | Where-Object { $_ -and $_ -notmatch '^-' })
+if ($cleanNames.Count -eq 0) {
+  $cleanNames = @('Androws', 'AndrowsStore', 'AndrowsAssistant', 'AndrowsLauncher')
+}
+$ProcessNames = $cleanNames
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 trap {
+  if ($Silent) { exit 0 }
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { 'Force Dark Titlebar' }
   Show-SystemToast -Title "x $cmdName failed" -Message $_.Exception.Message | Out-Null
   exit 1
@@ -73,6 +83,7 @@ $wanted = if ($Reset) { $null } elseif ($Light) { 0 } else { 1 }
 
 $targetPids = @(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 if ($targetPids.Count -eq 0) {
+  if ($Silent) { return }
   throw ('engine is not running: ' + ($ProcessNames -join ', '))
 }
 
@@ -113,9 +124,12 @@ $cb = [L3.Titlebar+EnumProc]{
 $touched = $counter.N
 
 if ($touched -eq 0) {
+  if ($Silent) { return }
   throw 'no visible engine window found (open the store window first)'
 }
 
 $mode = if ($Reset) { 'system' } elseif ($Light) { 'light' } else { 'dark' }
 $message = ("titlebar={0} on {1} window(s): {2}" -f $mode, $touched, (($results | Select-Object -First 3) -join ' | '))
-Show-SystemToast -Title 'OK engine titlebar updated' -Message $message | Out-Null
+if (-not $Silent) {
+  Show-SystemToast -Title 'OK engine titlebar updated' -Message $message | Out-Null
+}

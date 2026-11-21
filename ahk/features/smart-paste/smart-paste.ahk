@@ -19,6 +19,9 @@ class SmartPasteClipboard {
 class SmartPaste {
     static VsCodeCopyPathShortcut := ""
     static ZedCopyPathShortcut := ""
+    ; 辅助脚本的硬上限。RunWait 默认 INFINITE：PowerShell + 剪贴板取图一旦卡住，
+    ; AHK 单线程会永久假死（Ctrl+V 没反应、热键全失效）。
+    static HelperTimeoutMs := 15000
 
     static Configure(vsCodeCopyPathShortcut, zedCopyPathShortcut) {
         this.VsCodeCopyPathShortcut := vsCodeCopyPathShortcut
@@ -241,7 +244,7 @@ class SmartPaste {
             . " -ResultFile " this.QuoteArgument(resultFile)
 
         try {
-            exitCode := ProcessNoWindow.RunWait(command)
+            exitCode := ProcessNoWindow.RunWait(command, "", this.HelperTimeoutMs)
             if (exitCode != 0 || !FileExist(resultFile)) {
                 Notify.Error("×", "图片保存失败")
                 return false
@@ -254,7 +257,8 @@ class SmartPaste {
                 return false
             }
 
-            Notify.Success("✓", "已保存 " fileName)
+            ; 降级为光标处轻量提示芯片，避免频繁弹系统 Toast
+            Notify.State("✓", "已保存 " fileName)
             return true
         } catch {
             Notify.Error("×", "图片保存失败")

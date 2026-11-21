@@ -551,10 +551,8 @@ internal static class Native
     /// 只在调用方明确要求时读 Unicode 文本。失败返回 null，不抛。
     /// 不能把剪贴板内容当成当前选区或鼠标下文本。
     /// </summary>
-    public static string? TryReadClipboardUnicode(IntPtr owner, int maxChars)
+    public static string? TryReadClipboardUnicode(IntPtr owner)
     {
-        if (maxChars <= 0)
-            maxChars = 4000;
         try
         {
             if (!IsClipboardFormatAvailable(CF_UNICODETEXT))
@@ -572,9 +570,7 @@ internal static class Native
                 try
                 {
                     string? text = Marshal.PtrToStringUni(data);
-                    if (string.IsNullOrEmpty(text))
-                        return text;
-                    return text.Length <= maxChars ? text : text[..maxChars];
+                    return text;
                 }
                 finally
                 {

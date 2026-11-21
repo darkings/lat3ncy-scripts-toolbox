@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -827,6 +828,8 @@ class Hi75Wrap:
         self.exe_path = _resolve_hi75_exe(exe)
         self.dev: Any = None
         self.proc: subprocess.Popen[str] | None = None
+        self._stdout_lines: queue.Queue[str | None] | None = None
+        self._stdout_thread: threading.Thread | None = None
         self.info: dict[str, Any] | None = None
         self.last_rgb: np.ndarray | None = None
         self.last_off = False
@@ -952,6 +955,7 @@ class Hi75Wrap:
                 pass
 
         threading.Thread(target=_drain_stderr, name="hi75-exe-err", daemon=True).start()
+        self._start_stdout_reader(self.proc)
         ready = self._read_until(prefix="READY", timeout_s=8.0)
         if ready is None or ready.startswith("ERR"):
             code = self.proc.poll() if self.proc is not None else None
@@ -986,6 +990,9 @@ class Hi75Wrap:
     def _kill_exe(self) -> None:
         proc = self.proc
         self.proc = None
+        self._stdout_lines = None
+        reader = self._stdout_thread
+        self._stdout_thread = None
         if proc is None:
             return
         try:
@@ -999,23 +1006,55 @@ class Hi75Wrap:
         except (OSError, subprocess.TimeoutExpired):
             try:
                 proc.kill()
-            except OSError:
+                proc.wait(timeout=1.5)
+            except (OSError, subprocess.TimeoutExpired):
                 pass
+        if reader is not None:
+            reader.join(timeout=0.2)
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+
+    def _start_stdout_reader(self, proc: subprocess.Popen[str]) -> None:
+        # Bind each reader to its own process/queue. Late lines from an old
+        # helper can never satisfy a request sent to a newly connected helper.
+        lines: queue.Queue[str | None] = queue.Queue()
+        self._stdout_lines = lines
+
+        def read_lines() -> None:
+            try:
+                if proc.stdout is not None:
+                    for line in proc.stdout:
+                        lines.put(line)
+            except (OSError, ValueError):
+                pass
+            finally:
+                lines.put(None)
+
+        self._stdout_thread = threading.Thread(target=read_lines, name="hi75-exe-out", daemon=True)
+        self._stdout_thread.start()
 
     def _read_until(self, prefix: str, timeout_s: float) -> str | None:
-        if self.proc is None or self.proc.stdout is None:
+        lines = self._stdout_lines
+        if self.proc is None or lines is None:
             return None
         deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            if self.proc.poll() is not None:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 return None
-            line = self.proc.stdout.readline()
-            if not line:
+            try:
+                line = lines.get(timeout=remaining)
+            except queue.Empty:
+                return None
+            if line is None:
                 return None
             text = line.strip()
             if text.startswith(prefix) or text.startswith("ERR"):
                 return text
-        return None
 
     def _rpc(self, command: str) -> str:
         if self.proc is None or self.proc.stdin is None or self.proc.stdout is None:
@@ -1026,6 +1065,8 @@ class Hi75Wrap:
         self.proc.stdin.flush()
         reply = self._read_until(prefix="OK", timeout_s=2.0)
         if reply is None:
+            # A late response would desynchronize the next RPC. Reconnect.
+            self._kill_exe()
             raise TimeoutError(f"rpc timeout: {command}")
         if reply.startswith("ERR"):
             raise RuntimeError(reply[4:].strip() or reply)

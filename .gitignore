@@ -11,14 +11,22 @@ __pycache__/
 !/README.md
 !/tools/*/README.md
 !/resources/cursors/README.md
+!/resources/icons/README.md
 !/findings.md
 !/progress.md
 !/task_plan.md
-/docs/
+!/REVIEW.md
+!/REVIEW-SECOND-PASS.md
+# Only the release guide and this candidate record are published; other docs stay local.
+/docs/*
+!/docs/RELEASING.md
+!/docs/releases/
+/docs/releases/*
+!/docs/releases/2026-11-21-reliability.md
 
 # 运行日志
 **/*.log
-**/*.log.1
+**/*.log.[0-9]*
 /tools/rgb/logs/
 /tools/tts/*.log
 /tools/theme-scheduler/*.log
@@ -30,6 +38,7 @@ __pycache__/
 .tmp/
 .pip_manual/
 .tmp_caps/
+.lat3ncy-tools-tmp/
 /test_*.ahk
 /test.txt
 /*.png
@@ -45,7 +54,13 @@ __pycache__/
 /tools/ime-hud-winui/bin/
 /tools/ime-hud-winui/obj/
 /tools/ime-hud-winui/out/
+# run-tests.ps1 -BuildImeHud 的隔离构建产物（防旧 out 假通过）。
+/tools/ime-hud-winui/test-out/
 /tools/ime-hud-winui/*.pdb
+
+# Module-owned Python environment; dependencies are recorded in requirements.lock.
+/tools/tts/.venv/
+/tools/tts/.cache/
 
 # Codex switch secrets stay on the machine.
 /tools/codex-switch/relays/
@@ -56,3 +71,8 @@ __pycache__/
 /tools/raycast-scripts/connect-nyx.ps1
 /resources/rdp/
 
+
+# OCR 运行时产物（现场日志 / 临时 Toast runner / uv venv）
+tools/raycast-scripts/ocr/.debug.log
+tools/raycast-scripts/ocr/.toast-*.ps1
+tools/raycast-scripts/ocr/.venv314/

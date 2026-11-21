@@ -2,8 +2,66 @@
 #Include ..\..\shared\notify\run-nowindow.ahk
 #Include ..\..\shared\notify\translation-panel.ahk
 
+; 请求序号只负责"谁是最新请求"。旧请求完成时必须被丢弃，
+; 不能覆盖或关闭新请求已经打开的面板。
+class TranslationRequestGate {
+    __New() {
+        this.NextId := 0
+        this.CurrentId := 0
+    }
+
+    Begin() {
+        this.NextId += 1
+        this.CurrentId := this.NextId
+        return this.CurrentId
+    }
+
+    CancelCurrent() {
+        this.CurrentId := 0
+    }
+
+    IsCurrent(id) {
+        return id != 0 && id = this.CurrentId
+    }
+
+    Complete(id) {
+        if !this.IsCurrent(id)
+            return "discard"
+        this.CurrentId := 0
+        return "apply"
+    }
+}
+
+; 纯决策层：异步任务完成时该做什么。测试可以直接覆盖乱序/取消/用户关闭。
+class TranslationCompletionPolicy {
+    static Decide(gate, requestId, jobStatus, dismissed, panelOpened, panelOpen) {
+        if !gate.IsCurrent(requestId)
+            return "discard-stale"
+        if dismissed
+            return "discard-dismissed"
+        if (jobStatus = "cancelled")
+            return "discard-cancelled"
+        if (jobStatus = "timedout")
+            return "timeout"
+        if (jobStatus != "exited")
+            return "error"
+        if (panelOpened && !panelOpen)
+            return "discard-dismissed"
+        return panelOpened ? "apply" : "apply-fallback"
+    }
+}
+
 class TranslateSelectedText {
     static CachedRepoDir := ""
+    static ProcessTimeoutMs := 14000
+    static PollIntervalMs := 100
+    static LogKeepLines := 200
+    static RequestGate := TranslationRequestGate()
+    static Tasks := []
+    static CurrentTask := ""
+    static PollTimer := ""
+    ; 测试注入用；生产保持 0。只影响面板/通知副作用，不影响轮询和状态机。
+    static Hooks := 0
 
     static RepoDir() {
         if (this.CachedRepoDir != "")
@@ -35,6 +93,31 @@ class TranslateSelectedText {
         return this.RepoDir() "\tools\translate\config.toml"
     }
 
+    static LogPath() {
+        return A_Temp "\lat3ncy-translate.log"
+    }
+
+    ; 只写诊断字段（code/engine/detail），不写原文，也不写密钥。
+    static Log(message) {
+        try {
+            path := this.LogPath()
+            line := "[" FormatTime(, "yyyy-MM-dd HH:mm:ss") "] " StrReplace(message, "`n", " ") "`n"
+            FileAppend line, path, "UTF-8"
+            if FileExist(path) {
+                lines := StrSplit(RTrim(FileRead(path, "UTF-8"), "`r`n"), "`n")
+                if (lines.Length > this.LogKeepLines) {
+                    keep := ""
+                    start := lines.Length - this.LogKeepLines + 1
+                    loop this.LogKeepLines
+                        keep .= lines[start + A_Index - 1] "`n"
+                    FileDelete path
+                    FileAppend keep, path, "UTF-8"
+                }
+            }
+        } catch {
+        }
+    }
+
     static ParseField(content, name) {
         needle := "m)^" name "="
         if !RegExMatch(content, needle, &match)
@@ -49,17 +132,46 @@ class TranslateSelectedText {
         return Trim(SubStr(rest, 1, lineEnd - 1), "`r")
     }
 
+    static MessageForError(code, message, length := "", maxChars := "") {
+        switch code {
+            case "too_long":
+                ; 界面必须能看出"原文多长、上限多少"，不能只显示上限。
+                if (length != "" && maxChars != "")
+                    return "文本过长（" length " 字符，上限 " maxChars "）"
+                return message != "" ? message : "文本过长，未翻译"
+            case "auth":
+                return message != "" ? message : "翻译密钥无效"
+            case "config":
+                return message != "" ? message : "翻译配置错误"
+            case "timeout":
+                return message != "" ? message : "翻译超时"
+            case "network":
+                return message != "" ? message : "翻译失败（网络）"
+            case "io":
+                return message != "" ? message : "翻译失败（文件读写）"
+            case "internal":
+                return message != "" ? message : "翻译失败（内部错误）"
+            default:
+                return message != "" ? message : "翻译失败"
+        }
+    }
+
     static Translate(_hotkeyName := "", receiverProbe := unset) {
         if IsSet(receiverProbe)
             return receiverProbe.Call(this)
 
         ; 热键瞬间的屏幕物理像素。必须先记，不能等 Ctrl+C / 翻译完成后再读光标。
         ; AHK v2 默认 CoordMode Mouse=Client：右边窗口里的客户区 (336,378)
-        ; 会被 WinUI 当成屏幕坐标，面板就会落到左半边。本热键线程只改 Mouse。
+        ; 会被 WinUI 当成屏幕坐标，面板就会落到左半边。
+        ; CoordMode 是全局设置：取完必须还原，否则 find-mouse 之类的功能会拿到错的坐标。
+        savedMouseCoordMode := A_CoordModeMouse
         CoordMode "Mouse", "Screen"
         hotkeyX := 0
         hotkeyY := 0
-        MouseGetPos &hotkeyX, &hotkeyY
+        try
+            MouseGetPos &hotkeyX, &hotkeyY
+        finally
+            CoordMode "Mouse", savedMouseCoordMode
 
         savedClipboard := ClipboardAll()
         selected := ""
@@ -92,60 +204,229 @@ class TranslateSelectedText {
             return
         }
 
-        stamp := A_TickCount "-" Random(1000, 9999)
+        ; 连续触发：旧请求立即取消，它完成后的结果会因序号过期被丢弃。
+        this.CancelCurrent()
+
+        requestId := this.RequestGate.Begin()
+        stamp := A_TickCount "-" requestId "-" Random(1000, 9999)
         inputFile := A_Temp "\lat3ncy-translate-in-" stamp ".txt"
         outputFile := A_Temp "\lat3ncy-translate-out-" stamp ".txt"
         try FileDelete inputFile
         try FileDelete outputFile
+
+        cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '" --output-file "' outputFile '"'
+        if FileExist(configPath)
+            cmd .= ' --config "' configPath '"'
+
+        job := ""
+        panelOpened := false
         try {
             FileAppend selected, inputFile, "UTF-8"
-            cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '" --output-file "' outputFile '"'
-            if FileExist(configPath)
-                cmd .= ' --config "' configPath '"'
             ; 翻译一开始就打开 WinUI 面板显示原文。
-            TranslationPanel.OpenText(selected, hotkeyX, hotkeyY)
-            ; 腾讯云 4s + Google/MyMemory 回退；略大于 3*timeout_s，避免父进程先杀。
-            ProcessNoWindow.RunWait(cmd, "", 14000)
-
-            if !FileExist(outputFile) {
-                TranslationPanel.Close()
-                Notify.Error("×", "翻译失败")
-                return
-            }
-            content := FileRead(outputFile, "UTF-8")
-            status := this.ParseField(content, "status")
-            if (status = "ok") {
-                text := this.ParseField(content, "text")
-                text := Trim(text, "`r`n")
-                if (text = "") {
-                    TranslationPanel.Close()
-                    Notify.Error("!", "未包含可翻译文字")
-                    return
-                }
-                ; 面板填显式译文；密钥/网络错误关闭面板后走系统 Toast。
-                TranslationPanel.SetResult(text)
-                return
-            }
-            ; 失败时关掉翻译面板，避免还挂着旧原文 / 占位译文。
-            TranslationPanel.Close()
-            code := this.ParseField(content, "code")
-            message := this.ParseField(content, "message")
-            ; Python 已写好「腾讯云密钥无效 / 阿里云密钥无效」；缺省时用通用文案。
-            if (code = "auth" && message = "")
-                message := "翻译密钥无效"
-            if (message = "")
-                message := "翻译失败"
-            Notify.Error("×", message)
+            panelOpened := TranslationPanel.OpenText(selected, hotkeyX, hotkeyY)
+            ; 非等待启动：热键线程立刻返回，翻译在子进程里跑，AHK 定时器不受阻。
+            job := ProcessNoWindow.StartAsync(cmd, "", this.ProcessTimeoutMs)
         } catch as err {
-            TranslationPanel.Close()
-            if InStr(err.Message, "超时")
-                Notify.Error("×", "翻译超时")
-            else
-                Notify.Error("×", "翻译失败")
-        } finally {
             try FileDelete inputFile
             try FileDelete outputFile
+            try TranslationPanel.Close()
+            this.Log("start-failed id=" requestId " error=" err.Message)
+            Notify.Error("×", "翻译失败")
+            return
         }
+
+        task := {
+            id: requestId,
+            job: job,
+            inputFile: inputFile,
+            outputFile: outputFile,
+            panelOpened: panelOpened,
+            dismissed: false
+        }
+        this.Tasks.Push(task)
+        this.CurrentTask := task
+        this.EnsurePoll()
+        this.Log("begin id=" requestId " chars=" StrLen(selected) " pid=" job.Pid " panel=" panelOpened)
+    }
+
+    static CancelCurrent() {
+        task := this.CurrentTask
+        this.CurrentTask := ""
+        this.RequestGate.CancelCurrent()
+        if IsObject(task) {
+            this.Log("cancel id=" task.id)
+            if !task.job.Done
+                task.job.Cancel()
+        }
+    }
+
+    static EnsurePoll() {
+        if (this.PollTimer != "")
+            return
+        this.PollTimer := ObjBindMethod(this, "Poll")
+        SetTimer(this.PollTimer, this.PollIntervalMs)
+    }
+
+    static StopPoll() {
+        if (this.PollTimer = "")
+            return
+        try SetTimer(this.PollTimer, 0)
+        this.PollTimer := ""
+    }
+
+    static ReadOutput(path) {
+        if !FileExist(path)
+            return ""
+        try
+            return FileRead(path, "UTF-8")
+        catch
+            return ""
+    }
+
+    static CleanupTaskFiles(task) {
+        try FileDelete task.inputFile
+        try FileDelete task.outputFile
+    }
+
+    static IsPanelOpen() {
+        if (IsObject(this.Hooks) && this.Hooks.Has("panelOpen"))
+            return this.Hooks["panelOpen"].Call()
+        return TranslationPanel.IsOpen()
+    }
+
+    static ShowError(message) {
+        if (IsObject(this.Hooks) && this.Hooks.Has("error")) {
+            this.Hooks["error"].Call(message)
+            return
+        }
+        Notify.Error("×", message)
+    }
+
+    static ShowPopup(text) {
+        if (IsObject(this.Hooks) && this.Hooks.Has("popup")) {
+            this.Hooks["popup"].Call(text)
+            return
+        }
+        Notify.Popup(text, 8000)
+    }
+
+    static SetPanelResult(text) {
+        if (IsObject(this.Hooks) && this.Hooks.Has("result")) {
+            this.Hooks["result"].Call(text)
+            return
+        }
+        TranslationPanel.SetResult(text)
+    }
+
+    static ClosePanel() {
+        if (IsObject(this.Hooks) && this.Hooks.Has("close")) {
+            this.Hooks["close"].Call()
+            return
+        }
+        TranslationPanel.Close()
+    }
+
+    ; 定时器里只做非阻塞轮询和一次性完成处理。绝不 WaitForSingleObject 等待子进程。
+    static Poll(*) {
+        if (this.Tasks.Length = 0) {
+            this.StopPoll()
+            return
+        }
+
+        remaining := []
+        for task in this.Tasks {
+            ; Done 只由 Job.Poll() 推进；定时器必须实际轮询子进程。
+            task.job.Poll()
+            if !task.job.Done {
+                ; 用户关掉面板就取消请求；不要再把结果塞回已关的面板。
+                if (this.CurrentTask = task && task.panelOpened && !this.IsPanelOpen()) {
+                    task.dismissed := true
+                    task.job.Cancel()
+                    this.Log("dismiss id=" task.id)
+                }
+                remaining.Push(task)
+                continue
+            }
+
+            status := task.job.Status
+            isCurrent := (this.CurrentTask = task)
+            panelOpen := task.panelOpened ? this.IsPanelOpen() : false
+            decision := TranslationCompletionPolicy.Decide(
+                this.RequestGate, task.id, status, task.dismissed, task.panelOpened, panelOpen)
+
+            if isCurrent {
+                this.CurrentTask := ""
+                this.RequestGate.CancelCurrent()
+            }
+
+            switch decision {
+                case "apply", "apply-fallback":
+                    this.ApplyResult(task, decision = "apply-fallback")
+                case "timeout":
+                    this.Fail(task, "翻译超时", "timeout")
+                case "error":
+                    this.Fail(task, "翻译失败", status)
+                case "discard-stale":
+                    this.Log("discard-stale id=" task.id " status=" status)
+                case "discard-dismissed":
+                    this.Log("discard-dismissed id=" task.id)
+                case "discard-cancelled":
+                    this.Log("discard-cancelled id=" task.id)
+                default:
+                    this.Log("discard-unknown id=" task.id " decision=" decision)
+            }
+            ; 结果文件必须先读后删。
+            this.CleanupTaskFiles(task)
+        }
+
+        this.Tasks := remaining
+        if (this.Tasks.Length = 0)
+            this.StopPoll()
+    }
+
+    static ApplyResult(task, fallback) {
+        content := this.ReadOutput(task.outputFile)
+        status := this.ParseField(content, "status")
+        if (status != "ok") {
+            code := this.ParseField(content, "code")
+            message := this.ParseField(content, "message")
+            length := this.ParseField(content, "length")
+            maxChars := this.ParseField(content, "max_chars")
+            detail := this.ParseField(content, "detail")
+            engine := this.ParseField(content, "engine")
+            userMessage := this.MessageForError(code, message, length, maxChars)
+            this.Fail(task, userMessage, code " detail=" detail " engine=" engine)
+            return
+        }
+
+        text := Trim(this.ParseField(content, "text"), "`r`n")
+        if (text = "") {
+            this.Fail(task, "未包含可翻译文字", "empty-result")
+            return
+        }
+
+        engine := this.ParseField(content, "engine")
+        cached := this.ParseField(content, "cached")
+        if fallback {
+            ; 面板不可用（HUD 未启动成功）时保留翻译能力，用 AHK popup 兜底。
+            try this.ShowPopup(text)
+            this.Log("ok-popup id=" task.id " engine=" engine " cached=" cached)
+            return
+        }
+
+        ; 用户可能在完成回调前刚关掉面板；此时丢弃结果，不重新打开。
+        if !this.IsPanelOpen() {
+            this.Log("discard-race id=" task.id)
+            return
+        }
+        this.SetPanelResult(text)
+        this.Log("ok id=" task.id " engine=" engine " cached=" cached " chars=" StrLen(text))
+    }
+
+    static Fail(task, message, diagnostic) {
+        try this.ClosePanel()
+        this.Log("fail id=" task.id " message=" message " diagnostic=" SubStr(diagnostic, 1, 240))
+        this.ShowError(message)
     }
 }
 

@@ -18,8 +18,6 @@ internal static class TranslationResult
         Explicit
     }
 
-    public const int MaxChars = 4000;
-
     public readonly struct Result
     {
         public Kind Kind { get; init; }
@@ -118,6 +116,13 @@ internal static class TranslationResult
         Result inferredPayload = Resolve("", "你好");
         if (!inferredPayload.Ok || inferredPayload.Kind != Kind.Explicit || inferredPayload.Text != "你好")
             return 412;
+        string longText = new string('x', 3999) + "😀" + new string('y', 2000);
+        Result full = FromExplicit(longText);
+        if (!full.Ok || full.Text != longText)
+            return 413;
+        TranslationCopy.Outcome copy = TranslationCopy.Resolve("result", TranslationSource.Empty(), full);
+        if (!copy.Ok || copy.Text != longText)
+            return 414;
         return 0;
     }
 
@@ -130,9 +135,6 @@ internal static class TranslationResult
     {
         if (string.IsNullOrWhiteSpace(text))
             return "";
-        string trimmed = text.Replace("\0", "").Trim();
-        if (trimmed.Length <= MaxChars)
-            return trimmed;
-        return trimmed[..MaxChars];
+        return text.Replace("\0", "").Trim();
     }
 }

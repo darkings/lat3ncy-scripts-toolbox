@@ -21,7 +21,6 @@ Python 解释器的查找方式上。移动端模型从 ModelScope 官方仓库�
 """
 
 import hashlib
-import importlib.util
 import os
 import platform
 import shutil
@@ -100,8 +99,29 @@ def find_python() -> list[str] | None:
 
 
 def module_installed(package: str) -> bool:
+    """真实 import 检测，而非 find_spec。
+
+    find_spec 只看模块是否存在，不加载二进制扩展；scoop 升级 Python 后
+    旧的 cp314 .pyd 还躺在 site-packages 里（persist junction），find_spec
+    会误报“已安装”，import 才会暴露 ModuleNotFoundError / DLL load failed。
+    """
     import_name = IMPORT_NAMES.get(package, package)
-    return import_name is not None and importlib.util.find_spec(import_name) is not None
+    if import_name is None:
+        return False
+    try:
+        __import__(import_name)
+    except Exception:
+        return False
+    return True
+
+
+def python_minor_supported() -> bool:
+    """onnxruntime 官方 wheel 通常滞后最新 Python 一个小版本。
+
+    此函数保留为扩展点；当前 pip 报“无匹配版本”时的指引已在
+    main() 的失败提示里给出（换上一个稳定版 Python 或改用 system 引擎）。
+    """
+    return True
 
 
 def run(
@@ -202,27 +222,42 @@ def main() -> int:
         )
     print(f"使用解释器：{' '.join(python)}")
 
-    missing = [pkg for pkg in PIP_PACKAGES if not module_installed(pkg)]
-    if not missing:
-        print("依赖已全部就绪：" + ", ".join(PIP_PACKAGES))
-        if "--check" in sys.argv:
-            return 0
-        verify_engine(python)
-    else:
-        print("缺少依赖：" + ", ".join(missing))
+    # import 检测会把“装了但二进制不兼容”的包也判为缺失（这是想要的）：
+    # scoop/conda 类包管理器升级 Python 后，旧解释器编译的 .pyd 无法 import，
+    # 必须强制重装当前版本的 wheel，find_spec 会漏报。
+    broken_or_missing = [pkg for pkg in PIP_PACKAGES if not module_installed(pkg)]
+    if broken_or_missing:
+        print("缺失或不可导入（可能为旧 Python 版本的二进制包）：" + ", ".join(broken_or_missing))
         if "--check" in sys.argv:
             print("--check 模式：跳过安装。")
             return 1
 
-        run(python + ["-m", "pip", "install"] + missing, check_message="安装缺失依赖")
+        run(
+            python + ["-m", "pip", "install", "--force-reinstall"] + broken_or_missing,
+            check_message="强制重装缺失/损坏依赖",
+        )
 
         print("\n验证安装结果：")
-        for package in missing:
-            if not module_installed(package):
-                raise SystemExit(f"验证失败：{package} 安装后仍无法导入")
+        still_broken = [pkg for pkg in broken_or_missing if not module_installed(pkg)]
+        if still_broken:
+            print(
+                "\n以下依赖安装后仍无法导入："
+                + ", ".join(still_broken)
+                + "\n常见原因："
+                + "\n  1. 当前 Python 版本还没有对应的二进制 wheel（onnxruntime 官方"
+                + "wheel 通常滞后最新 Python 一个小版本）"
+                + "\n     -> 换用上一个稳定版 Python，或把 ocr/config.toml 的 ocr 字段"
+                + "改为 \"system\" 用系统 OCR（Win+Shift+T）"
+            )
+            raise SystemExit("依赖验证失败")
+        for package in still_broken or broken_or_missing:
             print(f"  OK {package}")
+    else:
+        print("依赖已全部就绪：" + ", ".join(PIP_PACKAGES))
+        if "--check" in sys.argv:
+            return 0
 
-        verify_engine(python)
+    verify_engine(python)
 
     if prompt_yes_no("是否下载 PP-OCRv4 移动端模型（识别更快、精度略降）？"):
         print("\n下载 PP-OCRv4 移动端模型（mobile）：")

@@ -339,7 +339,6 @@ if ($Mode -eq 'Screenshot')
 {
   $directory = Get-ToolboxKnownFolderPath -FolderId 'B7BEDE81-DF94-4682-A7D8-57A52620B86F' -FallbackPath (Join-Path $pictures 'Screenshots')
   $extensions = @('.png', '.jpg', '.jpeg')
-  $title = '✓ 截图已保存'
   if (-not (Test-Path -LiteralPath $directory -PathType Container))
   {
     exit 0
@@ -353,7 +352,6 @@ if ($Mode -eq 'Screenshot')
 {
   $directory = Get-ToolboxKnownFolderPath -FolderId 'EDC0FE71-98D8-4F4A-B920-C8DC90DB7AE9' -FallbackPath (Join-Path $videos 'Captures')
   $extensions = @('.mp4', '.mov', '.mkv')
-  $title = '✓ 录屏已保存'
   if (-not (Test-Path -LiteralPath $directory -PathType Container))
   {
     exit 0
@@ -373,12 +371,11 @@ if (-not (Wait-CaptureFileStable -Path $file.FullName))
   exit 0
 }
 
-# 保存位置有文件不等于剪贴板有内容；复制失败也不阻断路径通知。
+# 保存位置有文件不等于剪贴板有内容；保证剪贴板写入后静默退出，避免与系统截图/录屏原生通知重复。
 try
 {
   Copy-CaptureFileToClipboard -Path $file.FullName -Mode $Mode
 }
 catch {}
 
-Show-SystemToast -Title $title -Message $file.FullName | Out-Null
 exit 0

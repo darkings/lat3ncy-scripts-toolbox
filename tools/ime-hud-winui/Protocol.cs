@@ -58,6 +58,34 @@ internal static class Protocol
         return source is "text-caret" or "value-caret" or "imm-caret" or "win32-caret";
     }
 
+    /// <summary>
+    /// 日志用的命令摘要：只给「类型 + 字符数」，绝不落原文。
+    /// PANEL|TEXT / PANEL|RESULT 会带着整段译文，而 HudLog 要写三个位置且没有轮转。
+    /// </summary>
+    public static string Describe(string? command)
+    {
+        if (string.IsNullOrEmpty(command))
+            return "empty";
+
+        int cut = command.IndexOf('|');
+        if (cut >= 0)
+        {
+            int second = command.IndexOf('|', cut + 1);
+            if (second > cut)
+                cut = second;
+        }
+
+        string head = cut >= 0 ? command.Substring(0, cut) : command;
+        var safe = new StringBuilder(head.Length + 12);
+        foreach (char c in head)
+        {
+            // 段名只可能是字母 / 数字 / 下划线；换行等一律丢弃，避免伪造日志行。
+            if (char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '|')
+                safe.Append(c);
+        }
+        return safe.ToString() + "|chars=" + command.Length;
+    }
+
     public static Message Parse(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -270,7 +298,7 @@ internal static class Protocol
         IntPtr existing = FindExistingWindowWithRetry();
         HudLog.Line("forward-find hwnd=" + existing.ToInt64()
             + " class=" + Native.GetWindowClassName(existing)
-            + " command=" + (command ?? ""));
+            + " command=" + Describe(command));
         if (existing == IntPtr.Zero)
             return false;
         if (string.IsNullOrWhiteSpace(command))

@@ -17,6 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
+. (Join-Path $PSScriptRoot 'ocr\OcrHost.ps1')
 
 trap {
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
@@ -90,47 +91,106 @@ if ($mode -eq 'rapidocr')
     exit 0
   }
 
-  $pythonw = Get-Command pythonw.exe -ErrorAction SilentlyContinue
-  if (-not $pythonw)
+  # Python 解析顺序：
+  #   1. venv 声明的同版本基础 pythonw + -I -S/ocr_host.py；依赖仍只用该 venv。
+  #      基础宿主避免仓库 Low 标签导致通知 API 失败，不改 ACL/安装包。
+  #   2. ocr\.venv314\Scripts\pythonw.exe —— 基础宿主不可用时保留旧入口。
+  #      RapidOCR 的 onnxruntime 只有 cp311-cp314 wheel，scoop 全局 Python 是 3.15
+  #      时装不上；venv 自带 .gitignore（uv 生成），不入库。
+  #   3. 全局 pythonw / pyw —— venv 不存在时兜底（Python ≤3.14 的机器直接可用）。
+  $pythonCandidates = @()
+  $venvPythonw = Join-Path $PSScriptRoot 'ocr\.venv314\Scripts\pythonw.exe'
+  if (Test-Path -LiteralPath $venvPythonw -PathType Leaf)
   {
-    $pythonw = Get-Command pyw.exe -ErrorAction SilentlyContinue
+    $pythonCandidates += $venvPythonw
   }
-  if (-not $pythonw)
+  $pythonCandidates += Get-Command pythonw.exe -ErrorAction SilentlyContinue
+  $pythonCandidates += Get-Command pyw.exe -ErrorAction SilentlyContinue
+
+  $pythonExe = $null
+  $hostPrefix = @()
+  foreach ($candidate in $pythonCandidates)
+  {
+    if ($candidate -is [string])
+    {
+      $pythonExe = $candidate
+      break
+    }
+    if ($candidate -and $candidate.Source)
+    {
+      $pythonExe = $candidate.Source
+      break
+    }
+  }
+  $hostSpec = Get-OcrLaunchSpec -ModuleDirectory (Join-Path $PSScriptRoot 'ocr')
+  if ($hostSpec) {
+    $pythonExe = $hostSpec.Python
+    $ocrScript = $hostSpec.Script
+    $hostPrefix = $hostSpec.Prefix
+  }
+  if (-not $pythonExe)
   {
     Show-SystemToast -Title '× OCR 失败' -Message '未找到 Python 运行环境' | Out-Null
     exit 0
   }
 
+  # Raycast host 对 scriptCommands.runScript 的 IPC 请求有 30s 硬超时
+  # （脚本头 @raycast.timeout 90000 管不到这层）；uv venv 冷启动 + RapidOCR
+  # 三模型加载实测可超 30s，Raycast UI 会提前弹 "Script execution failed"，
+  # 虽然脚本仍在正常跑（2026-11-06 实测：13:46:48 runScript → 13:47:18 超时报错，
+  # 截图 13:46:52 已进剪贴板）。
+  # 因此这里不等待：pythonw detached 启动，ps1 立即 exit 0；
+  # 结果 Toast 由 ocr.py --notify-on-done 自己负责（ocr.py 复用 shared/notify/toast.ps1）。
+  # 启动优先级：
+  #   1. WMI Win32_Process.Create —— 无句柄继承、不在调用方进程树/Job 里（实测 1.7s 退出）
+  #   2. 普通 Start-Process（不加 -WindowStyle）—— 兜底；-WindowStyle 会强制
+  #      UseShellExecute=false，pythonw 继承 stdout 管道，Raycast 要等整棵树结束
+  #      → 必然 30s 超时（2026-11-06 实测 EXIT/close 40s 不触发）
+  # 日志写在仓库内 ocr\.debug.log（MSIX 不虚拟化 Projects 目录，两种上下文都能写）。
+  $debugLog = Join-Path $PSScriptRoot 'ocr\.debug.log'
+  function Write-OcrDebug([string] $message)
+  {
+    try
+    {
+      ('{0} {1}' -f (Get-Date).ToString('HH:mm:ss.fff'), $message) |
+        Out-File -FilePath $debugLog -Append -Encoding utf8 -ErrorAction SilentlyContinue
+    } catch {}
+  }
+
   $resultFile = Join-Path $env:TEMP (
     'lat3ncy-ocr-result-{0}.txt' -f [guid]::NewGuid().ToString('N')
   )
-  $process = Start-Process -FilePath $pythonw.Source `
-    -ArgumentList ('"{0}"' -f $ocrScript), '--no-screenshot', '--result-file', ('"{0}"' -f $resultFile) `
-    -PassThru
-  $process.WaitForExit(90000) | Out-Null
+  Write-OcrDebug ('ps1 mode=rapidocr user={0} python={1} result={2}' -f $env:USERNAME, $pythonExe, $resultFile)
 
-  if ($process.ExitCode -ne 0)
+  $prefixLine = if ($hostPrefix.Count) { ($hostPrefix -join ' ') + ' ' } else { '' }
+  $cmdLine = '"{0}" {1}"{2}" --no-screenshot --result-file "{3}" --notify-on-done' -f $pythonExe, $prefixLine, $ocrScript, $resultFile
+  $spawned = $false
+  try
   {
-    Show-SystemToast -Title '× OCR 失败' -Message '识别进程异常退出' | Out-Null
-  } elseif (Test-Path -LiteralPath $resultFile)
+    $spawn = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmdLine }
+    Write-OcrDebug ('wmi rv={0} pid={1}' -f $spawn.ReturnValue, $spawn.ProcessId)
+    $spawned = ($spawn.ReturnValue -eq 0)
+  } catch
   {
-    $text = [System.IO.File]::ReadAllText($resultFile, [System.Text.Encoding]::UTF8)
-    if (-not $text)
-    {
-      Show-SystemToast -Title '! 未识别到文字' -Message '所选区域内未检测到有效字符' | Out-Null
-    } else
-    {
-      $preview = $text.Trim()
-      if ($preview.Length -gt 90) {
-        $preview = $preview.Substring(0, 90) + '...'
-      }
-      Show-SystemToast -Title '✓ OCR 文本已复制' -Message $preview | Out-Null
-    }
-  } else
-  {
-    Show-SystemToast -Title '○ OCR 已取消' -Message '未检测到截图，请重新框选' | Out-Null
+    Write-OcrDebug ('wmi threw: {0}' -f $_.Exception.Message)
   }
-  Remove-Item -LiteralPath $resultFile -ErrorAction SilentlyContinue
+
+  if (-not $spawned)
+  {
+    try
+    {
+      $started = Start-Process -FilePath $pythonExe `
+        -ArgumentList ($hostPrefix + @(('"{0}"' -f $ocrScript), '--no-screenshot', '--result-file', ('"{0}"' -f $resultFile), '--notify-on-done')) `
+        -PassThru
+      Write-OcrDebug ('fallback start-process pid={0}' -f $started.Id)
+    } catch
+    {
+      Write-OcrDebug ('fallback threw: {0}' -f $_.Exception.Message)
+      Show-SystemToast -Title '× OCR 失败' -Message ('无法启动 OCR 进程：' + $_.Exception.Message) | Out-Null
+    }
+  }
+
+  Write-OcrDebug 'ps1 exit'
   exit 0
 } else
 {

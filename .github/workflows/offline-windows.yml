@@ -1,0 +1,36 @@
+name: Offline Windows regression
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run isolated tests with Windows PowerShell 5.1
+        shell: powershell
+        run: .\ahk\tests\run-offline-tests.ps1
+      - name: Check JSON timestamp compatibility with PowerShell 7
+        shell: pwsh
+        run: .\tools\startup\tests\PowerPolicyHeartbeat.Tests.ps1
+      - name: Build managed helpers and verify exact source/artifact hashes
+        shell: powershell
+        run: .\tools\build\Build-ManagedHelpers.ps1
+  winui:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.404'
+      - name: Build WinUI from source and run the non-UI self-test
+        shell: powershell
+        run: .\tools\ime-hud-winui\Build-ImeHud.ps1

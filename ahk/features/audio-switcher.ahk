@@ -5,9 +5,14 @@ class AudioSwitcher {
     static Busy := false
     static LastTick := 0
     static DebounceMs := 700
-    ; 必须大于 C# connect_wait_ms(12s) + 蓝牙枚举余量，避免父进程先杀子进程。
-    ; 自动提权重试会共用这一份总预算，不会再叠一个完整 18s。
-    static ChildTimeoutMs := 18000
+    ; 必须大于 C# 最坏路径（建链/等待 + A2DP 重协商 ~19s + 恢复后再等 14s）+ 蓝牙枚举余量。
+    ; 耳机睡眠时 A2DP 重协商本身要十几秒，超时给短了会在成功前被父进程杀掉。
+    ; 自动提权重试会共用这一份总预算，不会再叠一个完整预算。
+    static ChildTimeoutMs := 48000
+    static PollIntervalMs := 100
+    static Job := ""
+    static Task := ""
+    static PollTimer := ""
 
     static ExePath() {
         SplitPath A_LineFile, , &featuresDir
@@ -63,28 +68,6 @@ class AudioSwitcher {
         return this.IsPermissionError(detail)
     }
 
-    static RunToggle(exe, timeoutMs, stdoutFile) {
-        try {
-            try FileDelete stdoutFile
-            try {
-                ProcessNoWindow.RunWait('"' exe '" --toggle', stdoutFile, timeoutMs)
-            } catch as runErr {
-                if InStr(runErr.Message, "无法创建输出文件") {
-                    ; 保底：不带输出文件直接执行切换，至少完成 SetDefault。
-                    ProcessNoWindow.RunWait('"' exe '" --toggle', "", timeoutMs)
-                    Notify.Success("🔊", "已执行切换（无输出文件）")
-                    return { status: "SWITCHED", detail: "无输出文件", handled: true }
-                }
-                throw runErr
-            }
-            output := ""
-            try output := Trim(FileRead(stdoutFile, "UTF-8"))
-            return this.ParseProtocol(output)
-        } finally {
-            try FileDelete stdoutFile
-        }
-    }
-
     static ResolveSudo() {
         sudoExe := "C:\Windows\System32\sudo.exe"
         if FileExist(sudoExe)
@@ -94,37 +77,135 @@ class AudioSwitcher {
         return ""
     }
 
-    static RunToggleElevated(exe, timeoutMs) {
+    static BuildToggleCommand(exe, elevated := false) {
+        if !elevated
+            return '"' exe '" --toggle'
         useSudo := this.ResolveSudo()
         if (useSudo = "")
-            return { status: "", detail: "", handled: false, ran: false }
-        tempSudo := A_Temp "\lat3ncy-audio-switcher-sudo-" A_TickCount "-" Random(1000, 9999) ".txt"
+            return ""
+        if InStr(useSudo, "sudo.exe")
+            return useSudo " --inline `"" exe "`" --toggle"
+        if InStr(useSudo, "gsudo")
+            return useSudo " --wait `"" exe "`" --toggle"
+        return useSudo " `"" exe "`" --toggle"
+    }
+
+    ; 非等待启动。输出文件被占用时退回无输出模式（仍执行 SetDefault）。
+    static StartToggleJob(command, timeoutMs) {
+        tempFile := A_Temp "\lat3ncy-audio-switcher-" A_TickCount "-" Random(1000, 9999) ".txt"
+        try FileDelete tempFile
         try {
-            if InStr(useSudo, "sudo.exe")
-                cmdSudo := useSudo " --inline `"" exe "`" --toggle"
-            else if InStr(useSudo, "gsudo")
-                cmdSudo := useSudo " --wait `"" exe "`" --toggle"
-            else
-                cmdSudo := useSudo " `"" exe "`" --toggle"
-            result := this.RunToggleCommand(cmdSudo, timeoutMs, tempSudo)
-            result.ran := true
-            return result
-        } finally {
-            try FileDelete tempSudo
+            job := ProcessNoWindow.StartAsync(command, tempFile, timeoutMs)
+            return { job: job, outputFile: tempFile, noOutput: false }
+        } catch as err {
+            if InStr(err.Message, "无法创建输出文件") {
+                job := ProcessNoWindow.StartAsync(command, "", timeoutMs)
+                return { job: job, outputFile: "", noOutput: true }
+            }
+            throw err
         }
     }
 
-    static RunToggleCommand(command, timeoutMs, stdoutFile) {
+    static EnsurePoll() {
+        if (this.PollTimer != "")
+            return
+        this.PollTimer := ObjBindMethod(this, "Poll")
+        SetTimer(this.PollTimer, this.PollIntervalMs)
+    }
+
+    static StopPoll() {
+        if (this.PollTimer = "")
+            return
+        try SetTimer(this.PollTimer, 0)
+        this.PollTimer := ""
+    }
+
+    static Finish(message := "") {
+        ; 直接丢弃仍在跑的任务会永久泄漏 hProcess/hJob，KILL_ON_JOB_CLOSE 也不会触发，
+        ; 子进程会在后台继续跑到 A2DP 重协商结束。先 Dispose 再清引用。
+        if (IsObject(this.Job) && !this.Job.Done) {
+            try this.Job.Dispose()
+        }
+        this.Busy := false
+        this.Job := ""
+        this.Task := ""
+        this.StopPoll()
+        if (message != "")
+            Notify.Error("×", message)
+    }
+
+    ; 定时器里只做非阻塞检查；原始 exe 最长 18s，不再堵住 AHK 热键线程。
+    static Poll(*) {
         try {
-            try FileDelete stdoutFile
-            ProcessNoWindow.RunWait(command, stdoutFile, timeoutMs)
+            if !IsObject(this.Job) {
+                this.StopPoll()
+                return
+            }
+            this.Job.Poll()
+            if !this.Job.Done {
+                ; 慢路径（A2DP 重协商）要十几秒：8s 后补一个 HUD，别让用户以为没反应。
+                if (IsObject(this.Task) && !this.Task.hudBumped && (A_TickCount - this.Task.startTick) > 8000) {
+                    this.Task.hudBumped := true
+                    try Notify.Info("⏳", "正在唤醒耳机，请稍候…", 6000)
+                }
+                return
+            }
+
+            job := this.Job
+            task := this.Task
+            this.Job := ""
+
             output := ""
-            try output := Trim(FileRead(stdoutFile, "UTF-8"))
-            parsed := this.ParseProtocol(output)
-            parsed.ran := true
-            return parsed
-        } finally {
-            try FileDelete stdoutFile
+            if (!task.phase.noOutput && task.phase.outputFile != "") {
+                try output := Trim(FileRead(task.phase.outputFile, "UTF-8"))
+                try FileDelete task.phase.outputFile
+            }
+
+            if (job.Status = "timedout") {
+                this.Finish("音频切换超时")
+                return
+            }
+            if (job.Status != "exited") {
+                this.Finish("音频切换失败")
+                return
+            }
+
+            if task.phase.noOutput {
+                ; 没有输出文件时只能看退出码：非 0 也报成功会掩盖真实失败。
+                if (job.ExitCode != 0) {
+                    this.Finish("音频切换失败（退出码 " job.ExitCode "）")
+                    return
+                }
+                Notify.Success("🔊", "已执行切换（无输出文件）")
+                this.Finish()
+                return
+            }
+
+            result := this.ParseProtocol(output)
+            if (!task.elevated && result.status = "ERROR" && this.ShouldAutoElevate(result.detail)) {
+                command := this.BuildToggleCommand(task.exe, true)
+                if (command != "") {
+                    try {
+                        Notify.Info("⏳", "权限错误，尝试提权重试…")
+                        phase := this.StartToggleJob(command, this.RemainingTimeout(task.startTick))
+                        this.Task := { startTick: task.startTick, phase: phase, exe: task.exe, elevated: true, hudBumped: true }
+                        this.Job := phase.job
+                        return
+                    } catch as sudoErr {
+                        ; 提权失败忽略，走原错误
+                    }
+                }
+            }
+
+            if this.ApplyProtocol(result.status, result.detail, task.elevated ? "已切换(提权)" : "已切换") {
+                if (result.status = "SWITCHED" || result.status = "ONLY_ONE")
+                    this.MarkSuccess()
+                this.Finish()
+                return
+            }
+            this.Finish(result.detail != "" ? result.detail : (task.elevated ? "音频切换失败(提权)" : "音频切换失败"))
+        } catch as err {
+            this.Finish("音频切换失败: " err.Message)
         }
     }
 
@@ -174,50 +255,20 @@ class AudioSwitcher {
             Notify.Info("⏳", "音频切换正在进行")
             return
         }
+
         this.Busy := true
         startTick := A_TickCount
-
+        ; 先出 HUD，再异步等 exe，避免 12s 空等看起来像“没反应”。
+        Notify.Info("⏳", "正在检查音频设备…", 3000)
         try {
-            ; 先出 HUD，再同步等 exe，避免 12s 空等看起来像“没反应”。
-            ; 先出 HUD 再等 exe。默认 info 只有 750ms，拉长以免真等待时提示先消失。
-            Notify.Info("⏳", "正在检查音频设备…", 3000)
-            try FileDelete A_Temp "\lat3ncy-audio-switcher.txt"
-            tempFile := A_Temp "\lat3ncy-audio-switcher-" A_TickCount "-" Random(1000, 9999) ".txt"
-            result := this.RunToggle(exe, this.ChildTimeoutMs, tempFile)
-            if result.handled {
-                this.MarkSuccess()
-                return
-            }
-
-            if (result.status = "ERROR" && this.ShouldAutoElevate(result.detail)) {
-                try {
-                    Notify.Info("⏳", "权限错误，尝试提权重试…")
-                    elevated := this.RunToggleElevated(exe, this.RemainingTimeout(startTick))
-                    if elevated.ran {
-                        if this.ApplyProtocol(elevated.status, elevated.detail, "已切换(提权)") {
-                            if (elevated.status = "SWITCHED" || elevated.status = "ONLY_ONE")
-                                this.MarkSuccess()
-                            return
-                        }
-                        Notify.Error("×", elevated.detail != "" ? elevated.detail : "音频切换失败(提权)")
-                        return
-                    }
-                } catch as sudoErr {
-                    ; 提权失败忽略，走原错误
-                }
-            }
-
-            if this.ApplyProtocol(result.status, result.detail) {
-                if (result.status = "SWITCHED" || result.status = "ONLY_ONE")
-                    this.MarkSuccess()
-                return
-            }
-            Notify.Error("×", result.detail != "" ? result.detail : "音频切换失败")
+            phase := this.StartToggleJob(this.BuildToggleCommand(exe, false), this.ChildTimeoutMs)
         } catch as err {
-            Notify.Error("×", "音频切换失败: " err.Message)
-        } finally {
-            this.Busy := false
+            this.Finish("音频切换失败: " err.Message)
+            return
         }
+        this.Task := { startTick: startTick, phase: phase, exe: exe, elevated: false, hudBumped: false }
+        this.Job := phase.job
+        this.EnsurePoll()
     }
 
     static GetDeviceIcon(name) {

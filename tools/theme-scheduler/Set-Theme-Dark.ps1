@@ -1,4 +1,8 @@
-﻿$ErrorActionPreference = 'Continue'
+﻿param(
+  [switch]$Force
+)
+
+$ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'ThemeUtils.ps1')
 
 $config = Get-ThemeConfig
@@ -6,13 +10,18 @@ $config = Get-ThemeConfig
 # 目标状态判断：不用「是否接近触发时刻」而用「当前时间应该是什么模式」。
 # Modern Standby 会把进程冻结数小时，唤醒后 Get-Date 已远离触发时刻，
 # 时间窗口会误判为「错过」而跳过；目标状态判断天然免疫这个问题。
-$schedule = Get-ThemeScheduleTimes -Config $config
-$desired = Get-DesiredThemeMode -Now (Get-Date) -RiseTime $schedule.RiseTime -SetTime $schedule.SetTime
-if ($desired -ne 'dark')
+if (-not $Force)
 {
-  Write-ThemeLog ("Set-Theme-Dark skipped: now={0} desired={1}" -f (Get-Date -Format 'HH:mm'), $desired)
-  return
+  $schedule = Get-ThemeScheduleTimes -Config $config
+  $desired = Get-DesiredThemeMode -Now (Get-Date) -RiseTime $schedule.RiseTime -SetTime $schedule.SetTime
+  if ($desired -ne 'dark')
+  {
+    Write-ThemeLog ("Set-Theme-Dark skipped: now={0} desired={1}" -f (Get-Date -Format 'HH:mm'), $desired)
+    return
+  }
 }
+
+$beforeState = Get-ThemePersonalizeState
 
 if ($config.general.switch_type -eq 'theme' -and $config.theme_settings.dark_theme_file)
 {
@@ -24,24 +33,26 @@ else
   Set-WindowsColorMode -Mode 'dark' -Config $config
 }
 
-# 壁纸：显式路径优先，否则按文件名取当前壁纸的下一张，和 Raycast 下一张共用顺序。
-$wallpaperImage = Resolve-WallpaperImage -Config $config -Mode 'dark'
-if ($config.wallpaper.enabled -and $wallpaperImage)
+# 只有"颜色真的变了"才派发尾巴（壁纸/光标/键盘灯/锁屏）。理由同 Set-Theme-Light.ps1。
+$afterState = Get-ThemePersonalizeState
+$colorChanged = $true
+if ($config.general.switch_type -ne 'theme')
 {
-  Set-DesktopWallpaper -ImagePath $wallpaperImage | Out-Null
+  $colorChanged = ([int]$beforeState.AppsUseLightTheme -ne [int]$afterState.AppsUseLightTheme) -or `
+                  ([int]$beforeState.SystemUsesLightTheme -ne [int]$afterState.SystemUsesLightTheme)
 }
 
-# 锁屏跟随：换过壁纸就用同一张，否则同步当前桌面壁纸（wallpaper.sync_lock_screen 控制）
-$lockScreenImage = if ($config.wallpaper.enabled -and $wallpaperImage) { $wallpaperImage } else { '' }
-
-
-# 颜色切完再换指针；缺文件或关闭 cursor.enabled 时静默跳过。
-Set-WindowsCursorScheme -Mode 'dark' -Config $config | Out-Null
-
-if ($config.general.show_notification)
+if ($config.general.show_notification -and $colorChanged)
 {
-  Invoke-ThemeNotify -Type 'state' -Icon '🌙' -Text '已切换为深色模式'
+  Invoke-ThemeNotify -Type 'state' -Icon ([char]::ConvertFromUtf32(0x1F319)) -Text '已切换为深色模式'
 }
 
-# 锁屏同步放最后：WinRT 调用不阻塞体感
-Sync-LockScreenWallpaper -Config $config -ImagePath $lockScreenImage | Out-Null
+if ($colorChanged)
+{
+  # 壁纸 / 光标 / 键盘灯 / 锁屏 全部交给独立进程，主脚本立刻返回
+  Start-ThemeTail -Mode 'dark' | Out-Null
+}
+else
+{
+  Write-ThemeLog 'Tail skipped: color unchanged (wallpaper/cursor/backlight/lockscreen)'
+}

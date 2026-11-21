@@ -62,24 +62,28 @@ class Notify {
         duration := this.ClampDuration(duration)
         level := this.PriorityMap.Has(type) ? this.PriorityMap[type] : 1
         now := A_TickCount
-        ; 高优先级保护：若当前正处于活跃的高优先级错误通知中，忽略低优先级瞬态 state 通知
-        if (now < this.ActiveUntil && this.CurrentLevel >= 4 && level < 3)
+        ; 高优先级保护只压「结果类」通知：错误 Toast 还挂在右下角时，别再叠一条成功/提示。
+        ; state / popup 是光标处的芯片，和 Toast 不在同一位置；压掉它等于 CapsLock
+        ; 切中英、音频切换这类操作完全没有反馈（而且它本来也不会和 Toast 打架）。
+        if (type != "state" && now < this.ActiveUntil && this.CurrentLevel >= 4 && level < 3)
             return false
-
-        this.CurrentLevel := level
-        this.ActiveUntil := now + duration
 
         ; state 走光标芯片；popup 走光标长气泡；其余结果走系统右下角 Toast
         if (type == "state" || type == "popup") {
             try {
                 this.HideToolTip()
                 NotifyRenderer.Show(type, icon, text, duration)
+                this.CurrentLevel := level
+                this.ActiveUntil := now + duration
                 return true
             } catch {
                 this.ShowToolTip(icon, text, duration)
                 return false
             }
         }
+
+        this.CurrentLevel := level
+        this.ActiveUntil := now + duration
 
         ; 连按只保留最后一条结果通知，避免 Toast 一条条排队弹出。
         this.PendingToast := {type: type, icon: icon, text: text, duration: duration}
@@ -148,8 +152,9 @@ class Notify {
         if this.ToolTipHideCallback
             SetTimer this.ToolTipHideCallback, 0
         ToolTip
-        this.CurrentLevel := 0
-        this.ActiveUntil := 0
+        ; 不再清零 CurrentLevel / ActiveUntil：它们表示「最近一次通知的优先级」，
+        ; 由 ActiveUntil 自己过期。在这里清零会让错误 Toast 的保护被任意一次
+        ; ToolTip / 芯片调用提前打断。
     }
 }
 

@@ -79,6 +79,102 @@ class PreferencesTests(unittest.TestCase):
             with self.assertRaises(prefs.PreferenceError):
                 prefs.snapshot()
 
+    def test_defaults_preview_leaves_overlay_and_revision_unchanged(self):
+        current = prefs.save({'translate': {'target_language': 'en'}, 'tts': {'rate': '+20%'}},
+                             prefs.snapshot()['revision'])
+        before = prefs.preference_path().read_bytes()
+        preview = prefs.snapshot(proposed={})
+        self.assertEqual('auto', preview['values']['translate']['target_language'])
+        self.assertEqual('+0%', preview['values']['tts']['rate'])
+        self.assertEqual(current['revision'], preview['revision'])
+        self.assertEqual(before, prefs.preference_path().read_bytes())
+        self.assertNotIn('SENSITIVE_SENTINEL', json.dumps(preview))
+
+    def test_reset_removes_overrides_and_future_toml_changes_are_used(self):
+        prefs.save({'translate': {'target_language': 'en'}, 'tts': {'rate': '+20%'}},
+                   prefs.snapshot()['revision'])
+        preview = prefs.snapshot(proposed={})
+        result = prefs.save(preview['values'], preview['revision'], reset=True,
+                            expected_base_revision=preview['base_revision'])
+        self.assertEqual({}, prefs.read_overlay()[0])
+        self.assertEqual('auto', result['values']['translate']['target_language'])
+        config = self.repo / 'tools/tts/config.toml'
+        original = config.read_bytes()
+        try:
+            config.write_bytes(original + b'\nrate="+30%"\n')
+            self.assertEqual('+30%', prefs.snapshot()['values']['tts']['rate'])
+        finally:
+            config.write_bytes(original)
+        self.assertEqual('+40%', prefs.apply_overlay('tts', {'rate': '+40%'}, config)['rate'])
+        self.assertEqual([], list(prefs.preference_path().parent.glob('*.tmp')))
+
+    def test_edits_after_reset_preview_store_only_differences(self):
+        prefs.save({'translate': {'target_language': 'en'}, 'tts': {'volume': '-10%'}},
+                   prefs.snapshot()['revision'])
+        preview = prefs.snapshot(proposed={})
+        preview['values']['tts']['rate'] = '+25%'
+        prefs.save(preview['values'], preview['revision'], reset=True,
+                   expected_base_revision=preview['base_revision'])
+        self.assertEqual({'tts': {'rate': '+25%'}}, prefs.read_overlay()[0])
+
+    def test_reset_rejects_intervening_save_and_preserves_newer_settings(self):
+        preview = prefs.snapshot(proposed={})
+        saved = prefs.save({'tts': {'rate': '+30%'}}, preview['revision'])
+        before = prefs.preference_path().read_bytes()
+        with self.assertRaisesRegex(prefs.PreferenceError, 'settings_changed_reload'):
+            prefs.save(preview['values'], preview['revision'], reset=True,
+                       expected_base_revision=preview['base_revision'])
+        self.assertEqual(before, prefs.preference_path().read_bytes())
+        self.assertEqual(saved, prefs.snapshot())
+
+    def test_reset_rejects_changed_toml_baseline_without_writing(self):
+        prefs.save({'tts': {'rate': '+20%'}}, prefs.snapshot()['revision'])
+        preview = prefs.snapshot(proposed={})
+        before = prefs.preference_path().read_bytes()
+        config = self.repo / 'tools/tts/config.toml'
+        original = config.read_bytes()
+        try:
+            config.write_bytes(original + b'\nrate="+30%"\n')
+            with self.assertRaisesRegex(prefs.PreferenceError, 'settings_changed_reload'):
+                prefs.save(preview['values'], preview['revision'], reset=True,
+                           expected_base_revision=preview['base_revision'])
+        finally:
+            config.write_bytes(original)
+        self.assertEqual(before, prefs.preference_path().read_bytes())
+
+    def test_reset_failure_and_invalid_request_preserve_overlay(self):
+        prefs.save({'tts': {'rate': '+20%'}}, prefs.snapshot()['revision'])
+        preview = prefs.snapshot(proposed={})
+        before = prefs.preference_path().read_bytes()
+        for reset, baseline in ((1, preview['base_revision']), (True, None)):
+            with self.assertRaises(prefs.PreferenceError):
+                prefs.save({}, preview['revision'], reset=reset, expected_base_revision=baseline)
+        with patch.object(prefs.os, 'replace', side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                prefs.save({}, preview['revision'], reset=True, expected_base_revision=preview['base_revision'])
+        self.assertEqual(before, prefs.preference_path().read_bytes())
+        self.assertEqual([], list(prefs.preference_path().parent.glob('*.tmp')))
+
+    def test_real_cli_defaults_and_reset_use_isolated_repository(self):
+        helper = self.repo / 'tools/toolbox_preferences.py'
+        shutil.copyfile(prefs.__file__, helper)
+        current = prefs.save({'tts': {'rate': '+20%'}}, prefs.snapshot()['revision'])
+        before = prefs.preference_path().read_bytes()
+        def run(*args, request=None):
+            result = subprocess.run([sys.executable, '-I', '-S', str(helper), *args],
+                                    input=json.dumps(request) if request is not None else None,
+                                    capture_output=True, text=True, encoding='utf-8', timeout=10)
+            self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+            self.assertNotIn('SENSITIVE_SENTINEL', result.stdout + result.stderr)
+            return json.loads(result.stdout)
+        preview = run('--defaults')
+        self.assertEqual(current['revision'], preview['revision'])
+        self.assertEqual(before, prefs.preference_path().read_bytes())
+        result = run('--apply', request={'changes': preview['values'], 'revision': preview['revision'],
+                                         'reset': True, 'base_revision': preview['base_revision']})
+        self.assertEqual('+0%', result['values']['tts']['rate'])
+        self.assertEqual({}, prefs.read_overlay()[0])
+
     def test_repository_identity_isolates_preferences(self):
         path = prefs.preference_path()
         with patch.object(prefs, "REPO", self.root / "other repo"):
@@ -110,6 +206,31 @@ except p.PreferenceError as e: print(str(e))
         self.assertEqual([0, 0], [process.returncode for process in processes], '\n'.join(stderr for _, stderr in results))
         self.assertEqual(["ok", "settings_changed_reload"], sorted(stdout.strip() for stdout, _ in results))
         self.assertTrue(all(not stderr for _, stderr in results))
+
+    def test_real_reset_racing_save_has_one_winner(self):
+        initial = prefs.save({'tts': {'rate': '+20%'}}, prefs.snapshot()['revision'])
+        preview = prefs.snapshot(proposed={})
+        code = '''import sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]);import toolbox_preferences as p
+p.REPO=Path(sys.argv[2])
+try:
+ if sys.argv[3]=='reset':p.save({},sys.argv[4],reset=True,expected_base_revision=sys.argv[5])
+ else:p.save({'tts':{'rate':'+30%'}},sys.argv[4])
+ print('ok')
+except p.PreferenceError as e:print(str(e))
+'''
+        commands = [[sys.executable, '-I', '-S', '-c', code, str(Path(prefs.__file__).parent),
+                     str(self.repo), action, initial['revision'], preview['base_revision']]
+                    for action in ('reset', 'save')]
+        processes = [subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                     for command in commands]
+        results = [process.communicate(timeout=10) for process in processes]
+        self.assertEqual([0, 0], [process.returncode for process in processes], str(results))
+        self.assertEqual(['ok', 'settings_changed_reload'], sorted(stdout.strip() for stdout, _ in results))
+        self.assertTrue(all(not stderr for _, stderr in results))
+        self.assertEqual('+0%' if results[0][0].strip() == 'ok' else '+30%',
+                         prefs.snapshot()['values']['tts']['rate'])
 
     @unittest.skipUnless(os.name == 'nt', 'Windows byte-range locking regression')
     def test_empty_lock_file_content_is_not_written_before_its_lock_is_acquired(self):

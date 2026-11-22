@@ -698,3 +698,11 @@ notify rc=0 stderr=''  7s later  ← 结果 Toast 成功
 - 任何 `except Exception: return` 都必须先 `_debug(...)`——这次正是"静默吞异常"让 Toast 失败变得完全不可见。
 - ONNX/OpenMP 类推理库默认吃满所有核心，在交互式小工具里**必须主动限线程**：高负载时抢占会让本来 2s 的事变成 20s。
 - 超过 3 秒的操作要有**立即可见的中间反馈**，否则功能正常也会被感知成"坏了"。
+
+## 2026-11-22 设置恢复配置文件
+
+- 窗口偏好覆盖 TOML，但此前恢复需手动找到并改名 JSON，缺少可发现的入口。采用先预览、后保存：不直接删除文件，用户可重新加载或关闭放弃。
+- 重置不能把当前 TOML 全字段再存为覆盖，否则后续编辑 TOML 仍无效。保存重置后仅保留与预览配置不同的手动修改；空覆盖也走原子替换，沿用 OS 写锁与 CAS。
+- 预览携带不含凭证的白名单配置摘要，保存时检查相关配置是否变化；普通偏好修订检查防止其他窗口保存被覆盖。摘要只覆盖非敏感有效字段，密钥变化不进入窗口响应。
+- ui-ux-pro-max 的首次 settings reset undo 查询误匹配 Web stacking context，已弃用；缩小查询命中所有平台的确认/反馈规则。WinUI 查询命中异步 IO 与标准控件指导。本次使用原生按钮、现有 polite 状态区和显式保存，不新增模态确认。
+- 微软命令反馈与按钮指南支持状态反馈和原生操作入口：https://learn.microsoft.com/en-us/windows/apps/design/basics/commanding-basics 、https://learn.microsoft.com/en-us/windows/apps/design/controls/buttons 。

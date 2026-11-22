@@ -104,7 +104,7 @@ def apply_overlay(section: str, cfg: dict, config_path: str | Path | None = None
     return {**cfg, **overlay.get(section, {})}
 
 
-def snapshot(*, proposed: dict | None = None) -> dict:
+def base_values() -> dict:
     values = {}
     for section, defaults in DEFAULTS.items():
         fields = dict(defaults)
@@ -124,12 +124,22 @@ def snapshot(*, proposed: dict | None = None) -> dict:
                 language = fields[key].strip().lower() if isinstance(fields[key], str) else ""
                 fields[key] = {"zh-cn": "zh", "zh-hans": "zh"}.get(language, language)
         values[section] = fields
+    return values
+
+
+def base_revision(values: dict) -> str:
+    return hashlib.sha256(json.dumps(values, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def snapshot(*, proposed: dict | None = None) -> dict:
+    values = base_values()
+    baseline = base_revision(values)
     overlay, revision = read_overlay()
     if proposed is not None:
         overlay = proposed
     for section, fields in overlay.items():
         values[section].update(fields)
-    return {"version": 1, "revision": revision, "values": validate(values)}
+    return {"version": 1, "revision": revision, "base_revision": baseline, "values": validate(values)}
 
 
 @contextmanager
@@ -163,13 +173,27 @@ def _writer_lock(path: Path):
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def save(changes: object, expected_revision: str) -> dict:
+def save(changes: object, expected_revision: str, *, reset: bool = False,
+         expected_base_revision: str | None = None) -> dict:
     changes = validate(changes)
+    if not isinstance(reset, bool) or (reset and not isinstance(expected_base_revision, str)):
+        raise PreferenceError("invalid_request")
     path = preference_path()
     with _writer_lock(path):
         overlay, revision = read_overlay()
         if revision != expected_revision:
             raise PreferenceError("settings_changed_reload")
+        if reset:
+            defaults = snapshot(proposed={})
+            if defaults["base_revision"] != expected_base_revision:
+                raise PreferenceError("settings_changed_reload")
+            # A reset removes overrides, rather than pinning today's TOML values.
+            # Edits made after the preview remain as sparse explicit overrides.
+            overlay = {}
+            changes = {section: {key: value for key, value in fields.items()
+                                 if value != defaults["values"][section][key]}
+                       for section, fields in changes.items()}
+            changes = {section: fields for section, fields in changes.items() if fields}
         for section, fields in changes.items():
             overlay.setdefault(section, {}).update(fields)
         # Validate the effective result before writing; never report a rejected
@@ -190,16 +214,20 @@ def main(argv=None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Local non-secret settings bridge")
-    parser.add_argument("--apply", action="store_true", help="Read changes and revision as JSON from stdin")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="Read changes and revision as JSON from stdin")
+    mode.add_argument("--defaults", action="store_true", help="Preview TOML values without changing preferences")
     args = parser.parse_args(argv)
     try:
         if args.apply:
             request = json.loads(sys.stdin.read(16385))
-            if not isinstance(request, dict) or set(request) != {"changes", "revision"}:
+            if (not isinstance(request, dict) or not {"changes", "revision"} <= set(request)
+                    or set(request) - {"changes", "revision", "reset", "base_revision"}):
                 raise PreferenceError("invalid_request")
-            result = save(request["changes"], request["revision"])
+            result = save(request["changes"], request["revision"], reset=request.get("reset", False),
+                          expected_base_revision=request.get("base_revision"))
         else:
-            result = snapshot()
+            result = snapshot(proposed={} if args.defaults else None)
         print(json.dumps({"status": "ok", **result}, ensure_ascii=False))
         return 0
     except (ValueError, OSError, TypeError, KeyError) as exc:

@@ -89,7 +89,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 | HUD 部署产物 | 使用部署输出的 `Release` 路径 | 恢复该发布清单中的字节，并重载当前 AHK 源码 |
 | AHK/Python/PowerPolicy 源码 | 审阅具体 Git 差异，应用修复提交或恢复已选定版本，再按模块重载 | HUD 回滚不会恢复源码；保留未提交改动与个人配置 |
 | 个人 TOML/凭证 | 从本机配置备份恢复所需文件，再按模块重新读取 | 不在部署产物备份内 |
-| 翻译/朗读窗口偏好 | 单独备份本仓库身份对应的 `preferences.json`；需要回到 TOML 时先关闭设置窗口，再将该文件改名保留 | 位于 LOCALAPPDATA，不在 HUD 产物备份中；旧源码忽略它，仓库移动后身份变化 |
+| 翻译/朗读窗口偏好 | 设置窗口点“预览 TOML 设置”后保存，移除旧覆盖；重新加载可放弃预览。需要保留旧偏好时，操作前单独备份本仓库身份对应的 `preferences.json` | 位于 LOCALAPPDATA，不在 HUD 产物备份中；不改 TOML/密钥，旧源码忽略它，仓库移动后身份变化 |
 | TTS Python 环境 | 使用所选源码版本的锁文件执行安装/检查 | HUD 回滚不回退包；旧 repo 环境保留但不会自动取代就绪的 profile 环境 |
 | 电源设置/设备恢复记录 | 使用现有 PowerPolicy 恢复/卸载入口 | 不属于 HUD 回滚；设备不可用时保留未成功恢复的记录 |
 

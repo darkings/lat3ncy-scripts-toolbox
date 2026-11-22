@@ -14,6 +14,7 @@ internal static class SettingsLifecycleProbe
         ToolboxSettingsWindow? window = null;
         DispatcherQueueTimer? timer = null;
         int phase = 0;
+        Task? preview = null;
         var elapsed = Stopwatch.StartNew();
         Application.Start(_ =>
         {
@@ -37,7 +38,12 @@ internal static class SettingsLifecycleProbe
                     else if (phase is 1 or 3)
                     {
                         if (window?.SettingsLoaded != true) return;
+                        preview ??= window.PreviewDefaultsAsync();
+                        if (!preview.IsCompleted) return;
+                        preview.GetAwaiter().GetResult();
+                        if (!window.DefaultsPreviewed) throw new InvalidOperationException();
                         window.Close(); window = null;
+                        preview = null;
                         phase++;
                     }
                     else

@@ -17,6 +17,7 @@ internal sealed class ToolboxSettingsWindow : Window
     readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
     readonly Button _save = new() { Content = "保存", AccessKey = "S" };
     readonly Button _reload = new() { Content = "重新加载", AccessKey = "L" };
+    readonly Button _restore = new() { Content = "预览 TOML 设置", AccessKey = "T" };
     readonly ComboBox _engine;
     readonly ComboBox _source;
     readonly ComboBox _target;
@@ -30,9 +31,12 @@ internal sealed class ToolboxSettingsWindow : Window
     readonly NumericField _pitch = new("音调（-100 至 100，Hz）", -100, 100);
     readonly NumericField _volume = new("音量调整（-100 至 100，%）", -100, 100);
     string _revision = "";
+    string _baseRevision = "";
+    bool _resetPending;
     bool _busy;
     bool _closed;
     public bool SettingsLoaded { get; private set; }
+    internal bool DefaultsPreviewed => _resetPending;
 
     public ToolboxSettingsWindow()
     {
@@ -71,9 +75,11 @@ internal sealed class ToolboxSettingsWindow : Window
         var close = new Button { Content = "关闭" };
         close.Click += (_, _) => Close();
         buttons.Children.Add(close); footer.Children.Add(buttons);
+        footer.Children.Add(_restore);
         Grid.SetRow(footer, 1); root.Children.Add(footer); Content = root;
         _save.Click += async (_, _) => await SaveAsync();
         _reload.Click += async (_, _) => await ReloadAsync();
+        _restore.Click += async (_, _) => await PreviewDefaultsAsync();
         Closed += (_, _) => { _closed = true; _lifetime.Cancel(); HudLog.Line("settings-closed"); };
         SetBusy(true);
         _ = ReloadAsync();
@@ -100,6 +106,7 @@ internal sealed class ToolboxSettingsWindow : Window
     {
         _busy = busy; _scroll.IsEnabled = !busy;
         _save.IsEnabled = !busy && _revision.Length > 0; _reload.IsEnabled = !busy;
+        _restore.IsEnabled = !busy && _revision.Length > 0;
     }
 
     async Task ReloadAsync()
@@ -112,6 +119,7 @@ internal sealed class ToolboxSettingsWindow : Window
             JsonElement data = await PreferencesBridge.RunAsync(null, _lifetime.Token);
             if (_closed) return;
             Populate(data); _status.Text = "已读取当前设置。";
+            _resetPending = false;
             SettingsLoaded = true;
             HudLog.Line("settings-loaded");
         }
@@ -139,6 +147,37 @@ internal sealed class ToolboxSettingsWindow : Window
         _pitch.Load(tts.GetProperty("pitch").GetString()!, "Hz");
         _volume.Load(tts.GetProperty("volume").GetString()!, "%");
         _revision = data.GetProperty("revision").GetString()!;
+        _baseRevision = data.GetProperty("base_revision").GetString()!;
+    }
+
+    internal async Task PreviewDefaultsAsync()
+    {
+        if (_busy || _revision.Length == 0) return;
+        SetBusy(true); _status.Text = "正在读取 TOML 设置…";
+        try
+        {
+            JsonElement data = await PreferencesBridge.RunAsync(null, _lifetime.Token, defaults: true);
+            if (_closed) return;
+            if (data.GetProperty("revision").GetString() != _revision)
+                throw new InvalidOperationException("settings_changed_reload");
+            Populate(data); _resetPending = true;
+            _status.Text = "已预览 TOML 设置，尚未保存。点击保存恢复，重新加载可放弃。密钥配置保持不变。";
+            HudLog.Line("settings-defaults-previewed");
+        }
+        catch (Exception ex)
+        {
+            if (!_closed) _status.Text = ex.Message == "settings_changed_reload"
+                ? "设置已被其他窗口修改。请重新加载后再预览。"
+                : "无法预览 TOML 设置，当前输入已保留。请检查本地配置后重试。";
+        }
+        finally
+        {
+            if (!_closed)
+            {
+                SetBusy(false);
+                if (_resetPending) _save.Focus(FocusState.Programmatic);
+            }
+        }
     }
 
     async Task SaveAsync()
@@ -158,6 +197,8 @@ internal sealed class ToolboxSettingsWindow : Window
         var request = new
         {
             revision = _revision,
+            reset = _resetPending,
+            base_revision = _baseRevision,
             changes = new
             {
                 translate = new { engine = Selected(_engine), source_language = Selected(_source), target_language = Selected(_target),
@@ -172,12 +213,13 @@ internal sealed class ToolboxSettingsWindow : Window
         {
             JsonElement data = await PreferencesBridge.RunAsync(request, _lifetime.Token);
             if (_closed) return;
-            Populate(data); _status.Text = "已保存，下次翻译或朗读生效。";
+            Populate(data); _resetPending = false;
+            _status.Text = "已保存，下次翻译或朗读生效。";
         }
         catch (Exception ex)
         {
             if (!_closed) _status.Text = ex.Message == "settings_changed_reload"
-                ? "设置已被其他窗口修改。请重新加载后再保存。"
+                ? "设置或配置文件已变化。请重新加载后再保存。"
                 : "保存失败，当前输入已保留。请检查本地配置和文件权限后重试。";
         }
         finally { if (!_closed) SetBusy(false); }

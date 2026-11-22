@@ -7,8 +7,9 @@ namespace Lat3ncyToolbox.ImeHudWinUi;
 /// <summary>Fixed local helper, JSON stdio, no shell, keys, clipboard or network.</summary>
 internal static class PreferencesBridge
 {
-    public static async Task<JsonElement> RunAsync(object? request, CancellationToken cancellation)
+    public static async Task<JsonElement> RunAsync(object? request, CancellationToken cancellation, bool defaults = false)
     {
+        if (defaults && request != null) throw new ArgumentException("settings_unavailable");
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         string? helper = null;
         for (int i = 0; i < 7 && directory != null; i++, directory = directory.Parent)
@@ -36,6 +37,8 @@ internal static class PreferencesBridge
         start.ArgumentList.Add(helper);
         if (request != null)
             start.ArgumentList.Add("--apply");
+        else if (defaults)
+            start.ArgumentList.Add("--defaults");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         using Process process = Process.Start(start) ?? throw new InvalidOperationException("settings_unavailable");

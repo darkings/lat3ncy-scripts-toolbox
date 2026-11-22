@@ -24,7 +24,7 @@
 
 | 层次 | 范围 | 状态 |
 | --- | --- | --- |
-| 单元/协议 | 设置隐私与竞争写入、冷却和恢复、Unicode 分段、进度、失败段重试、统计及 ZIP 脱敏 | 183 项 Python 通过：翻译 79、TTS 36、OCR 20、RGB 6、validation 42；另有 40 轮真实并发保存重复验证 |
+| 单元/协议 | 设置隐私与竞争写入、冷却和恢复、Unicode 分段、进度、失败段重试、统计及 ZIP 脱敏 | 191 项 Python 通过：翻译 79、TTS 36、OCR 20、RGB 6、validation 50；另有 40 轮真实并发保存重复验证 |
 | AHK/WinUI | 源码构建、自测、请求归属、实际子进程进度/取消/重试与退出回收 | 完整断言、含空格路径干净候选三阶段通过；源码散列一致 |
 | 固定图片/文字 | 真实 OCR/翻译后端及受管交付，不模拟按钮或声音 | 在线图片联动 10 项、2943 字符长文 2 段通过；这次实际由 MyMemory 保底，未宣称 Google 本次成功 |
 | 用户既有验收 | OCR、翻译、朗读基础使用 | 已确认，不替代新增功能的实际点击验收 |
@@ -43,6 +43,8 @@
 该增量的干净候选三阶段、完整 AHK 和真实在线联动 10 项已通过，已正式重载且健康正常。生产目录固定测试宿主被强制结束后留下输入/检查点，重载的启动扫描实际回收 1 项、延期 0 项；测试目录已消失。证据 `.tmp/validation/20261122-translation-owned-files/`、`.tmp/integration/20261122-owned-files-restart/`、`.tmp/integration/20261122-translation-owned-files-live/`。不将这些文件/协议检查视作物理点击或音频验收。
 
 以下仍待可操作桌面：Caps+I 原生框选和取消；浏览器/终端 Caps+F 选区及 ClipboardAll；更多菜单实际点击、目标切换/失败重试；设置保存及键盘焦点；复制/钉住/关闭与多屏 DPI；原文/译文播放、打断和听感。此前 Computer Use 截图失败 `0x80070057`，输入/激活失败 `0x80070005`，不能用自动协议通过替代这些验收。
+
+设置恢复增量：新增“预览 TOML 设置”（Alt+T），先预览、保存才清除旧覆盖，重新加载/关闭可放弃。预览后编辑的字段仅保存与配置不同的值，后续 TOML 修改可继续生效；偏好 CAS 和白名单配置摘要拒绝预览期间的并发变化。沿用 OS 锁和原子写入，不重写 TOML 或复制密钥。新增 8 项回归含真实 CLI、双进程重置/保存竞争、TOML 变化和写失败；191 项 Python、完整 AHK/WinUI、原生两轮加载/预览/关闭及最终干净候选通过，正式部署源戳 bc93b2bf1a90eefc6549f25ed3184f0d3a1c84d3ab5c0e70a06403e957fb739c，诊断 ok、四份配置和真实偏好未改。证据 .tmp/validation/20261122-settings-reset-final/、.tmp/settings-reset-final-full.log、.tmp/settings-reset-protection.json。Computer Use 已读到新按钮，但点击刷新后报 coordinate input geometry is unavailable，截图与目标窗口不符，仍未宣称物理点击/视觉通过。
 
 ## 更新与回滚
 

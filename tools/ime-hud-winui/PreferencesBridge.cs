@@ -7,14 +7,28 @@ namespace Lat3ncyToolbox.ImeHudWinUi;
 /// <summary>Fixed local helper, JSON stdio, no shell, keys, clipboard or network.</summary>
 internal static class PreferencesBridge
 {
-    public static async Task<JsonElement> RunAsync(object? request, CancellationToken cancellation, bool defaults = false)
+    public static Task<JsonElement> RunAsync(object? request, CancellationToken cancellation, bool defaults = false)
     {
         if (defaults && request != null) throw new ArgumentException("settings_unavailable");
+        return RunHelperAsync("toolbox_preferences.py", request, cancellation,
+            defaults ? new[] { "--defaults" } : Array.Empty<string>(), 16384);
+    }
+
+    public static Task<JsonElement> RunConfigurationAsync(string module, object? request, CancellationToken cancellation)
+    {
+        if (module is not ("translate" or "tts" or "ocr" or "audio" or "theme" or "power" or "rgb"))
+            throw new ArgumentException("settings_unavailable");
+        return RunHelperAsync("toolbox_configuration.py", request, cancellation, new[] { "--module", module }, 262144);
+    }
+
+    static async Task<JsonElement> RunHelperAsync(string filename, object? request, CancellationToken cancellation,
+                                                 string[] arguments, int limit)
+    {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         string? helper = null;
         for (int i = 0; i < 7 && directory != null; i++, directory = directory.Parent)
         {
-            string candidate = Path.Combine(directory.FullName, "tools", "toolbox_preferences.py");
+            string candidate = Path.Combine(directory.FullName, "tools", filename);
             if (File.Exists(candidate) && Directory.Exists(Path.Combine(directory.FullName, "ahk")))
             {
                 helper = candidate;
@@ -37,8 +51,7 @@ internal static class PreferencesBridge
         start.ArgumentList.Add(helper);
         if (request != null)
             start.ArgumentList.Add("--apply");
-        else if (defaults)
-            start.ArgumentList.Add("--defaults");
+        foreach (string argument in arguments) start.ArgumentList.Add(argument);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         using Process process = Process.Start(start) ?? throw new InvalidOperationException("settings_unavailable");
@@ -52,14 +65,16 @@ internal static class PreferencesBridge
             await process.WaitForExitAsync(timeout.Token);
             string json = await output;
             await error; // drain, never display private exception/provider details
-            if (json.Length > 16384)
+            if (json.Length > limit)
                 throw new InvalidOperationException("settings_unavailable");
             using JsonDocument doc = JsonDocument.Parse(json);
             JsonElement result = doc.RootElement;
             if (process.ExitCode != 0 || result.GetProperty("status").GetString() != "ok")
             {
                 string? code = result.TryGetProperty("code", out var value) ? value.GetString() : null;
-                throw new InvalidOperationException(code == "settings_changed_reload" ? code : "settings_unavailable");
+                bool fixedValidation = code != null && code.StartsWith("invalid_", StringComparison.Ordinal)
+                    && code.Length <= 100 && code.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '.');
+                throw new InvalidOperationException(code is "settings_changed_reload" or "protected_config_manual" || fixedValidation ? code : "settings_unavailable");
             }
             return result.Clone();
         }

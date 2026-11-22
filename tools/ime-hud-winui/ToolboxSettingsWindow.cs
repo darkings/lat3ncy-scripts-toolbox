@@ -30,6 +30,10 @@ internal sealed class ToolboxSettingsWindow : Window
     readonly NumericField _rate = new("语速（-90 至 100，%）", -90, 100);
     readonly NumericField _pitch = new("音调（-100 至 100，Hz）", -100, 100);
     readonly NumericField _volume = new("音量调整（-100 至 100，%）", -100, 100);
+    readonly ComboBox _moduleChoice;
+    readonly Dictionary<string, ModuleConfigurationForm> _moduleForms = new();
+    string _module = "text";
+    Task _moduleLoad = Task.CompletedTask;
     string _revision = "";
     string _baseRevision = "";
     bool _resetPending;
@@ -47,8 +51,15 @@ internal sealed class ToolboxSettingsWindow : Window
         AppWindow.Resize(new SizeInt32(Math.Min((int)(640 * scale), Math.Max(320, work.Right - work.Left - 40)),
                                       Math.Min((int)(800 * scale), Math.Max(320, work.Bottom - work.Top - 40))));
         var root = new Grid();
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _moduleChoice = Choice("设置分类", ("翻译与朗读", "text"), ("翻译高级", "translate"),
+            ("朗读高级", "tts"), ("截图识别", "ocr"), ("音频切换", "audio"),
+            ("主题、壁纸与背光", "theme"), ("电源与唤醒", "power"), ("氛围灯", "rgb"));
+        _moduleChoice.Margin = new Thickness(24, 12, 24, 0);
+        _moduleChoice.SelectedIndex = 0;
+        root.Children.Add(_moduleChoice);
         _form.Children.Add(new TextBlock { Text = "翻译与朗读", FontSize = 24 });
         _form.Children.Add(new TextBlock
         {
@@ -65,6 +76,7 @@ internal sealed class ToolboxSettingsWindow : Window
         foreach (UIElement element in new UIElement[] { _ttsEngine, _zhVoice, _enVoice, _rate.Root, _pitch.Root, _volume.Root })
             _form.Children.Add(element);
         _scroll.Content = _form;
+        Grid.SetRow(_scroll, 1);
         root.Children.Add(_scroll);
 
         var footer = new StackPanel { Spacing = 12, Padding = new Thickness(24, 12, 24, 20) };
@@ -76,10 +88,11 @@ internal sealed class ToolboxSettingsWindow : Window
         close.Click += (_, _) => Close();
         buttons.Children.Add(close); footer.Children.Add(buttons);
         footer.Children.Add(_restore);
-        Grid.SetRow(footer, 1); root.Children.Add(footer); Content = root;
+        Grid.SetRow(footer, 2); root.Children.Add(footer); Content = root;
         _save.Click += async (_, _) => await SaveAsync();
         _reload.Click += async (_, _) => await ReloadAsync();
         _restore.Click += async (_, _) => await PreviewDefaultsAsync();
+        _moduleChoice.SelectionChanged += (_, _) => _moduleLoad = SwitchModuleAsync();
         Closed += (_, _) => { _closed = true; _lifetime.Cancel(); HudLog.Line("settings-closed"); };
         SetBusy(true);
         _ = ReloadAsync();
@@ -104,13 +117,84 @@ internal sealed class ToolboxSettingsWindow : Window
 
     void SetBusy(bool busy)
     {
-        _busy = busy; _scroll.IsEnabled = !busy;
-        _save.IsEnabled = !busy && _revision.Length > 0; _reload.IsEnabled = !busy;
-        _restore.IsEnabled = !busy && _revision.Length > 0;
+        _busy = busy; _scroll.IsEnabled = !busy; _moduleChoice.IsEnabled = !busy;
+        bool loaded = _module == "text" ? _revision.Length > 0 : _moduleForms.ContainsKey(_module);
+        _save.IsEnabled = !busy && loaded; _reload.IsEnabled = !busy;
+        _restore.Visibility = _module == "text" ? Visibility.Visible : Visibility.Collapsed;
+        _restore.IsEnabled = !busy && loaded;
+    }
+
+    async Task SwitchModuleAsync()
+    {
+        if (_busy) return;
+        _module = Selected(_moduleChoice);
+        if (_module == "text")
+        {
+            _scroll.Content = _form;
+            _status.Text = _resetPending ? "已预览 TOML 设置，尚未保存。重新加载可放弃。" : "当前窗口保留了各分类输入；关闭会放弃未保存内容。";
+            SetBusy(false);
+        }
+        else if (_moduleForms.TryGetValue(_module, out var form))
+        {
+            _scroll.Content = form.Root;
+            _status.Text = "已保留此页输入。保存仅应用当前分类，重新加载会放弃此页修改。";
+            SetBusy(false);
+        }
+        else await ReloadModuleAsync();
+        _scroll.ChangeView(null, 0, null);
+    }
+
+    // Explicit lifecycle probe only: construct each real form, check that a
+    // freshly loaded page submits no changes, then return to the preserved draft.
+    internal async Task VerifyModulePagesAsync()
+    {
+        foreach (string module in new[] { "translate", "tts", "ocr", "audio", "theme", "power", "rgb" })
+        {
+            Select(_moduleChoice, module);
+            await _moduleLoad;
+            if (!_moduleForms.TryGetValue(module, out var form)) throw new InvalidOperationException("module_load_failed");
+            object? request = form.ReadRequest();
+            if (request == null || JsonSerializer.SerializeToElement(request).GetProperty("changes").EnumerateObject().Any())
+            {
+                HudLog.Line("settings-module-draft-failed module=" + module);
+                if (request != null)
+                    foreach (var change in JsonSerializer.SerializeToElement(request).GetProperty("changes").EnumerateObject())
+                        HudLog.Line("settings-module-draft-field module=" + module + " key=" + change.Name);
+                throw new InvalidOperationException("module_draft_changed");
+            }
+        }
+        Select(_moduleChoice, "text");
+        await _moduleLoad;
+        HudLog.Line("settings-module-pages=passed count=7");
+    }
+
+    async Task ReloadModuleAsync()
+    {
+        SetBusy(true); _status.Text = "正在读取模块配置…";
+        try
+        {
+            JsonElement data = await PreferencesBridge.RunConfigurationAsync(_module, null, _lifetime.Token);
+            if (_closed) return;
+            var form = new ModuleConfigurationForm(data);
+            _moduleForms[_module] = form; _scroll.Content = form.Root;
+            _status.Text = "已读取配置。保存仅应用当前分类，不会立即执行系统或硬件操作。";
+            HudLog.Line("settings-module-loaded module=" + _module);
+        }
+        catch
+        {
+            if (!_closed)
+            {
+                if (!_moduleForms.ContainsKey(_module))
+                    _scroll.Content = new TextBlock { Text = "无法读取此模块。请检查配置格式和文件权限后重新加载。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(24) };
+                _status.Text = "模块读取失败，已有输入保留。其他分类仍可使用。";
+            }
+        }
+        finally { if (!_closed) SetBusy(false); }
     }
 
     async Task ReloadAsync()
     {
+        if (_module != "text") { await ReloadModuleAsync(); return; }
         _revision = "";
         SettingsLoaded = false;
         SetBusy(true); _status.Text = "正在读取设置…";
@@ -152,7 +236,7 @@ internal sealed class ToolboxSettingsWindow : Window
 
     internal async Task PreviewDefaultsAsync()
     {
-        if (_busy || _revision.Length == 0) return;
+        if (_busy || _revision.Length == 0 || _module != "text") return;
         SetBusy(true); _status.Text = "正在读取 TOML 设置…";
         try
         {
@@ -182,6 +266,7 @@ internal sealed class ToolboxSettingsWindow : Window
 
     async Task SaveAsync()
     {
+        if (_module != "text") { await SaveModuleAsync(); return; }
         if (_busy || _revision.Length == 0) return;
         NumericField? invalid = new[] { _rate, _pitch, _volume }.FirstOrDefault(field => !field.Validate());
         if (invalid != null)
@@ -221,6 +306,36 @@ internal sealed class ToolboxSettingsWindow : Window
             if (!_closed) _status.Text = ex.Message == "settings_changed_reload"
                 ? "设置或配置文件已变化。请重新加载后再保存。"
                 : "保存失败，当前输入已保留。请检查本地配置和文件权限后重试。";
+        }
+        finally { if (!_closed) SetBusy(false); }
+    }
+
+    async Task SaveModuleAsync()
+    {
+        if (_busy || !_moduleForms.TryGetValue(_module, out var form)) return;
+        object? request = form.ReadRequest();
+        if (request == null) { _status.Text = "请修正标记的字段后保存。"; return; }
+        SetBusy(true); _status.Text = "正在保存当前分类…";
+        try
+        {
+            JsonElement data = await PreferencesBridge.RunConfigurationAsync(_module, request, _lifetime.Token);
+            if (_closed) return;
+            var saved = new ModuleConfigurationForm(data);
+            _moduleForms[_module] = saved; _scroll.Content = saved.Root;
+            _status.Text = "已保存。" + saved.Effect;
+            HudLog.Line("settings-module-saved module=" + _module);
+        }
+        catch (Exception error)
+        {
+            if (!_closed)
+            {
+                bool invalid = form.ShowValidation(error.Message);
+                _status.Text = error.Message == "settings_changed_reload"
+                    ? "配置已被其他窗口或编辑器修改。当前输入已保留，请重新加载后再保存。"
+                    : error.Message == "protected_config_manual" ? "该配置是只读或加密文件，请使用原配置管理方式修改。当前输入已保留。"
+                    : invalid ? "请修正标记的字段后保存，当前输入已保留。"
+                    : "保存失败，当前输入和旧配置已保留。请检查字段范围、格式和文件权限后重试。";
+            }
         }
         finally { if (!_closed) SetBusy(false); }
     }

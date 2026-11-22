@@ -4,9 +4,11 @@
 
 `ImeHudWinUi.exe --settings`（或面板更多菜单 / Raycast Toolbox Settings）打开标准 WinUI 设置窗口。表单滚动、底部操作固定，字段校验保留输入，异步加载/保存期间禁用重复操作；只调用固定的本地标准库 JSON 助手，不处理密钥。关闭设置不应关闭常驻 HUD；`--settings-close` 供显式生命周期检查清理设置窗口。
 
+窗口现为 [工具箱设置中心](../settings/README.md)，顶部选择翻译/朗读基础与高级、OCR、音频、主题、电源、RGB。模块原生表单由固定白名单元数据生成，各页草稿缓存到窗口关闭，保存仅发修改字段。源配置修订冲突保留输入；每页提示实际生效条件，不由保存自动触发硬件、管理员操作或计划任务更新。
+
 “预览 TOML 设置”（Alt+T）异步读取原配置的白名单值，保存才移除旧覆盖；可继续调整字段，保存时只保留差异。重新加载/关闭放弃预览，底部状态明确提示尚未保存。预览和保存之间的偏好修订或相关 TOML 值冲突会拒绝覆盖。它不重写 TOML 或复制凭证。
 
-显式 `--settings-lifecycle-test` 在独立进程连续打开、加载、预览 TOML、关闭两次设置页，再检查 Dispatcher 仍可调度；不占用全局 HUD 标题/互斥体，不保存设置或注入输入。应用将 DispatcherShutdownMode 设为 OnExplicitShutdown，避免最后一个普通 XAML 窗口关闭时终止原生 HUD，正式退出仍走 Application.Exit。
+显式 `--settings-lifecycle-test` 在独立进程连续打开、加载、预览 TOML、巡检七个模块页并返回基础页、关闭两次设置页，检查各页未编辑时提交零变更、预览保留及 Dispatcher 仍可调度；不占用全局 HUD 标题/互斥体，不保存设置或注入输入。应用将 DispatcherShutdownMode 设为 OnExplicitShutdown，避免最后一个普通 XAML 窗口关闭时终止原生 HUD，正式退出仍走 Application.Exit。
 
 面板更多菜单提供原文朗读、重试、单次中英目标切换。`ACTIONS` 可追加第七段 busy 0/1，旧六段保持兼容；`PANEL|PROGRESS|requestId|completed|total|failed` 只更新匹配上下文，最多 200 段。回传动作 1=译文朗读/停止、2=关闭、3=重试、4=原文朗读/停止、5/6/7=中文/英文/自动目标；文本继续只由 AHK 持有，消息没有选中文字。
 

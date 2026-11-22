@@ -15,6 +15,7 @@ internal static class SettingsLifecycleProbe
         DispatcherQueueTimer? timer = null;
         int phase = 0;
         Task? preview = null;
+        Task? modules = null;
         var elapsed = Stopwatch.StartNew();
         Application.Start(_ =>
         {
@@ -27,7 +28,7 @@ internal static class SettingsLifecycleProbe
             {
                 try
                 {
-                    if (elapsed.Elapsed > TimeSpan.FromSeconds(20))
+                    if (elapsed.Elapsed > TimeSpan.FromSeconds(45))
                         throw new TimeoutException();
                     if (phase is 0 or 2)
                     {
@@ -42,8 +43,13 @@ internal static class SettingsLifecycleProbe
                         if (!preview.IsCompleted) return;
                         preview.GetAwaiter().GetResult();
                         if (!window.DefaultsPreviewed) throw new InvalidOperationException();
+                        modules ??= window.VerifyModulePagesAsync();
+                        if (!modules.IsCompleted) return;
+                        modules.GetAwaiter().GetResult();
+                        if (!window.DefaultsPreviewed) throw new InvalidOperationException();
                         window.Close(); window = null;
                         preview = null;
+                        modules = null;
                         phase++;
                     }
                     else

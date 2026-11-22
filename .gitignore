@@ -40,6 +40,7 @@ __pycache__/
 .pip_manual/
 .tmp_caps/
 .lat3ncy-tools-tmp/
+**/.toolbox-config-*.tmp
 /test_*.ahk
 /test.txt
 /*.png

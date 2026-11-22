@@ -706,3 +706,11 @@ notify rc=0 stderr=''  7s later  ← 结果 Toast 成功
 - 预览携带不含凭证的白名单配置摘要，保存时检查相关配置是否变化；普通偏好修订检查防止其他窗口保存被覆盖。摘要只覆盖非敏感有效字段，密钥变化不进入窗口响应。
 - ui-ux-pro-max 的首次 settings reset undo 查询误匹配 Web stacking context，已弃用；缩小查询命中所有平台的确认/反馈规则。WinUI 查询命中异步 IO 与标准控件指导。本次使用原生按钮、现有 polite 状态区和显式保存，不新增模态确认。
 - 微软命令反馈与按钮指南支持状态反馈和原生操作入口：https://learn.microsoft.com/en-us/windows/apps/design/basics/commanding-basics 、https://learn.microsoft.com/en-us/windows/apps/design/controls/buttons 。
+
+## 2026-11-22 工具箱统一设置中心
+
+- 七份配置跨 Python、PowerShell、C# 与 AHK。沿用各消费者原有文件，统一入口只做固定白名单字段编辑，避免为全部模块再增加一套跨语言覆盖身份与生效机制。基本翻译/TTS 偏好保留原方案，高级页不重复编辑这些覆盖字段。
+- PowerPolicy 配置有字面 Windows 反斜杠，不能直接用完整 TOML 解析器读写；使用匹配原标量读取器的分支，其余六份做标准 TOML 及赋值区间扫描。多行未知值先完整消费，不能把正文中的键/节识别为可编辑目标。
+- 原生全页面探针复现多行列表加载即变更：TextBox 在 AcceptsReturn 开启前设置 Text 会改写换行。已调整初始化次序并统一 CR/LF，再验证音频列表等七页全为零变更，不进行真实配置保存。
+- 原子替换会带来新文件身份，需在临时文件写入完整配置前复制原 DACL；专属受保护 DACL 的真实替换及权限复制失败时临时文件仍空均已回归。只读/EFS 文件拒绝保存，避免丢失其保护属性。未调用 ReplaceFileW，其部分失败状态和临时明文需要额外恢复设计，本轮不采用。
+- API 依据：https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-getfilesecurityw 、https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-setfilesecurityw 。GetFileSecurity/SetFileSecurity 是仍支持的旧 API；不读取 SACL 或申请权限，不更改真实配置权限。

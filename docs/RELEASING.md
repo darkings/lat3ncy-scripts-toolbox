@@ -2,6 +2,8 @@
 
 以下命令均在目标仓库根目录运行。安装依赖、部署产物、注册任务是不同操作，按所需模块执行。日常检查可直接运行 `python tools/diagnostics/doctor.py`。
 
+已有配置可以从 [工具箱设置中心](../tools/settings/README.md) 统一管理：Raycast Toolbox Settings 或翻译面板的工具箱设置。基础翻译/朗读偏好独立保存，其他分类编辑对应 TOML 的白名单字段；原凭证和未修改内容保留。保存各页只更新配置，系统/硬件模块按页面注明的既有入口应用。更新前仍需自行保留本机配置备份，不能用 HUD 产物回滚代替配置恢复。
+
 ## 环境与首次安装
 
 当前发布验证环境为 Windows x64、AutoHotkey v2、Python 3.11+、系统 Windows PowerShell 5.1；WinUI 源码构建使用 .NET 10 SDK，CI 固定为 10.0.404。RapidOCR 单独使用 Python 3.14 环境。新机器需先安装这些所需工具；首次构建会恢复 NuGet 包，Python 安装命令也需要网络。

@@ -4,7 +4,7 @@
 # @raycast.mode silent
 # @raycast.platform windows
 # @raycast.packageName Lat3ncy Toolbox
-# @raycast.description Translation engine, languages, silent fallback and speech preferences
+# @raycast.description Settings for translation, speech, OCR, audio, theme, power and ambient light
 $ErrorActionPreference='Stop'
 $repo=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $renderer=Join-Path $repo 'tools\ime-hud-winui\out\ImeHudWinUi.exe'

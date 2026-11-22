@@ -169,7 +169,7 @@ internal sealed class TranslationPanel
         }
         menu.Items.Add(_targetLanguage);
         menu.Items.Add(new MenuFlyoutSeparator());
-        var settings = new MenuFlyoutItem { Text = "翻译与朗读设置" };
+        var settings = new MenuFlyoutItem { Text = "工具箱设置" };
         settings.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
         menu.Items.Add(settings);
         more.Flyout = menu;

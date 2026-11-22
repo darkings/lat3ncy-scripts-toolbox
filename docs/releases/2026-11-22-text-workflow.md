@@ -24,7 +24,7 @@
 
 | 层次 | 范围 | 状态 |
 | --- | --- | --- |
-| 单元/协议 | 设置隐私与竞争写入、冷却和恢复、Unicode 分段、进度、失败段重试、统计及 ZIP 脱敏 | 191 项 Python 通过：翻译 79、TTS 36、OCR 20、RGB 6、validation 50；另有 40 轮真实并发保存重复验证 |
+| 单元/协议 | 设置隐私与竞争写入、冷却和恢复、Unicode 分段、进度、失败段重试、统计及 ZIP 脱敏 | 206 项 Python 通过：翻译 79、TTS 36、OCR 20、RGB 6、validation 65；另有 40 轮真实并发保存重复验证 |
 | AHK/WinUI | 源码构建、自测、请求归属、实际子进程进度/取消/重试与退出回收 | 完整断言、含空格路径干净候选三阶段通过；源码散列一致 |
 | 固定图片/文字 | 真实 OCR/翻译后端及受管交付，不模拟按钮或声音 | 在线图片联动 10 项、2943 字符长文 2 段通过；这次实际由 MyMemory 保底，未宣称 Google 本次成功 |
 | 用户既有验收 | OCR、翻译、朗读基础使用 | 已确认，不替代新增功能的实际点击验收 |
@@ -47,6 +47,10 @@
 设置恢复增量：新增“预览 TOML 设置”（Alt+T），先预览、保存才清除旧覆盖，重新加载/关闭可放弃。预览后编辑的字段仅保存与配置不同的值，后续 TOML 修改可继续生效；偏好 CAS 和白名单配置摘要拒绝预览期间的并发变化。沿用 OS 锁和原子写入，不重写 TOML 或复制密钥。新增 8 项回归含真实 CLI、双进程重置/保存竞争、TOML 变化和写失败；191 项 Python、完整 AHK/WinUI、原生两轮加载/预览/关闭及最终干净候选通过，正式部署源戳 bc93b2bf1a90eefc6549f25ed3184f0d3a1c84d3ab5c0e70a06403e957fb739c，诊断 ok、四份配置和真实偏好未改。证据 .tmp/validation/20261122-settings-reset-final/、.tmp/settings-reset-final-full.log、.tmp/settings-reset-protection.json。Computer Use 已读到新按钮，但点击刷新后报 coordinate input geometry is unavailable，截图与目标窗口不符，仍未宣称物理点击/视觉通过。
 
 ## 更新与回滚
+
+统一设置中心增量：用户追加七个模块的已有配置，现同一原生窗口按分类编辑，109 个模块字段含三个只读兼容项，另保留既有文本基础偏好。各页独立保存、草稿切换保留、来源/范围/生效条件可见；只发送修改字段，白名单直接编辑模块原文件，密钥及未知内容保留。写锁/CAS、BOM/换行与注释保留、原子替换和写前复制 DACL；只读/EFS 文件拒绝保存。保存不自动应用电源/硬件/调度变更。新增 15 项行为回归、真实 PowerShell 加载器及专属 DACL 替换验证；206 项 Python 与完整套件通过，两轮真实原生七页零变更及文本预览保留通过。原生探针复现并修复 TextBox 在启用多行前赋值导致列表被改写。最终干净候选三阶段通过，九个修改源码与快照散列一致；证据 .tmp/validation/20261122-settings-center/、.tmp/settings-center-release-full.log、.tmp/settings-center-native.json、.tmp/settings-center-protection.json。最终部署及精确 SHA CI 以 PR #3 记录为准；实际点击/视觉待办保留。
+
+该增量已通过正式入口替换并重载，源戳 38f11fd4c1469a86b0a0c5d49a80f8cb16b67b413fc57826d9c2020bf43e0e5b，诊断 ok，七份配置和真实偏好未改；Computer Use 读取到已部署的“设置分类”及基础字段，关闭测试窗口后 HUD PID 不变。证据 .tmp/settings-center-deploy.json、.tmp/settings-center-doctor.json。远端最终状态以本增量提交对应的 PR / push CI 为准，不自动合并。
 
 按 [安装、更新与回滚](../RELEASING.md) 先检查、构建到 test-out，再用正式 Deploy-Toolbox 入口备份替换和重载。HUD 备份只恢复产物，不能撤销 AHK/Python 源码、包环境、个人 TOML 或 LOCALAPPDATA 偏好；回退源码后按模块重载。需要停用新偏好时，先备份并改名该仓库的 `preferences.json`，再重新发起请求。不要重置或上传四份个人配置。
 

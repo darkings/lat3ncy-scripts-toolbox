@@ -18,6 +18,7 @@ internal static class SettingsLifecycleProbe
         Task? modules = null;
         Task? tray = null;
         Task? navigation = null;
+        IntPtr closingHwnd = IntPtr.Zero;
         var elapsed = Stopwatch.StartNew();
         Application.Start(_ =>
         {
@@ -34,6 +35,8 @@ internal static class SettingsLifecycleProbe
                         throw new TimeoutException();
                     if (phase is 0 or 2)
                     {
+                        if (closingHwnd != IntPtr.Zero && Native.IsWindow(closingHwnd))
+                            throw new InvalidOperationException("settings_native_window_retained");
                         window = new ToolboxSettingsWindow(readOnlyProbe: true);
                         window.Activate();
                         phase++;
@@ -41,22 +44,25 @@ internal static class SettingsLifecycleProbe
                     else if (phase is 1 or 3)
                     {
                         if (window?.SettingsLoaded != true) return;
+                        modules ??= window.VerifyModulePagesAsync();
+                        if (!modules.IsCompleted) return;
+                        modules.GetAwaiter().GetResult();
                         preview ??= window.PreviewDefaultsAsync();
                         if (!preview.IsCompleted) return;
                         preview.GetAwaiter().GetResult();
                         if (!window.DefaultsPreviewed) throw new InvalidOperationException();
-                        modules ??= window.VerifyModulePagesAsync();
-                        if (!modules.IsCompleted) return;
-                        modules.GetAwaiter().GetResult();
-                        if (!window.DefaultsPreviewed) throw new InvalidOperationException();
                         if (!window.BrandLogoLoaded) throw new InvalidOperationException();
+                        if (!window.WindowIconReady || !window.AppWindow.IsShownInSwitchers) throw new InvalidOperationException("settings_window_icon_missing");
                         navigation ??= window.VerifyNavigationLayoutAsync();
                         if (!navigation.IsCompleted) return;
                         navigation.GetAwaiter().GetResult();
                         tray ??= ToolboxTray.VerifyHostedAsync(WinRT.Interop.WindowNative.GetWindowHandle(window), queue);
                         if (!tray.IsCompleted) return;
                         tray.GetAwaiter().GetResult();
-                        window.Close(); window = null;
+                        closingHwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+                        if (phase == 1) window.InvokeCloseButtonForProbe();
+                        else window.Close();
+                        window = null;
                         preview = null;
                         modules = null;
                         tray = null;
@@ -65,15 +71,18 @@ internal static class SettingsLifecycleProbe
                     }
                     else
                     {
+                        if (Native.IsWindow(closingHwnd)) throw new InvalidOperationException("settings_native_window_retained");
                         code = 0;
                         HudLog.Line("settings-lifecycle=passed phases=" + phase);
                         timer.Stop();
                         Application.Current.Exit();
                     }
                 }
-                catch
+                catch (Exception error)
                 {
                     HudLog.Line("settings-lifecycle=failed phase=" + phase);
+                    HudLog.Line("settings-lifecycle-error=" + error.GetType().Name + ":" +
+                        (error is InvalidOperationException ? error.Message : "probe_exception"));
                     timer.Stop();
                     try { window?.Close(); } catch { }
                     Application.Current.Exit();

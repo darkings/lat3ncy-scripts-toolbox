@@ -6,7 +6,8 @@
 #   Theme-Dark             日落或指定时间执行(深色/夜晚)
 #   Theme-Apply-Now        用户登录时按当前时间对齐一次
 
-$ErrorActionPreference = 'Continue'
+param([switch]$Strict)
+$ErrorActionPreference = if ($Strict) { 'Stop' } else { 'Continue' }
 . (Join-Path $PSScriptRoot 'ThemeUtils.ps1')
 if(-not(Test-ThemeFeatureEnabled)){return}
 
@@ -45,6 +46,7 @@ try
 }
 catch
 {
+  if ($Strict) { throw }
   Write-Log ("Theme-Light -> {0}: FAILED {1}" -f $riseTime.ToString('HH:mm'), $_.Exception.Message)
 }
 
@@ -56,6 +58,7 @@ try
 }
 catch
 {
+  if ($Strict) { throw }
   Write-Log ("Theme-Dark -> {0}: FAILED {1}" -f $setTime.ToString('HH:mm'), $_.Exception.Message)
 }
 
@@ -71,6 +74,7 @@ try
 }
 catch
 {
+  if ($Strict) { throw }
   Write-Log ("Theme-Schedule-Update: FAILED {0}" -f $_.Exception.Message)
 }
 
@@ -89,6 +93,7 @@ try
 }
 catch
 {
+  if ($Strict) { throw }
   Write-Log ("Theme-Apply-Now: FAILED {0}" -f $_.Exception.Message)
 }
 
@@ -107,5 +112,6 @@ try
 }
 catch
 {
+  if ($Strict) { throw }
   Write-Log ("Theme-Apply-Cursors: FAILED {0}" -f $_.Exception.Message)
 }

@@ -8,11 +8,16 @@ namespace Lat3ncyToolbox.ImeHudWinUi;
 /// <summary>Local drafts for tray preferences and independently gated AHK actions.</summary>
 internal sealed class ControlSettingsForm
 {
-    public StackPanel Root { get; } = new() { Spacing = 16, Padding = new Thickness(24) };
+    public StackPanel Root { get; } = new() { Spacing = 8, Padding = new Thickness(24, 12, 24, 20) };
     public string Revision { get; private set; }
     readonly Dictionary<string, (Control input, string original)> _inputs = new();
     readonly Dictionary<string, string> _defaults = new();
     readonly Dictionary<string, string> _labels = new();
+    public bool HasChanges => _inputs.Values.Any(entry => entry.input is ToggleSwitch toggle
+        ? (toggle.IsOn ? "true" : "false") != entry.original
+        : entry.input is SettingsHotkeyEditor hotkey && hotkey.Value != entry.original);
+    public event Action? Edited;
+    void MarkEdited() { Edited?.Invoke(); }
 
     public ControlSettingsForm(JsonElement data, string page)
     {
@@ -24,41 +29,52 @@ internal sealed class ControlSettingsForm
             AddCheck("tray_visible", "显示工具箱主托盘图标", values);
             return;
         }
-        Root.Children.Add(Description("功能和快捷键可分别开关。默认键位沿用当前配置，修改不改写源码。使用 AHK 格式，例如 ^!F9（Ctrl+Alt+F9）或 ~CapsLock & f。CapsLock 基础键保留；输入法增强可关闭。"));
+        Root.Children.Add(Description("展开功能即可设置快捷键。选择组合修饰键和主键，修改后自动保存；默认键位保持不变，CapsLock 基础键固定。"));
         foreach (JsonElement feature in data.GetProperty("features").EnumerateArray())
         {
             string id = feature.GetProperty("id").GetString()!;
             string label = feature.GetProperty("label").GetString()!;
             string kind = feature.GetProperty("kind").GetString()!;
             _labels[id] = label;
-            Root.Children.Add(new TextBlock { Text = label, FontSize = 18, Margin = new Thickness(0, 8, 0, 0) });
-            AddCheck("feature_" + id + "_enabled", "启用功能", values, label);
-            if (kind == "resident") continue;
-            AddCheck("hotkey_" + id + "_enabled", "启用快捷键", values, label);
+            var enabled = Switch("feature_" + id + "_enabled", values, label + " 启用功能");
+            if (kind == "resident") { Root.Children.Add(SettingsUi.Card(SettingsUi.Row(label, enabled))); continue; }
+            var detail = new StackPanel { Spacing = 10 };
+            detail.Children.Add(SettingsUi.Row("启用快捷键", Switch("hotkey_" + id + "_enabled", values, label + " 启用快捷键")));
             string key = "binding_" + id;
             string current = values.GetProperty(key).GetString()!;
-            var input = new TextBox { Header = "快捷键", Text = current, MaxLength = 80, IsReadOnly = kind == "leader" };
-            AutomationProperties.SetName(input, label + " 快捷键");
-            AutomationProperties.SetAutomationId(input, key);
-            Root.Children.Add(input); _inputs[key] = (input, current);
+            if (kind != "leader")
+            {
+                var input = new SettingsHotkeyEditor(current);
+                input.Edited += MarkEdited;
+                AutomationProperties.SetName(input, label + " 快捷键"); AutomationProperties.SetAutomationId(input, key);
+                detail.Children.Add(input); _inputs[key] = (input, current);
+            }
             string defaultBinding = feature.GetProperty("default").GetString()!;
-            _defaults[key] = defaultBinding;
-            string hint = "默认：" + defaultBinding;
+            if (kind != "leader") _defaults[key] = defaultBinding;
+            string hint = "默认：" + (kind == "leader" ? "CapsLock" : SettingsHotkeyEditor.Describe(defaultBinding));
             if (kind.StartsWith("editor-", StringComparison.Ordinal)) hint += "。这是发送给编辑器的键位，请同步编辑器内的复制路径绑定。";
             if (kind == "leader") hint += "。基础键供 Caps 组合键使用，不能更换。";
-            Root.Children.Add(Description(hint));
+            detail.Children.Add(Description(hint));
+            Root.Children.Add(new Expander { Header = SettingsUi.Row(label, enabled), Content = detail,
+                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch });
         }
     }
 
-    static TextBlock Description(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap };
+    static TextBlock Description(string text) => SettingsUi.Hint(text);
+
+    ToggleSwitch Switch(string key, JsonElement values, string name)
+    {
+        bool value = values.GetProperty(key).GetBoolean();
+        var input = SettingsUi.Toggle(value);
+        input.Toggled += (_, _) => MarkEdited();
+        AutomationProperties.SetName(input, name); AutomationProperties.SetAutomationId(input, key);
+        _inputs[key] = (input, value ? "true" : "false"); return input;
+    }
 
     void AddCheck(string key, string label, JsonElement values, string context = "")
     {
-        bool value = values.GetProperty(key).GetBoolean();
-        var input = new CheckBox { Content = label, IsChecked = value };
-        AutomationProperties.SetName(input, context.Length > 0 ? context + " " + label : label);
-        AutomationProperties.SetAutomationId(input, key);
-        Root.Children.Add(input); _inputs[key] = (input, value ? "true" : "false");
+        var input = Switch(key, values, context.Length > 0 ? context + " " + label : label);
+        Root.Children.Add(SettingsUi.Card(SettingsUi.Row(label, input)));
     }
 
     public object ReadRequest()
@@ -66,12 +82,12 @@ internal sealed class ControlSettingsForm
         var changes = new Dictionary<string, object>();
         foreach (var (key, field) in _inputs)
         {
-            if (field.input is CheckBox check)
+            if (field.input is ToggleSwitch check)
             {
-                bool value = check.IsChecked == true;
+                bool value = check.IsOn;
                 if ((value ? "true" : "false") != field.original) changes[key] = value;
             }
-            else if (field.input is TextBox text && text.Text != field.original) changes[key] = text.Text;
+            else if (field.input is SettingsHotkeyEditor hotkey && hotkey.Value != field.original) changes[key] = hotkey.Value;
         }
         return new { revision = Revision, changes };
     }
@@ -83,9 +99,29 @@ internal sealed class ControlSettingsForm
 
     public void ResetBindings()
     {
-        foreach (var (key, value) in _defaults) ((TextBox)_inputs[key].input).Text = value;
+        foreach (var (key, value) in _defaults) ((SettingsHotkeyEditor)_inputs[key].input).Set(value);
         foreach (var (key, field) in _inputs)
-            if (key.StartsWith("hotkey_", StringComparison.Ordinal)) ((CheckBox)field.input).IsChecked = true;
+            if (key.StartsWith("hotkey_", StringComparison.Ordinal)) ((ToggleSwitch)field.input).IsOn = true;
+        MarkEdited();
+    }
+
+    public bool IsNonDefault => _inputs.Any(item => item.Value.input is ToggleSwitch toggle ? !toggle.IsOn
+        : item.Value.input is SettingsHotkeyEditor hotkey && hotkey.Value != _defaults[item.Key]);
+    public void RestoreDefaults()
+    {
+        foreach (var entry in _inputs.Values) if (entry.input is ToggleSwitch toggle) toggle.IsOn = true;
+        foreach (var (key, value) in _defaults) ((SettingsHotkeyEditor)_inputs[key].input).Set(value);
+        MarkEdited();
+    }
+    public void AcceptCommitted(JsonElement data)
+    {
+        Revision = data.GetProperty("revision").GetString()!;
+        JsonElement values = data.GetProperty("values");
+        foreach (string key in _inputs.Keys.ToArray())
+        {
+            var entry = _inputs[key]; JsonElement value = values.GetProperty(key);
+            _inputs[key] = (entry.input, value.ValueKind == JsonValueKind.String ? value.GetString()! : value.GetRawText());
+        }
     }
 
     public string? ConflictMessage(string code)

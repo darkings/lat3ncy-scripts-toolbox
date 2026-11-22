@@ -147,6 +147,7 @@ class ToolboxControls {
     }
 
     static Poll(*) {
+        ToolboxReload.Poll()
         if GetKeyState("CapsLock", "P")
             return
         try {

@@ -863,6 +863,8 @@ def env_lookup(name: str) -> str:
 def resolve_aliyun_keys(cfg: dict) -> tuple[str, str]:
     """环境变量优先，未设置时才读配置文件。不把密钥写进日志。"""
     section = cfg.get("aliyun", {}) if isinstance(cfg.get("aliyun"), dict) else {}
+    if section.get('prefer_config_credentials') is True:
+        return _first_nonempty(section.get('access_key_id')), _first_nonempty(section.get('access_key_secret'))
     # 官方 SDK 名优先，再兼容 ALIYUN_* / ALIBABA_*；最后才用 config.toml。
     key_id = _first_nonempty(
         env_lookup("ALIBABA_CLOUD_ACCESS_KEY_ID"),
@@ -882,6 +884,8 @@ def resolve_aliyun_keys(cfg: dict) -> tuple[str, str]:
 def resolve_tencent_keys(cfg: dict) -> tuple[str, str]:
     """腾讯云密钥：进程环境 → 用户环境 → config.toml。"""
     section = cfg.get("tencent", {}) if isinstance(cfg.get("tencent"), dict) else {}
+    if section.get('prefer_config_credentials') is True:
+        return _first_nonempty(section.get('secret_id')), _first_nonempty(section.get('secret_key'))
     secret_id = _first_nonempty(
         env_lookup("TENCENTCLOUD_SECRET_ID"),
         env_lookup("TENCENT_SECRET_ID"),

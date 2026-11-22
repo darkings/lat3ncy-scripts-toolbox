@@ -883,6 +883,12 @@ internal static class Native
         }
     }
 
+    public static void SyncWindowTitleTheme(IntPtr hwnd)
+    {
+        int dark = AppsUseDarkMode() ? 1 : 0;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+    }
+
     public static void ApplyDwmChrome(IntPtr hwnd, bool? dark = null, int? backdrop = null)
     {
         if (hwnd == IntPtr.Zero)

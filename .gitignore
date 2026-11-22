@@ -11,6 +11,7 @@ __pycache__/
 !/README.md
 !/tools/*/README.md
 !/tools/ime-hud-winui/Assets/README.md
+!/tools/settings/RAYCAST-SETTINGS.md
 !/resources/cursors/README.md
 !/resources/icons/README.md
 !/findings.md
@@ -43,6 +44,7 @@ __pycache__/
 .lat3ncy-tools-tmp/
 **/.toolbox-config-*.tmp
 .toolbox-controls.json
+.toolbox-state/
 .toolbox-controls-*.tmp
 /test_*.ahk
 /test.txt

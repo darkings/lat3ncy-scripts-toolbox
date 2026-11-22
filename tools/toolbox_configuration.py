@@ -313,7 +313,12 @@ def save(module: str, changes: object, expected_revision: str) -> dict:
                 os.replace(temporary, path)
             finally:
                 temporary.unlink(missing_ok=True)
-    return snapshot(module)
+    result = snapshot(module)
+    if updated != raw:
+        from toolbox_reload import mark_pending
+        try: mark_pending(module, changes, revision(updated))
+        except (OSError, ValueError): result['reload_state_unavailable'] = True
+    return result
 
 
 def main(argv=None) -> int:

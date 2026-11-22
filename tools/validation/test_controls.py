@@ -15,6 +15,26 @@ import toolbox_preferences as prefs
 
 
 class ControlsTests(unittest.TestCase):
+    def test_all_module_feature_shortcut_flags_and_custom_bindings_round_trip(self):
+        initial = controls.snapshot()
+        disabled = {f'feature_{name}_enabled': False for name, *_ in controls.FEATURES}
+        controls.save(disabled, initial['revision'])
+        for key, original in controls.snapshot()['values'].items():
+            if not isinstance(original, bool): continue
+            with self.subTest(key=key):
+                saved = controls.save({key: not original}, controls.snapshot()['revision'])
+                self.assertEqual(not original, saved['values'][key])
+                self.assertEqual(not original, controls.snapshot()['values'][key])
+                controls.save({key: original}, saved['revision'])
+        for name, _, _, kind in controls.FEATURES:
+            if kind in ('leader', 'resident'): continue
+            key = f'binding_{name}'
+            original = controls.snapshot()['values'][key]
+            with self.subTest(key=key):
+                saved = controls.save({key: '^!F24'}, controls.snapshot()['revision'])
+                self.assertEqual('^!F24', controls.snapshot()['values'][key])
+                controls.save({key: original}, saved['revision'])
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory(); self.addCleanup(self.folder.cleanup)
         self.repo = Path(self.folder.name) / 'repo with spaces'

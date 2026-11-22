@@ -248,7 +248,20 @@ internal sealed class ToolboxTray : IDisposable
         return result;
     }
 
-    static IntPtr CreateMonochromeIcon(byte[] source, int size, bool white)
+    internal static async Task<IntPtr> LoadWindowIconAsync()
+    {
+        byte[] png = await File.ReadAllBytesAsync(Path.Combine(AppContext.BaseDirectory, "Assets", "toolbox-logo.png"));
+        using var stream = new InMemoryRandomAccessStream();
+        using (var writer = new DataWriter(stream)) { writer.WriteBytes(png); await writer.StoreAsync(); writer.DetachStream(); }
+        stream.Seek(0); var decoder = await BitmapDecoder.CreateAsync(stream);
+        const int size = 64;
+        var data = await decoder.GetPixelDataAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Straight,
+            new BitmapTransform { ScaledWidth = size, ScaledHeight = size }, ExifOrientationMode.IgnoreExifOrientation, ColorManagementMode.DoNotColorManage);
+        return CreateMonochromeIcon(data.DetachPixelData(), size, null);
+    }
+    internal static void ReleaseWindowIcon(IntPtr icon) { if (icon != IntPtr.Zero) DestroyIcon(icon); }
+
+    static IntPtr CreateMonochromeIcon(byte[] source, int size, bool? white)
     {
         if (source.Length != size * size * 4) throw new InvalidDataException();
         var header = new BitmapHeader { Size = 40, Width = size, Height = -size, Planes = 1, BitCount = 32 };
@@ -257,7 +270,15 @@ internal sealed class ToolboxTray : IDisposable
         try
         {
             if (color == IntPtr.Zero || bits == IntPtr.Zero) throw new InvalidOperationException("tray_bitmap_failed");
-            byte[] tinted = Tint(source, white); Marshal.Copy(tinted, 0, bits, tinted.Length);
+            byte[] tinted;
+            if (white.HasValue) tinted = Tint(source, white.Value);
+            else
+            {
+                tinted = (byte[])source.Clone();
+                for (int i = 0; i < tinted.Length; i += 4)
+                    for (int channel = 0; channel < 3; channel++) tinted[i + channel] = (byte)((tinted[i + channel] * tinted[i + 3] + 127) / 255);
+            }
+            Marshal.Copy(tinted, 0, bits, tinted.Length);
             mask = CreateBitmap(size, size, 1, 1, new byte[((size + 15) / 16) * 2 * size]);
             if (mask == IntPtr.Zero) throw new InvalidOperationException("tray_mask_failed");
             var info = new IconInfo { IsIcon = true, Color = color, Mask = mask };

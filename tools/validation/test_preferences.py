@@ -16,6 +16,50 @@ import toolbox_preferences as prefs
 
 
 class PreferencesTests(unittest.TestCase):
+    def test_every_basic_preference_saves_reads_back_and_restores(self):
+        alternatives = {
+            ('translate', 'engine'): 'google_gtx', ('translate', 'source_language'): 'en',
+            ('translate', 'target_language'): 'en', ('tts', 'engine'): 'edge',
+            ('tts', 'zh_voice'): 'Fixed Chinese Probe', ('tts', 'en_voice'): 'Fixed English Probe',
+            ('tts', 'rate'): '+5%', ('tts', 'pitch'): '+5Hz', ('tts', 'volume'): '+5%',
+        }
+        count = 0
+        for section, fields in prefs.DEFAULTS.items():
+            for key in fields:
+                current = prefs.snapshot(); original = current['values'][section][key]
+                value = not original if isinstance(original, bool) else alternatives[(section, key)]
+                with self.subTest(section=section, key=key):
+                    saved = prefs.save({section: {key: value}}, current['revision'])
+                    self.assertEqual(value, saved['values'][section][key])
+                    self.assertEqual(value, prefs.snapshot()['values'][section][key])
+                    prefs.save({section: {key: original}}, saved['revision'])
+                count += 1
+        self.assertEqual(12, count)
+
+    def test_legacy_preferences_migrate_on_save_without_changing_the_old_file(self):
+        legacy = prefs.legacy_preference_path()
+        legacy.parent.mkdir(parents=True)
+        original = b'{"version":1,"values":{"translate":{"engine":"google_gtx"}}}'
+        legacy.write_bytes(original)
+        before = prefs.snapshot()
+        self.assertEqual('google_gtx', before['values']['translate']['engine'])
+        self.assertFalse(prefs.preference_path().exists())
+        saved = prefs.save({'translate': {'target_language': 'en'}}, before['revision'])
+        self.assertTrue(prefs.preference_path().is_relative_to(self.repo.resolve()))
+        self.assertEqual('google_gtx', saved['values']['translate']['engine'])
+        self.assertEqual('en', saved['values']['translate']['target_language'])
+        self.assertEqual(original, legacy.read_bytes())
+        with self.assertRaises(prefs.PreferenceError):
+            prefs.save({'translate': {'target_language': 'zh'}}, before['revision'])
+
+    def test_invalid_checkout_preferences_do_not_fall_back_to_legacy(self):
+        legacy = prefs.legacy_preference_path()
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text('{"version":1,"values":{}}', encoding='utf-8')
+        path = prefs.preference_path(); path.parent.mkdir(parents=True)
+        path.write_text('{', encoding='utf-8')
+        with self.assertRaises(prefs.PreferenceError): prefs.snapshot()
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)

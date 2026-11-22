@@ -64,6 +64,13 @@ internal static class Program
 
         if (HasFlag(args, "--settings-lifecycle-test"))
             return SettingsLifecycleProbe.Run();
+        if (HasFlag(args, "--settings-autosave-test"))
+            return SettingsAutosaveProbe.Run();
+        if (HasFlag(args, "--settings-write-test"))
+        {
+            PreferencesBridge.VerifyIsolatedWritesAsync().GetAwaiter().GetResult();
+            return 0;
+        }
 
         // 第二个进程只转发到本 Renderer 的 HWND，不查找其他窗口。
         if (!TryClaimResident(startupCommand, cycleRounds > 0))

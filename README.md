@@ -6,7 +6,7 @@
 
 更新已有安装时，先看 [安装、更新与回滚](docs/RELEASING.md)；当前范围与验收记录见 [2026-11-22 文本工作流候选](docs/releases/2026-11-22-text-workflow.md)。[2026-11-21 基础可靠性记录](docs/releases/2026-11-21-reliability.md)保留为历史。
 
-翻译面板的“更多操作”提供失败重试、切换中英目标、朗读原文和设置。也可在 Raycast 运行 **Toolbox Settings**，打开 [工具箱设置中心](tools/settings/README.md)：翻译、朗读、OCR、音频切换、主题/壁纸/背光、电源与唤醒、氛围灯均在同一窗口按分类管理；个人密钥仍保留在原 TOML/环境变量。各分类独立保存并注明生效条件，保存不会立即运行系统或硬件操作。长文需显式开启，最多 20000 字符、200 段、120 秒，关闭面板取消任务。腾讯鉴权失败后冷却五分钟，期间继续 Google 保底，凭证/腾讯配置变化后重新尝试。详见 [翻译](tools/translate/README.md)。
+翻译面板的“更多操作”提供失败重试、切换中英目标、朗读原文和设置。也可在 Raycast 运行 **Toolbox Settings**，打开 [工具箱设置中心](tools/settings/README.md)：翻译、朗读、OCR、音频切换、主题/壁纸/背光、电源与唤醒、氛围灯均在同一窗口按分类管理；翻译与朗读分别集中在独立页面，支持自动保存、当前页恢复默认及本机厂商密钥输入。需要重新应用的配置在左栏底部显示重载；自动保存不执行系统或硬件操作。长文需显式开启，最多 20000 字符、200 段、120 秒，关闭面板取消任务。腾讯鉴权失败后冷却五分钟，期间继续 Google 保底，凭证/腾讯配置变化后重新尝试。详见 [翻译](tools/translate/README.md)。
 
 ## 快速开始
 
@@ -68,7 +68,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ahk\tests\run-tests.ps
 
 ## 快捷键
 
-改键只编辑 `ahk/shortcuts.ahk`；`ahk/hotkey-router.ahk` 负责校验和注册，`ahk/features/` 只实现功能。两个功能抢占同一快捷键会在启动时报错，不会静默覆盖。
+在工具箱设置的“功能与快捷键”中选择组合键和主键，可独立开关功能/快捷键；默认仍来自 `ahk/shortcuts.ahk`。`ahk/hotkey-router.ahk` 负责校验和注册，`ahk/features/` 只实现功能。启用项冲突会拒绝保存，实际注册失败保留原绑定。
 
 | 快捷键 | 功能 |
 | --- | --- |
@@ -87,7 +87,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ahk\tests\run-tests.ps
 | `Caps + D` | 切换音频输出 `G27Q2 ↔ AirPods`（自动连接） |
 | `Ctrl + V` | 智能粘贴：剪贴板是图片时存成本地 PNG，其余原样透传 |
 | `Alt` + 反引号 / `Shift + Alt` + 反引号 | 同一应用窗口间正 / 反向循环（Zed 走项目切换） |
-| 无快捷键 | 快速左右摇鼠标 → 指针临时放大（1.4s 后恢复）**已暂时停用**：`FindMouse.Enabled := false`，改回 `true` 即恢复 |
+| 无快捷键 | 快速左右摇鼠标 → 指针临时放大（1.4s 后恢复），可在功能设置中开关 |
 
 ## 工具
 

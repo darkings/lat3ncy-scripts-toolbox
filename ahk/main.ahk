@@ -170,6 +170,7 @@ IsToolboxTestMode() {
 ; 统一路由层必须在全部 feature 之后加载。
 #Include features\text-workflow.ahk
 #Include ..\shared\toolbox-controls.ahk
+#Include ..\shared\toolbox-reload.ahk
 #Include hotkey-router.ahk
 
 ; 启动时清掉丢失引用的自定义 HUD，避免旧弹窗一直钉在桌面上。

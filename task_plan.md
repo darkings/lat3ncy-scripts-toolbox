@@ -1,4 +1,33 @@
+## 2026-11-22 自动保存、翻译密钥与 Raycast 设置盘点
+
+用户追加要求：全部设置自动保存，偏离默认时标题旁显示“默认”，恢复只作用于当前大功能且保留密钥；需要重新应用时左导航底部显示强调色“重载”；翻译/朗读拆成两个完整页面；厂商 key 可在设置中输入，开关本体真正靠右。
+
+1. [x] 九分类原生窗口，翻译/朗读分别合并基础与高级配置；标题/正文 24 DIP 对齐、内置 TitleBar、彩色任务栏图标。原生 ToggleSwitch 去除默认最小宽度、状态文字及固定 12 DIP 间隔，保留原生模板和状态；可见开关本体右对齐。
+2. [x] 串行自动保存，文本完成输入/离开编辑框/Enter 后提交；跨页保留草稿，不在写入中重建控件，关闭先保存。错误保留输入，冲突只由明确重新读取处理。
+3. [x] 条件显示“默认”，当前页恢复，基础偏好清除对应 section 覆盖；其他页面与凭证保留。腾讯/阿里 write-only PasswordBox、JSON stdin、本机 TOML 原子写、原 DACL 保护、固定错误码；显式本机密钥可优先于过期环境变量，Google 静默保底保持。
+4. [x] 持久化待重载状态，现有 AHK 定时线程转交固定一次性工作进程；校验 HUD 路径/PID/创建时间、请求期限、配置修订、任务所属仓库。Power 复用心跳安全重载；Theme 不覆盖其他 checkout；RGB 仅重启拥有的任务，不按文件名全局杀进程。
+5. [x] 新增 9 项隔离回归，总 234 项 Python；native autosave / lifecycle / write 三类探测：真实计时器、跨页写入、保留凭证的默认恢复、开关、待重载和系统关闭前保存。七模块原配置哈希仍完全保持。
+6. [x] Computer Use 实点主托盘关闭→自动保存→标题旁默认→恢复，确认主题仍关闭；截图确认开关右侧无占位。原生产设置系统关闭成功且 HUD 继续运行。首次 Power 重载发现 PowerShell null 字符串与动态 HUD 标题校验问题，修正为固定窗口类及 NullString；再次实机重载完成，Power 新 PID 5636，待重载清空。
+7. [x] Raycast 12 入口及 capture helper 盘点，分析写入 tools/settings/RAYCAST-SETTINGS.md。优先后续为“截图与录屏”的复制/等待/额外复制目录，其次只读诊断与维护入口；共用模块配置，Raycast 自己键位不冒充 AHK 键位。
+8. [x] 最新强调色版本干净候选 offline/helpers/full 三阶段通过，291 个源码/资产散列一致；原生三类探测通过。发布备份 .tmp/releases/20261122-141835-b7c597a6，HUD 源戳 2c7740779318379e7d9f137ad9e16c48487689678060fdf310d3f54c9e2e179e，HUD 26020 / AHK 33952，doctor 健康。提交后的精确 SHA CI 以草稿 PR 最终记录为准，不合并；音频 exe 的既有自动审批拒绝限制继续保留。
+
+证据：.tmp/settings-autosave-config-protection.json；.tmp/settings-integration-tests.log；.tmp/validation/20261122-settings-accent-final/；本机 reload request/result 仅含非敏感固定动作。真实厂商鉴权与主题/灯光硬件变化未作为离线测试成功项。
+
 # 任务计划：切换播放器自动连接 AirPods 完善
+
+## 2026-11-22 设置保存修复、原生控件与窗口标题
+
+用户实机反馈功能开关关闭后弹回、原始配置布局难用；追加标题右侧开关、去除标题额外左缩进、使用内置 WinUI 标题栏、补齐任务栏图标并测试全部设置。
+
+1. [x] 根因定位：实际 HUD RID 4096，AHK RID 8192；原配置写锁在普通用户 LOCALAPPDATA，Low apphost 无法写。非敏感偏好/写锁改为 Git 忽略的仓库 .toolbox-state，旧偏好只读兼容、首次保存迁移但不改不删旧文件；不提权、不修改 ACL/完整性标签。
+2. [x] Computer Use 重置后实际导航与点击成功，关闭“主题、壁纸与背光”后等待并读回 false，界面保持已关闭。此为用户要求的实际开关变更，其他个人 TOML 未改。
+3. [x] 中文折叠分组、紧凑设置行、步进数值、24 小时时间、亮度滑块、路径浏览、匹配列表/灯区逐项编辑、可视化快捷键选择；默认键位和 CapsLock 基础键保持。开关在标题右侧，页面标题/正文左边界统一，WinUI TitleBar 与系统标题按钮、窗口/任务栏彩色 Logo。
+4. [x] 全部 106 个可编辑字段保存/读回/恢复、3 个只读项拒写；12 个基础偏好、全部控制布尔值及 19 个自定义键位读回通过。新增旧偏好迁移/损坏回归，Python 合计 225 项。原生两轮全部页面/编辑器/三宽度标题对齐/图标/关闭句柄通过；相同 apphost 的隔离真实桥接写入通过。
+5. [x] 最终含空格路径干净候选三阶段、正式替换重载和健康检查通过，WinUI 源戳 82b8ace0bb287a4ca97f378922204e953a7dc38fd3ceb8df8a636472f375a6bb，14 个改动源码与候选散列一致。Computer Use 实际验证标题/开关布局、蓝色任务栏 Logo、修改后保存启用/放弃后禁用、文件与文件夹选择器打开/取消、底部关闭与系统标题栏关闭后 HUD PID 保持。修正初始窗口居中，底部不再落到任务栏后。提交后精确 SHA CI 和草稿 PR 状态以最终远端记录为准，不合并。
+
+证据：.tmp/validation/20261122-settings-centered-final/、.tmp/settings-usable-candidate-match.json、.tmp/settings-usable-final-deploy.json、.tmp/settings-usable-final-protection.json、.tmp/settings-usable-final-doctor.json。七模块 TOML 未改；真实主题总开关按本次操作关闭，其他总开关未改；基础偏好新旧文件均未由实机检查写入。最终 HUD PID 16464，AHK 29716，caret 2244。原生源码自测和隔离写入的详细阶段在 test-out/ImeHudWinUi.log。
+
+原生探针使用固定隔离文件和模拟 Shell，不宣称真实 Explorer 重启、睡眠/蓝牙/HID 已验收。此前音频 exe 单独替换的自动审批拒绝仍保持，未在本轮绕过；当前改动聚焦设置与现有受控发布。
 
 ## 2026-11-22 WinUI 导航、Logo、托盘与功能/快捷键控制
 

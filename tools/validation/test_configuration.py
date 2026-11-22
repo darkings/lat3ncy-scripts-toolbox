@@ -17,6 +17,38 @@ import toolbox_preferences as prefs
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_every_editable_field_saves_and_reads_back_and_readonly_fields_reject_writes(self):
+        count = 0
+        for module, spec in config.MODULES.items():
+            for definition in spec['fields']:
+                key, original, kind = definition['key'], definition['default'], definition['type']
+                snap = config.snapshot(module)
+                if definition['readonly']:
+                    with self.subTest(module=module, key=key), self.assertRaises(config.ConfigurationError):
+                        config.save(module, {key: original}, snap['revision'])
+                    continue
+                if definition['choices']:
+                    value = next(item for item in definition['choices'] if item != original)
+                elif kind == 'bool': value = not original
+                elif kind in ('int', 'number'):
+                    value = original + (1 if kind == 'int' else .125)
+                    if definition['maximum'] is not None and value > definition['maximum']: value = original - (1 if kind == 'int' else .125)
+                elif kind == 'list': value = ['IsolatedProbeKeyword']
+                elif kind == 'map': value = {'IsolatedZone': 17}
+                elif key.startswith('schedule.fixed_'): value = '08:32'
+                elif key in ('schedule.latitude', 'schedule.longitude'): value = '31.25'
+                elif key.endswith('.endpoint'): value = 'probe.example.test'
+                elif key == 'capture.region': value = '1,2,32,16'
+                else: value = 'IsolatedProbeValue'
+                with self.subTest(module=module, key=key):
+                    saved = config.save(module, {key: value}, snap['revision'])
+                    actual = next(field['value'] for field in saved['fields'] if field['key'] == key)
+                    self.assertEqual(value, actual)
+                    self.assertEqual(value, config.entries(config.module_path(module).read_text('utf-8-sig'), module)[0][key])
+                    config.save(module, {key: original}, saved['revision'])
+                    count += 1
+        self.assertEqual(106, count)
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
@@ -190,7 +222,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(old + b'\n# external edit\n', path.read_bytes())
 
     def test_cli_fixed_errors_and_isolated_round_trip(self):
-        for filename in ('toolbox_configuration.py', 'configuration_schema.py', 'toolbox_preferences.py'):
+        for filename in ('toolbox_configuration.py', 'configuration_schema.py', 'toolbox_preferences.py', 'toolbox_reload.py', 'toolbox_controls.py'):
             shutil.copyfile(Path(config.__file__).parent / filename, self.repo / 'tools' / filename)
         helper = self.repo / 'tools/toolbox_configuration.py'
         snap = config.snapshot('ocr')

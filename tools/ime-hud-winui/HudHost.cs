@@ -260,7 +260,7 @@ internal sealed class HudHost : IDisposable
                 ShowSettings();
                 break;
             case Protocol.Kind.SettingsClose:
-                _settings?.Close();
+                _settings?.CloseForShutdown();
                 break;
             case Protocol.Kind.Hide:
                 HideNoActivate(animate: true);
@@ -480,6 +480,7 @@ internal sealed class HudHost : IDisposable
         ResizeIsland();
         _panel?.SyncThemeFromSystem(reason);
         _tray?.SyncTheme();
+        _settings?.SyncTitleTheme();
     }
 
     void ApplyHostChrome(bool? dark = null)
@@ -901,7 +902,7 @@ internal sealed class HudHost : IDisposable
         // SystemBackdrop 必须在 HWND 还活着时拆掉。Destroy 后再 Dispose Island 会 native AV。
         try { _panel?.Dispose(); } catch { }
         _panel = null;
-        try { _settings?.Close(); } catch { }
+        try { _settings?.CloseForShutdown(); } catch { }
         _settings = null;
         try { _tray?.Dispose(); } catch { }
         _tray = null;

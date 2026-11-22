@@ -35,6 +35,12 @@ class PreferenceError(ValueError):
 
 
 def preference_path() -> Path:
+    # The WinUI apphost can inherit Low integrity from the checkout. Keep
+    # non-secret writable state here so every consumer uses the same location.
+    return REPO.resolve() / '.toolbox-state' / 'preferences.json'
+
+
+def legacy_preference_path() -> Path:
     root = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
     identity = hashlib.sha256(os.path.normcase(str(REPO.resolve())).encode("utf-8")).hexdigest()[:24]
     return root / "lat3ncy-toolbox" / "preferences" / identity / "preferences.json"
@@ -76,6 +82,8 @@ def validate(values: object) -> dict:
 
 def read_overlay() -> tuple[dict, str]:
     path = preference_path()
+    if not path.exists():
+        path = legacy_preference_path()  # Read-only migration; preserve the old file.
     try:
         with path.open("rb") as handle:
             raw = handle.read(16385)
@@ -133,13 +141,14 @@ def base_revision(values: dict) -> str:
 
 def snapshot(*, proposed: dict | None = None) -> dict:
     values = base_values()
+    defaults = validate({section: dict(fields) for section, fields in values.items()})
     baseline = base_revision(values)
     overlay, revision = read_overlay()
     if proposed is not None:
         overlay = proposed
     for section, fields in overlay.items():
         values[section].update(fields)
-    return {"version": 1, "revision": revision, "base_revision": baseline, "values": validate(values)}
+    return {"version": 1, "revision": revision, "base_revision": baseline, "values": validate(values), "defaults": defaults}
 
 
 @contextmanager
@@ -174,15 +183,21 @@ def _writer_lock(path: Path):
 
 
 def save(changes: object, expected_revision: str, *, reset: bool = False,
-         expected_base_revision: str | None = None) -> dict:
+         expected_base_revision: str | None = None, reset_section: str | None = None) -> dict:
     changes = validate(changes)
     if not isinstance(reset, bool) or (reset and not isinstance(expected_base_revision, str)):
+        raise PreferenceError("invalid_request")
+    if reset_section is not None and (reset_section not in DEFAULTS or reset or not isinstance(expected_base_revision, str)):
         raise PreferenceError("invalid_request")
     path = preference_path()
     with _writer_lock(path):
         overlay, revision = read_overlay()
         if revision != expected_revision:
             raise PreferenceError("settings_changed_reload")
+        if reset_section is not None:
+            if snapshot(proposed={})['base_revision'] != expected_base_revision:
+                raise PreferenceError('settings_changed_reload')
+            overlay.pop(reset_section, None)
         if reset:
             defaults = snapshot(proposed={})
             if defaults["base_revision"] != expected_base_revision:
@@ -195,7 +210,7 @@ def save(changes: object, expected_revision: str, *, reset: bool = False,
                        for section, fields in changes.items()}
             changes = {section: fields for section, fields in changes.items() if fields}
         for section, fields in changes.items():
-            overlay.setdefault(section, {}).update(fields)
+            if fields: overlay.setdefault(section, {}).update(fields)
         # Validate the effective result before writing; never report a rejected
         # config after already changing the user's preferences.
         snapshot(proposed=overlay)
@@ -222,10 +237,10 @@ def main(argv=None) -> int:
         if args.apply:
             request = json.loads(sys.stdin.read(16385))
             if (not isinstance(request, dict) or not {"changes", "revision"} <= set(request)
-                    or set(request) - {"changes", "revision", "reset", "base_revision"}):
+                    or set(request) - {"changes", "revision", "reset", "base_revision", "reset_section"}):
                 raise PreferenceError("invalid_request")
             result = save(request["changes"], request["revision"], reset=request.get("reset", False),
-                          expected_base_revision=request.get("base_revision"))
+                          expected_base_revision=request.get("base_revision"), reset_section=request.get('reset_section'))
         else:
             result = snapshot(proposed={} if args.defaults else None)
         print(json.dumps({"status": "ok", **result}, ensure_ascii=False))

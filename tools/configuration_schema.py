@@ -15,8 +15,8 @@ def field(key, label, default, *, choices=None, minimum=None, maximum=None, help
 
 
 MODULES = {
-    'translate': dict(title='翻译高级', path='tools/translate/config.toml',
-        effect='保存后下次翻译生效。引擎、语言及回退在“翻译与朗读”页设置；密钥在原 TOML / 环境变量中管理。', fields=[
+    'translate': dict(title='翻译设置', path='tools/translate/config.toml',
+        effect='自动保存，下次翻译生效。厂商密钥在本页设置；Google 作为保底。', fields=[
         field('timeout_s', '单次网络操作超时（秒）', 4.0, minimum=.25, maximum=12),
         field('max_chars', '短文字符上限', 2000, minimum=1, maximum=20000),
         field('cache.max_size_mb', '缓存容量（MB）', 10, minimum=1, maximum=10240),
@@ -26,8 +26,8 @@ MODULES = {
         field('tencent.project_id', '腾讯云项目 ID', 0, minimum=0, maximum=2147483647),
         field('aliyun.endpoint', '阿里云服务域名', 'mt.cn-hangzhou.aliyuncs.com', help='修改域名会改变文本和签名请求的发送目标。'),
     ]),
-    'tts': dict(title='朗读高级', path='tools/tts/config.toml',
-        effect='保存后下次朗读生效。音色及语速在“翻译与朗读”页设置。', fields=[
+    'tts': dict(title='朗读设置', path='tools/tts/config.toml',
+        effect='自动保存，下次朗读生效。', fields=[
         field('concurrency', '同时合成片段数', 2, minimum=1, maximum=10),
         field('log_text', '在本地日志记录朗读正文', False, help='开启后原文会写入朗读日志；关闭不删除已有日志。'),
         field('cache.max_size_mb', '缓存容量（MB）', 100, minimum=1, maximum=10240),

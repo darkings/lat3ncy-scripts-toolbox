@@ -2,13 +2,11 @@
 
 唯一 IME HUD 实现。芯片视觉已定稿。
 
-`ImeHudWinUi.exe --settings`（或面板更多菜单 / Raycast Toolbox Settings）打开标准 WinUI 设置窗口。表单滚动、底部操作固定，字段校验保留输入，异步加载/保存期间禁用重复操作；只调用固定的本地标准库 JSON 助手，不处理密钥。关闭设置不应关闭常驻 HUD；`--settings-close` 供显式生命周期检查清理设置窗口。
+`ImeHudWinUi.exe --settings` 打开原生 WinUI 设置窗口，采用内置 TitleBar、左侧 NavigationView 和右侧原生编辑控件。九个分类中翻译和朗读各自合并基础、高级选项；翻译页提供不回显的本机厂商密钥入口。修改自动保存，标题旁“默认”恢复当前页且保留凭证；需要重新应用的模块在左栏底部显示“重载”。详见 [设置中心](../settings/README.md)。
 
-窗口现为 [工具箱设置中心](../settings/README.md)，顶部选择翻译/朗读基础与高级、OCR、音频、主题、电源、RGB。模块原生表单由固定白名单元数据生成，各页草稿缓存到窗口关闭，保存仅发修改字段。源配置修订冲突保留输入；每页提示实际生效条件，不由保存自动触发硬件、管理员操作或计划任务更新。
+保存串行执行、带修订检查，保留输入和跨页草稿；关闭前提交待保存内容。所有窗口与主托盘沿用现有 WinUI Dispatcher，彩色 Logo 用于标题栏/任务栏，主托盘按任务栏主题切换黑白。
 
-“预览 TOML 设置”（Alt+T）异步读取原配置的白名单值，保存才移除旧覆盖；可继续调整字段，保存时只保留差异。重新加载/关闭放弃预览，底部状态明确提示尚未保存。预览和保存之间的偏好修订或相关 TOML 值冲突会拒绝覆盖。它不重写 TOML 或复制凭证。
-
-显式 `--settings-lifecycle-test` 在独立进程连续打开、加载、预览 TOML、巡检七个模块页并返回基础页、关闭两次设置页，检查各页未编辑时提交零变更、预览保留及 Dispatcher 仍可调度；不占用全局 HUD 标题/互斥体，不保存设置或注入输入。应用将 DispatcherShutdownMode 设为 OnExplicitShutdown，避免最后一个普通 XAML 窗口关闭时终止原生 HUD，正式退出仍走 Application.Exit。
+显式 `--settings-lifecycle-test` 只读巡检九页、编辑器、三宽度布局与两轮窗口关闭；`--settings-write-test` 检查 apphost 的隔离写权限；`--settings-autosave-test` 在独立仓库内用固定假凭证验证自动保存、跨页默认恢复和系统关闭前保存。测试不调用真实云服务/硬件，不占用常驻 HUD 互斥体。DispatcherShutdownMode 为 OnExplicitShutdown，关闭设置不结束 HUD。
 
 面板更多菜单提供原文朗读、重试、单次中英目标切换。`ACTIONS` 可追加第七段 busy 0/1，旧六段保持兼容；`PANEL|PROGRESS|requestId|completed|total|failed` 只更新匹配上下文，最多 200 段。回传动作 1=译文朗读/停止、2=关闭、3=重试、4=原文朗读/停止、5/6/7=中文/英文/自动目标；文本继续只由 AHK 持有，消息没有选中文字。
 
@@ -328,6 +326,8 @@ ahk/features/translate-selected-text.ahk
 ## 工具箱设置与主托盘（2026-11-22）
 
 设置中心采用 WinUI `NavigationView` 左栏菜单，右侧显示常规、功能与快捷键及七个模块配置。透明 Logo 随 publish 复制到 `Assets`，参与源码戳。主托盘复用 HUD HWND 和现有 UI Dispatcher，设置中可隐藏；读取任务栏主题以显示白色/黑色图标。`TaskbarCreated` 后重新注册，退出先删 Shell 图标再释放 HICON。完整使用和生效时机见 [设置中心](../settings/README.md)。
+
+窗口使用 WinUI 内置 `TitleBar`（系统标题按钮保留），通过 `AppWindow.SetIcon` 绑定彩色 Logo，保留任务切换器入口。页面标题与正文同一边界，功能开关在标题右侧；中文折叠分组和类型专用控件取代原来的原始字段布局。非敏感偏好及写锁使用仓库 `.toolbox-state/`，兼容旧用户目录偏好，避免低完整性 apphost 保存锁时被拒。
 
 `--self-test` 包含托盘结构布局、透明度与真实图标句柄创建/回收；`--settings-lifecycle-test` 包含两轮全部页面、Logo、三种导航宽度以及模拟 Shell 的托盘生命周期，不改实际控制偏好。探测不是物理点击或真实 Explorer 重启测试。
 

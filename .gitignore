@@ -10,6 +10,7 @@ __pycache__/
 **/*.md
 !/README.md
 !/tools/*/README.md
+!/tools/ime-hud-winui/Assets/README.md
 !/resources/cursors/README.md
 !/resources/icons/README.md
 !/findings.md

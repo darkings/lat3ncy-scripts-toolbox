@@ -91,13 +91,13 @@ MODULES = {
     'power': dict(title='电源与唤醒', path='tools/power-policy/config.toml',
         effect='保存不立即改电源。需运行 Restart-PowerPolicy.ps1 重启既有任务；命令行显式参数仍优先。任务名前缀变更需手动维护安装。', fields=[
         field('general.interval_seconds', '检查间隔（秒）', 1, minimum=1, maximum=60),
-        field('general.task_name', '任务名前缀', 'PowerPolicy'),
+        field('general.task_name', '任务名前缀', 'PowerPolicy', help='不能为空，不含路径分隔符或 Windows 文件名保留字符。'),
         *[field(f'power.{supply}_{mode}_seconds', f'{label} · {action}（秒，0 永不）', default, minimum=0, maximum=86400)
           for supply, label in [('ac', '插电'), ('dc', '电池')]
           for mode, action, default in [('standby', '睡眠', 0 if supply == 'ac' else 1800),
                                         ('hibernate', '休眠', 0 if supply == 'ac' else 3600), ('video_idle', '关屏', 600)]],
         field('power.lenovo_ac_hibernate_minutes', '旧 Lenovo 兼容参数（已停用）', 0, readonly=True),
-        field('caffeine.coffee_dir', 'Caffeine 状态目录', r'%LOCALAPPDATA%\coffee'),
+        field('caffeine.coffee_dir', 'Caffeine 状态目录', r'%LOCALAPPDATA%\coffee', help='不能为空；支持环境变量。'),
         field('wake.disable_timers', '禁用唤醒定时器', True),
         field('wake.disable_devices', '禁用未豁免设备的唤醒能力', False, help='重启任务应用时会改变设备持久设置；留空豁免列表保留键鼠/HID。'),
         field('wake.keep', '设备唤醒豁免（分号分隔）', ''),

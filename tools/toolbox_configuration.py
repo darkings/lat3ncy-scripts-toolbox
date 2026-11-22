@@ -170,6 +170,11 @@ def validate(module: str, changes: object) -> dict:
             valid = re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?', value) is not None
         if valid and module == 'rgb' and key == 'capture.region' and value not in ('', 'full'):
             valid = re.fullmatch(r'-?\d+,-?\d+,[1-9]\d*,[1-9]\d*', value) is not None
+        if valid and module == 'power' and key == 'caffeine.coffee_dir':
+            valid = bool(value.strip())
+        if valid and module == 'power' and key == 'general.task_name':
+            valid = (re.fullmatch(r'[^\\/:*?"<>|]{1,128}', value) is not None
+                     and bool(value.strip()) and value == value.strip() and not value.endswith('.'))
         if not valid:
             raise ConfigurationError('invalid_' + key)
     return changes

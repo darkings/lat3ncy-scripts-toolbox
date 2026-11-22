@@ -99,6 +99,8 @@ class ConfigurationTests(unittest.TestCase):
                  ('translate', {'timeout_s': float('nan')}), ('translate', {'max_chars': 10**400}),
                  ('translate', {'tencent.endpoint': 'https://other/path?secret'}),
                  ('tts', {'concurrency': 11}), ('power', {'general.interval_seconds': 0}),
+                 ('power', {'general.task_name': ''}), ('power', {'general.task_name': 'bad/name'}),
+                 ('power', {'caffeine.coffee_dir': '   '}),
                  ('power', {'power.lenovo_ac_hibernate_minutes': 3}),
                  ('theme', {'schedule.fixed_dark_time': '29:01'}), ('theme', {'schedule.latitude': 'nan'}),
                  ('theme', {'schedule.longitude': '181'}), ('theme', {'cursor.light_dir': 'bad"path'}),

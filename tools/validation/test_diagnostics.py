@@ -19,6 +19,20 @@ spec.loader.exec_module(doctor)
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_per_engine_tls_history_is_not_hidden_by_credentials_or_later_success(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'translation.log'
+            path.write_text(
+                '[2026-11-22 08:00:00] engine-route id=42 engine=tencent calls=0 failed=0 cached=0 skipped=1 elapsed_ms=0 kind=credentials\n'
+                '[2026-11-22 08:00:00] engine-route id=42 engine=google_gtx calls=1 failed=1 cached=0 skipped=0 elapsed_ms=5029 kind=tls\n'
+                '[2026-11-22 08:00:00] engine-route id=42 engine=mymemory calls=1 failed=0 cached=0 skipped=0 elapsed_ms=1100 kind=none\n'
+                '[2026-11-22 08:00:00] ok id=42 engine=mymemory cached=0 chars=8\n', encoding='utf-8')
+            summary = doctor.log_summary(path, 'translate')
+            self.assertEqual('mymemory', summary['lastTerminalEvent']['engine'])
+            self.assertEqual('tls', summary['lastEngineFailures']['google_gtx']['kind'])
+            self.assertEqual('credentials', summary['lastEngineRoutes']['tencent']['kind'])
+            self.assertNotIn('tencent', summary['lastEngineFailures'])
+
     def test_attention_probe_keeps_its_structured_findings_across_process_boundary(self):
         query = '''import importlib.util,json,sys
 spec=importlib.util.spec_from_file_location('fixture_doctor',sys.argv[1])

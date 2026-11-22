@@ -86,6 +86,7 @@ def log_summary(path: Path, component: str) -> dict:
             tail = stream.read(65536).decode('utf-8-sig', errors='replace')
         if component == 'translate':
             result['statistics'] = support.translation_statistics(tail)
+            result.update(support.engine_routes(tail))
         # Anchored to production AHK records. A detail= field cannot inject one.
         tts = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[AHK\] 朗读结束 request=[A-Za-z0-9_-]+ status=(success|failed|timeout|cancelled) kind=(none|input|synthesis|playback|timeout|internal|cancelled|protocol) exit=(-?\d{1,3})$')
         stamp = r'\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] '
@@ -305,6 +306,8 @@ def main() -> int:
             if 'statistics' in item:
                 stats = item['statistics']
                 print(f"    Retained requests: {stats['samples']}; cache hits: {stats['cacheHits']}; fallback requests: {stats['fallbackRequests']}; p95 ms: {stats['elapsedMs']['p95']}")
+            for engine, event in item.get('lastEngineFailures', {}).items():
+                print(f"    Historical engine failure: {engine} {event['kind']}; calls={event['calls']}; failed={event['failed']}; elapsed ms={event['elapsedMs']}")
         print('Offline metadata only. Use --json for details; historical failures do not indicate a current outage.')
     # A probe successfully delivered an observation even when it found a problem.
     # The outer command owns the health exit code; keep probe findings intact.

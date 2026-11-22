@@ -14,6 +14,47 @@ METRIC = re.compile(r'^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] metric id=\d{1,10} '
                     r'engine=(tencent|aliyun|google_gtx|mymemory|identity|mixed|unknown) cached=([01]) '
                     r'fallback=(none|credentials|auth|timeout|network|too_long) '
                     r'total=(\d{1,3}) completed=(\d{1,3}) failed=(\d{1,3}) resumed=(\d{1,3})$')
+ROUTE_KINDS = {'none', 'credentials', 'cooldown', 'auth', 'timeout', 'tls', 'http', 'network', 'response', 'too_long', 'internal'}
+ROUTE = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] engine-route id=(\d{1,10}) '
+                   r'engine=(tencent|aliyun|google_gtx|mymemory) calls=(\d{1,3}) failed=(\d{1,3}) '
+                   r'cached=(\d{1,3}) skipped=(\d{1,3}) elapsed_ms=(\d{1,7}) '
+                   r'kind=(none|credentials|cooldown|auth|timeout|tls|http|network|response|too_long|internal)$')
+
+
+def engine_routes(tail: str) -> dict:
+    routes, failures = {}, {}
+    for line in tail.splitlines():
+        match = ROUTE.fullmatch(line)
+        if not match:
+            continue
+        at, request, engine, calls, failed, cached, skipped, elapsed, kind = match.groups()
+        values = dict(requestId=int(request), calls=int(calls), failed=int(failed), cached=int(cached),
+                      skipped=int(skipped), elapsedMs=int(elapsed), kind=kind, atLocal=at)
+        safe = _route(values)
+        if not safe or not 0 < int(request) <= 2147483647:
+            continue
+        safe.update(requestId=int(request), atLocal=at)
+        routes[engine] = safe
+        if safe['failed']:
+            failures[engine] = safe
+    return {'lastEngineRoutes': routes, 'lastEngineFailures': failures}
+
+
+def _route(value: object) -> dict:
+    if not isinstance(value, dict) or not isinstance(value.get('kind'), str) or value['kind'] not in ROUTE_KINDS:
+        return {}
+    safe = {'kind': value['kind']}
+    for key, limit in (('calls', 200), ('failed', 200), ('cached', 200), ('skipped', 200), ('elapsedMs', 7200000)):
+        number = value.get(key)
+        if type(number) is not int or not 0 <= number <= limit:
+            return {}
+        safe[key] = number
+    if safe['failed'] > safe['calls']:
+        return {}
+    at = value.get('atLocal')
+    if isinstance(at, str) and re.fullmatch(r'\d{4}-\d\d-\d\d \d\d:\d\d:\d\d', at):
+        safe['atLocal'] = at
+    return safe
 
 
 def translation_statistics(tail: str) -> dict:
@@ -117,6 +158,10 @@ def redact_report(report: dict) -> dict:
             if field in log:
                 safe[field] = _event(log[field])
         if name == 'translate':
+            for key in ('lastEngineRoutes', 'lastEngineFailures'):
+                if isinstance(log.get(key), dict):
+                    safe[key] = {engine: item for engine in ('tencent', 'aliyun', 'google_gtx', 'mymemory')
+                                 if (item := _route(log[key].get(engine)))}
             # Re-validate numbers and fixed keys, even though collect already
             # constructs statistics from strict anchored records.
             stats = _mapping(log.get('statistics'))

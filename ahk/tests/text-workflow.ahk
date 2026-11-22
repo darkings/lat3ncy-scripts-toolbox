@@ -85,7 +85,7 @@ WorkflowLongEntryTests(root) {
     entry := WorkflowTranslationEntry
     entry.Script := root "\long-translator.py"
     worker := 'import argparse,pathlib,time`np=argparse.ArgumentParser()`n'
-        . 'for n in ("input-file","output-file","request-id","resume-file"):p.add_argument("--"+n)`na=p.parse_args()`n'
+        . 'for n in ("input-file","output-file","request-id","resume-file","trace-file"):p.add_argument("--"+n)`na=p.parse_args()`n'
         . 'resume=pathlib.Path(a.resume_file);retry=resume.exists()`n'
         . 'out=pathlib.Path(a.output_file);base="version=1\nrequest_id="+a.request_id+"\ntotal=3\n"`n'
         . 'out.write_text("status=progress\n"+base+"completed=0\nfailed=0\n",encoding="utf-8");time.sleep(.3)`n'
@@ -202,6 +202,22 @@ WorkflowBackendEntryTests(root) {
         deliveryLog := FileRead(entry.LogPath(), "UTF-8")
         AssertContains(deliveryLog, "delivery-failed id=" id " diagnostic=internal", "failed UI delivery records a fixed category")
         AssertEqual(false, !!InStr(deliveryLog, "private UI delivery body"), "UI callback exception text is never logged")
+        trace := task.outputFile ".trace"
+        FileAppend "version=1`nrequest_id=" task.id "`nroute_google_gtx=1,1,0,0,5029,tls`nroute_mymemory=1,0,0,0,1100,none`n", trace, "UTF-8-RAW"
+        entry.LogEngineRoutes(task)
+        routeLog := FileRead(entry.LogPath(), "UTF-8")
+        AssertContains(routeLog, "engine=google_gtx calls=1 failed=1 cached=0 skipped=0 elapsed_ms=5029 kind=tls", "per-engine Google TLS failure survives a later usable fallback")
+        AssertContains(routeLog, "engine=mymemory calls=1 failed=0", "actual successful fallback is a separate engine summary")
+        FileDelete trace
+        FileAppend "version=1`nrequest_id=" (task.id + 1) "`nroute_google_gtx=1,1,0,0,1,http`n", trace, "UTF-8-RAW"
+        entry.LogEngineRoutes(task)
+        AssertEqual(routeLog, FileRead(entry.LogPath(), "UTF-8"), "foreign engine trace cannot enter this request log")
+        FileDelete trace
+        FileAppend "version=1`nrequest_id=" task.id "`nroute_google_gtx=1,1,0,0,1,private-body`n", trace, "UTF-8-RAW"
+        entry.LogEngineRoutes(task)
+        AssertEqual(routeLog, FileRead(entry.LogPath(), "UTF-8"), "free-form engine trace values are rejected")
+        AssertEqual(true, entry.CleanupTaskFiles(task), "owned trace is included in task cleanup")
+        AssertEqual(false, !!FileExist(trace), "trace companion is removed with its task")
         WorkflowLongEntryTests(root)
     } finally {
         entry.PythonOverride := ""

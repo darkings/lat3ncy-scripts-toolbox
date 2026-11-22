@@ -236,7 +236,7 @@ class TranslateSelectedText {
         try FileDelete outputFile
 
         cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '" --output-file "' outputFile '"'
-        cmd .= ' --request-id ' requestId ' --resume-file "' resumeFile '"'
+        cmd .= ' --request-id ' requestId ' --resume-file "' resumeFile '" --trace-file "' outputFile '.trace"'
         if RegExMatch(target, "^(auto|zh|en)$")
             cmd .= ' --target-language ' target
         if FileExist(configPath)
@@ -255,6 +255,7 @@ class TranslateSelectedText {
         } catch as err {
             try FileDelete inputFile
             try FileDelete outputFile
+            try FileDelete outputFile ".trace"
             if !(keepSourceOnError && panelOpened && this.IsPanelOpen())
                 try this.ClosePanel()
             this.Log("start-failed id=" requestId " error=" err.Message)
@@ -324,6 +325,8 @@ class TranslateSelectedText {
         clean := true
         try FileDelete task.inputFile
         try FileDelete task.outputFile
+        try FileDelete task.outputFile ".trace"
+        clean := !FileExist(task.outputFile ".trace")
         loop files task.outputFile ".*.tmp", "F" {
             try FileDelete A_LoopFileFullPath
             clean := !FileExist(A_LoopFileFullPath) && clean
@@ -499,6 +502,7 @@ class TranslateSelectedText {
                 this.Log("delivery-failed id=" task.id " diagnostic=internal")
                 deliveryFailed := true
             } finally {
+                try this.LogEngineRoutes(task)
                 try this.RecordMetric(task, decision, deliveryFailed)
                 ; The protocol must be read first, then removed on every path.
                 this.CleanupTaskFiles(task)
@@ -603,6 +607,28 @@ class TranslateSelectedText {
         this.Log("metric id=" task.id " status=" terminal " elapsed_ms=" elapsed " engine=" engine
             . " cached=" (this.ParseField(content, "cached") = "1" ? 1 : 0) " fallback=" reason
             . " total=" counts["total"] " completed=" counts["completed"] " failed=" counts["failed"] " resumed=" counts["resumed"])
+    }
+
+    static LogEngineRoutes(task) {
+        path := task.outputFile ".trace"
+        if !FileExist(path)
+            return
+        if (FileGetSize(path) > 2048)
+            return
+        content := FileRead(path, "UTF-8")
+        if (this.ParseField(content, "version") != "1" || this.ParseField(content, "request_id") != task.id)
+            return
+        for engine in ["tencent", "aliyun", "google_gtx", "mymemory"] {
+            value := this.ParseField(content, "route_" engine)
+            if !RegExMatch(value, "^(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,7}),(none|credentials|cooldown|auth|timeout|tls|http|network|response|too_long|internal)$", &fields)
+                continue
+            if (Integer(fields[1]) > 200 || Integer(fields[2]) > Integer(fields[1])
+                || Integer(fields[3]) > 200 || Integer(fields[4]) > 200 || Integer(fields[5]) > 7200000)
+                continue
+            this.Log("engine-route id=" task.id " engine=" engine " calls=" Integer(fields[1])
+                . " failed=" Integer(fields[2]) " cached=" Integer(fields[3]) " skipped=" Integer(fields[4])
+                . " elapsed_ms=" Integer(fields[5]) " kind=" fields[6])
+        }
     }
 
     static ReadProgress(task) {

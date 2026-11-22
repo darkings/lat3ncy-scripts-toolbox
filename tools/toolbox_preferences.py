@@ -136,10 +136,8 @@ def snapshot(*, proposed: dict | None = None) -> dict:
 def _writer_lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.with_suffix(".lock").open("a+b") as handle:
-        handle.seek(0, 2)
-        if handle.tell() == 0:
-            handle.write(b"0")
-            handle.flush()
+        # Windows permits locking a range beyond EOF. Initializing a byte
+        # before acquiring the lock can race another writer's byte-range lock.
         deadline = time.monotonic() + 2
         while True:
             try:

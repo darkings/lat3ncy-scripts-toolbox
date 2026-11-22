@@ -13,6 +13,32 @@ PRIVATE = 'SENSITIVE_SENTINEL_DO_NOT_EXPORT'
 
 
 class SupportBundleTests(unittest.TestCase):
+    def route(self, engine='google_gtx', failed=1, kind='tls'):
+        return f'[2026-11-22 08:00:00] engine-route id=42 engine={engine} calls=1 failed={failed} cached=0 skipped=0 elapsed_ms=5029 kind={kind}'
+
+    def test_engine_routes_keep_failures_separate_from_latest_success(self):
+        tail = '\n'.join([self.route(), self.route('mymemory', 0, 'none'), self.route(failed=0, kind='none'),
+                         self.route(kind=PRIVATE), 'detail=' + self.route()])
+        result = bundle.engine_routes(tail)
+        self.assertEqual(0, result['lastEngineRoutes']['google_gtx']['failed'])
+        self.assertEqual('tls', result['lastEngineFailures']['google_gtx']['kind'])
+        self.assertNotIn('mymemory', result['lastEngineFailures'])
+        self.assertNotIn(PRIVATE, json.dumps(result))
+
+    def test_engine_route_counts_are_typed_and_bounded(self):
+        for line in (self.route(failed=2), self.route().replace('calls=1', 'calls=201'),
+                     self.route().replace('elapsed_ms=5029', 'elapsed_ms=7200001')):
+            self.assertEqual({}, bundle.engine_routes(line)['lastEngineRoutes'])
+        metadata = {'logs': {'translate': {'lastEngineFailures': {
+            'google_gtx': {'calls': 1, 'failed': 1, 'cached': 0, 'skipped': 0, 'elapsedMs': 2, 'kind': 'tls',
+                           'path': PRIVATE, 'message': PRIVATE, 'requestId': 42},
+            PRIVATE: {'calls': 1}, 'tencent': {'kind': [PRIVATE]}}}}}
+        safe = bundle.redact_report(metadata)
+        serialized = json.dumps(safe)
+        self.assertNotIn(PRIVATE, serialized)
+        self.assertNotIn('requestId', serialized)
+        self.assertEqual('tls', safe['logs']['translate']['lastEngineFailures']['google_gtx']['kind'])
+
     def metric(self, status='ok', elapsed=100, cached=0, fallback='none', completed=1, failed=0, total=1, resumed=0):
         return (f'[2026-11-22 08:00:00] metric id=42 status={status} elapsed_ms={elapsed} engine=google_gtx '
                 f'cached={cached} fallback={fallback} total={total} completed={completed} failed={failed} resumed={resumed}')

@@ -30,6 +30,7 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import auth_cooldown
+import engine_trace
 import long_translation as long_text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -1104,6 +1105,12 @@ def _request_engine(name: str, text: str, source: str, target: str, timeout: flo
     return long_text.join_results(pieces, results, hard_separator=" " if target == "en" and source != target else "")
 
 
+def _record_engine(cfg: dict, name: str, outcome: str, *, elapsed_ms: int = 0, kind: str = 'none') -> None:
+    trace = cfg.get('_engine_trace')
+    if isinstance(trace, engine_trace.EngineTrace):
+        trace.record(name, outcome, elapsed_ms=elapsed_ms, kind=kind)
+
+
 def translate_with_cache(
     engine: str,
     text: str,
@@ -1125,6 +1132,8 @@ def translate_with_cache(
     engines = engine_order(engine, settings)
     preferred = normalize_engine(engine)
     reason = "credentials" if engines[0] != preferred else ""
+    if reason:
+        _record_engine(settings, preferred, 'skipped', kind='credentials')
 
     cooldown_path = None
     cooldown_identity = ""
@@ -1139,6 +1148,7 @@ def translate_with_cache(
     for name in engines:
         cached = cache_get(name, direction, text, settings)
         if cached is not None:
+            _record_engine(settings, name, 'cached')
             return TranslationResult(
                 text=cached,
                 engine=name,
@@ -1147,12 +1157,15 @@ def translate_with_cache(
                 preferred_engine=preferred,
                 fallback_reason=reason,
             )
+        started = time.monotonic()
         try:
             if name == "tencent" and cooldown_path is not None and auth_cooldown.active(cooldown_path, cooldown_identity):
                 reason = "auth"
+                _record_engine(settings, name, 'skipped', kind='cooldown')
                 continue
             translated = _request_engine(name, text, source, target, timeout, settings)
         except AuthError as exc:
+            _record_engine(settings, name, 'failed', elapsed_ms=round((time.monotonic() - started) * 1000), kind='auth')
             if settings.get("fallback_on_auth_error", False) is not True:
                 raise
             last_error = exc
@@ -1161,13 +1174,20 @@ def translate_with_cache(
             reason = reason or "auth"
             continue
         except FALLBACK_ERRORS as exc:
+            kind = 'timeout' if _is_timeout(exc) else 'too_long' if isinstance(exc, FreeEngineLimitError) else engine_trace.failure_kind(exc)
+            _record_engine(settings, name, 'failed', elapsed_ms=round((time.monotonic() - started) * 1000), kind=kind)
             last_error = exc
             reason = reason or ("timeout" if _is_timeout(exc) else "too_long" if isinstance(exc, FreeEngineLimitError) else "network")
             continue
+        except Exception:
+            _record_engine(settings, name, 'failed', elapsed_ms=round((time.monotonic() - started) * 1000), kind='internal')
+            raise
         if not translated.strip():
+            _record_engine(settings, name, 'failed', elapsed_ms=round((time.monotonic() - started) * 1000), kind='response')
             last_error = ValueError(f"{name} 返回空译文")
             reason = reason or "network"
             continue
+        _record_engine(settings, name, 'ok', elapsed_ms=round((time.monotonic() - started) * 1000))
         cache_put(name, direction, text, translated, settings)
         if name == "tencent" and cooldown_path is not None:
             auth_cooldown.clear(cooldown_path, cooldown_identity)
@@ -1798,6 +1818,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--long-text", action=argparse.BooleanOptionalAction, default=None, help="分段翻译，最大 20000 字符、120 秒")
     parser.add_argument("--request-id", default="", help="长文进度归属，不包含文本")
     parser.add_argument("--resume-file", default="", help="仅此面板拥有的临时重试文件")
+    parser.add_argument("--trace-file", default="", help="本次请求的脱敏引擎摘要；需同时提供 --request-id")
     parser.add_argument("--self-test", action="store_true", help="只跑判定/配置/缓存单测，不联网")
     args = parser.parse_args(argv)
 
@@ -1854,6 +1875,14 @@ def main(argv: list[str] | None = None) -> int:
             sanitize_detail(exc, cfg=cfg),
         )
     engine_label = settings.engine
+    if args.trace_file:
+        try:
+            reserved = [output, args.input_file, args.resume_file, args.config or str(Path(__file__).with_name('config.toml'))]
+            if Path(args.trace_file).resolve() in {Path(path).resolve() for path in reserved if path}:
+                return write_error(output, 'config', '诊断文件不能与任务文件或配置重合', engine_label)
+            cfg['_engine_trace'] = engine_trace.EngineTrace(args.trace_file, args.request_id)
+        except (ValueError, OSError):
+            return write_error(output, 'config', '诊断请求编号或路径无效', engine_label)
 
     # 兜底：正常路径都在 _run_translation 内分类；这里只接住真正未预期的异常。
     state: dict[str, object] = {"text": ""}

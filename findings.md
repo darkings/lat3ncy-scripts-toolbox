@@ -1,5 +1,12 @@
 # 发现与决策
 
+## 2026-11-22：Google 间歇 TLS 失败的归因缺口
+
+- 不改网络设置的固定样本：短句 4 秒参数成功（1.18 秒），同句 12 秒参数出现 URLError→SSLEOFError（5.03 秒、非超时），1260 字节长段 4 秒参数成功（2.84 秒）。当前存在 http/https 代理配置，但没有证据定位到代理或服务端，也不能凭两次成功宣称长期恢复。
+- 原 fallback_reason 保留首个腾讯 credentials，Google TLS 失败后 MyMemory 成功时无法从终态判断 Google 为什么失败。新增每个引擎的有界元数据摘要，不改原结果协议、严格鉴权或回退顺序。
+- 摘要通过拥有请求号的独立原子文件交付，AHK 校验并清理；诊断/分享包重建固定类别和数字，不保存正文、异常消息或代理地址。显式 probe_google 只发送两个固定样本，普通 doctor 继续离线。
+- 干净候选同时暴露旧设置锁初始化竞争。空锁文件的首字节在取锁前写入/flush，另一进程已锁该字节时会 PermissionError。新增真实子进程、父进程锁住空文件的确定性回归，旧代码复现 flush 失败；删除锁前写入，直接锁范围。微软 [_locking](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/locking?view=msvc-170) 和 [字节范围锁](https://learn.microsoft.com/en-us/windows/win32/fileio/locking-and-unlocking-byte-ranges-in-files) 文档明确允许锁住 EOF 之后的范围；不需要初始化内容。
+
 ## 2026-11-22：设置窗口关闭与常驻生命周期
 
 - 原生 HWND HUD 增加普通 XAML 设置窗口后，实际关闭设置导致 PID 17200 结束，AHK 后续恢复新 HUD；这不是设置读取失败。控件树和 settings-loaded 已确认加载成功。

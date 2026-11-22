@@ -22,6 +22,22 @@
 
 CLI 可传 `--request-id <无文本编号>`、`--resume-file <本次临时 JSON>` 复用同一原文、目标、引擎和分段方案的已完成段。重试文件含译文，不含原文、凭证或异常，不能对外分享；CLI 调用者自行清理，AHK 面板在正常关闭、替换和退出时清理自己的文件。强杀、断电或外部文件锁不保证即时删除。
 
+### Google 与逐引擎诊断
+
+显式检查 Google，仅发送内置的两段固定英文，不读取选区、配置密钥或缓存，不改变代理和 TLS 设置：
+
+```powershell
+python tools/translate/probe_google.py --online --output .tmp/google-check.json
+```
+
+没有 `--online`、超时参数不在 0.25–12 秒内或输出已存在时，在请求前拒绝。报告只含固定样本标签、字符/字节数、耗时、错误类别、是否配置代理等元数据，不输出译文、代理地址、请求 URL 或异常原文。两项均通过退出 0；部分成功标为 intermittent，全部失败标为 failed，退出 1。它只代表该次采样，不证明服务长期恢复；`--timeout` 是网络操作参数，不是整个探针的硬期限。
+
+AHK 每次翻译附加 `--trace-file <结果路径>.trace` 与 `--request-id`。后端对腾讯/阿里/Google/MyMemory 分别记录调用、失败、缓存、跳过次数、累计耗时及固定原因（credentials/cooldown/auth/timeout/tls/http/network/response/too_long/internal）。`calls` 按每段向一个引擎的尝试计数，MyMemory 内部 HTTP 切片不另计。长文各段共享本次摘要，复用检查点不虚构新请求。
+
+摘要只含白名单值，原子写入，诊断写失败不阻止译文交付；与结果正文协议独立，原成功/失败字段保持兼容。AHK 校验版本、请求号、大小和计数后才记日志，最终清理自己的摘要和临时文件。诊断路径不能与输入、结果、检查点或配置文件重合。CLI 单独使用时自行清理摘要文件。
+
+Google 失败后即使 MyMemory 成功，`doctor.py` 仍能看到 Google 的独立 TLS/超时等失败；首个 `fallback_reason=credentials` 继续表达腾讯缺密钥，不覆盖其他引擎的实际错误。不会因此发成功回退通知。
+
 ```powershell
 python tools/translate/translate.py `
   --text "hello" `

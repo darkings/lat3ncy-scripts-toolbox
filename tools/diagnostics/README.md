@@ -16,6 +16,10 @@ python tools/diagnostics/doctor.py --bundle .tmp/diagnostics/support.zip
 
 `logs.translate.statistics` 汇总保留日志窗口中的请求数、各终态数量、平均/p95/最大耗时、完整成功中的缓存命中、成功/部分成功的回退请求数和复用段数。它不是生命周期总数、逐网络调用计时或物理 UI 验收；旧日志没有 metric 时样本数为零。部分失败单独记录为 `partial`，不会冒充完整成功。
 
+`logs.translate.lastEngineRoutes` 独立保存各引擎最近一条摘要，`lastEngineFailures` 保留各引擎最近有失败的摘要，后续缓存/成功不会清掉历史失败。包含调用/失败/缓存/跳过次数、累计耗时和固定 kind；Google 的 `tls` 不再被首选腾讯的 `credentials` 原因掩盖。它们不自动拼成同一次请求或影响环境健康；本地记录有请求号，分享包移除请求号及所有自由字段。
+
+Google 在线排查须显式运行 `python tools/translate/probe_google.py --online`，仅发送固定样本。默认 doctor 仍完全离线，不验证服务可达性，不输出代理地址。
+
 内部解释器探针以 JSON 交付观察结果，交付成功时退出 0，即使发现依赖不匹配或低完整性；外层命令再按这些字段返回健康退出码。这样依赖异常不会被丢弃为笼统的子进程失败。
 
 运行边界：

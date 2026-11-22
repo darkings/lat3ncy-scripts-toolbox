@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -106,14 +107,47 @@ except p.PreferenceError as e: print(str(e))
                      str(self.repo), language, revision] for language in ("en", "zh")]
         processes = [subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for command in commands]
         results = [process.communicate(timeout=10) for process in processes]
-        self.assertEqual([0, 0], [process.returncode for process in processes])
+        self.assertEqual([0, 0], [process.returncode for process in processes], '\n'.join(stderr for _, stderr in results))
         self.assertEqual(["ok", "settings_changed_reload"], sorted(stdout.strip() for stdout, _ in results))
         self.assertTrue(all(not stderr for _, stderr in results))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows byte-range locking regression')
+    def test_empty_lock_file_content_is_not_written_before_its_lock_is_acquired(self):
+        import msvcrt
+        path = prefs.preference_path().with_suffix('.lock')
+        path.parent.mkdir(parents=True)
+        attempted = self.root / 'attempted.txt'
+        code = '''import sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]);import toolbox_preferences as p;import msvcrt
+p.REPO=Path(sys.argv[2]);native=msvcrt.locking
+def observe(fd,mode,count):
+ if mode==msvcrt.LK_NBLCK:Path(sys.argv[3]).write_text('attempted')
+ return native(fd,mode,count)
+msvcrt.locking=observe
+p.save({'translate':{'target_language':'en'}},p.snapshot()['revision']);print('ok')
+'''
+        with path.open('a+b') as held:
+            msvcrt.locking(held.fileno(), msvcrt.LK_NBLCK, 1)
+            process = subprocess.Popen([sys.executable, '-I', '-S', '-c', code, str(Path(prefs.__file__).parent),
+                                        str(self.repo), str(attempted)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 5
+                while not attempted.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.01)
+            finally:
+                held.seek(0)
+                msvcrt.locking(held.fileno(), msvcrt.LK_UNLCK, 1)
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertEqual(0, process.returncode, stderr)
+        self.assertTrue(attempted.exists(), 'writer must acquire the existing empty-file byte lock before touching its content')
+        self.assertEqual('ok', stdout.strip())
+        self.assertEqual(b'', path.read_bytes())
 
     def test_real_translation_and_speech_load_the_same_overlay_in_isolated_repo(self):
         source_tools = Path(prefs.__file__).parent
         shutil.copyfile(source_tools / 'toolbox_preferences.py', self.repo / 'tools/toolbox_preferences.py')
-        for filename in ('translate.py', 'auth_cooldown.py', 'long_translation.py'):
+        for filename in ('translate.py', 'auth_cooldown.py', 'long_translation.py', 'engine_trace.py'):
             shutil.copyfile(source_tools / 'translate' / filename, self.repo / 'tools/translate' / filename)
         for filename in ('tts_player.py', 'task_protocol.py'):
             shutil.copyfile(source_tools / 'tts' / filename, self.repo / 'tools/tts' / filename)

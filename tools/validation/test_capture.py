@@ -75,7 +75,13 @@ $path=Join-Path $dir 'old.png';[IO.File]::WriteAllText($path,'fixed fixture')
 if(Find-ToolboxCaptureFile $dir @('.png') $since){throw 'edited old file selected'}
 $new=Join-Path $dir 'new.png';[IO.File]::WriteAllText($new,'new fixture')
 [IO.File]::SetCreationTimeUtc($new,$since.AddSeconds(1));[IO.File]::SetLastWriteTimeUtc($new,$since.AddSeconds(1))
-if((Find-ToolboxCaptureFile $dir @('.png') $since).FullName -ne $new){throw 'new file not selected'}
+$selected=Find-ToolboxCaptureFile $dir @('.png') $since
+if(-not $selected -or $selected.Name -ne 'new.png' -or [IO.File]::ReadAllText($selected.FullName) -ne 'new fixture'){
+    Write-Output ('threshold='+$since.ToString('o')+' kind='+$since.Kind)
+    Get-ChildItem -LiteralPath $dir | Select-Object Name,CreationTimeUtc,LastWriteTimeUtc | Format-List | Out-String | Write-Output
+    Write-Output ('selected='+$selected.Name)
+    throw 'new file not selected'
+}
 ''')
 
     def test_recording_must_release_writer_and_be_stable(self):

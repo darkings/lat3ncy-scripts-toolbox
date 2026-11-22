@@ -3,6 +3,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import sys
 import time
 
 
@@ -16,6 +17,10 @@ def write_result(path: Path, request_id: str, status: str, text: str = '', kind:
 
 
 def capture_text(baseline: int, timeout: float, *, image_file: str = '', progress=None) -> tuple[str, str]:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from toolbox_controls import module_enabled
+    if not module_enabled('ocr'):
+        return 'cancelled', ''
     import ocr
     from PIL import Image, ImageGrab
     engine = ocr.load_engine()

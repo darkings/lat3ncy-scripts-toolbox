@@ -392,6 +392,13 @@ def main() -> int:
     # 其余 stderr/stdout 保持静默（Raycast 会把任何 stdout 当 HUD 弹出）。
     _SILENT_MODE = result_file is not None and not notify_on_done
 
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    from toolbox_controls import module_enabled
+    if not module_enabled('ocr'):
+        if result_file is not None:
+            write_result(result_file, 'ERROR: OCR 已在工具箱设置中关闭')
+        return 0
+
     try:
         exit_code = run_ocr_from_clipboard(
             inject_screenshot=inject_screenshot,

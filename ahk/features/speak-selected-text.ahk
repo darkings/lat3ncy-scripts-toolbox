@@ -341,6 +341,8 @@ class SpeakSelectedText {
     }
 
     static IsAutoSwitchEnabled() {
+        if IsSet(ToolboxControls) && !ToolboxControls.ModuleEnabled("audio")
+            return false
         SplitPath A_LineFile, , &featuresDir
         SplitPath featuresDir, , &ahkDir
         SplitPath ahkDir, , &repoDir
@@ -361,6 +363,10 @@ class SpeakSelectedText {
     ; 异步预热耳机：先让 Caps+S 线程返回，连上（或失败/超时）后再启动 TTS。
     static StartHeadsetWarmup(raw) {
         gen := this.Generation
+        if IsSet(ToolboxControls) && !ToolboxControls.ModuleEnabled("audio") {
+            this.LaunchTts(raw, gen)
+            return
+        }
         this.PendingText := raw
         exe := this.AudioSwitcherExe()
         if !FileExist(exe) {
@@ -396,6 +402,12 @@ class SpeakSelectedText {
         try {
             if !IsObject(this.WarmupJob) {
                 this.StopWarmup()
+                return
+            }
+            if IsSet(ToolboxControls) && !ToolboxControls.ModuleEnabled("audio") {
+                raw := this.PendingText, gen := this.WarmupJob.generation
+                this.StopWarmup()
+                this.LaunchTts(raw, gen)
                 return
             }
             job := this.WarmupJob.job

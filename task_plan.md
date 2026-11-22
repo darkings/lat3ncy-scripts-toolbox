@@ -1,5 +1,23 @@
 # 任务计划：切换播放器自动连接 AirPods 完善
 
+## 2026-11-22 WinUI 导航、Logo、托盘与功能/快捷键控制
+
+用户连续追加：设置采用左边菜单、右边配置的 WinUI 规范；使用生图设计 Logo 并加入设置；主托盘可隐藏，任务栏 dark 白色/light 黑色；统一 UI 线程；各大类功能可启停，AHK 功能/快捷键可分别启停和自定义，默认保持当前键位。用户明确保留 CapsLock 基础键，只自定义各功能组合键。
+
+1. [x] 已用原生 NavigationView 替换顶部 ComboBox，1040 DIP 默认宽度、自适应左栏，页头去重；PNG 已接入项目 Content / publish 和源码戳。
+2. [x] 使用内置 imagegen 生成透明蓝色 L 模块 Logo，已保存 tools/ime-hud-winui/Assets/toolbox-logo.png（RGBA，sha256 e80c6319b5b826f6ebbe2c178d71823d1ac9083ff4f2269c8bf9128f82878642），左栏 PaneHeader 使用它，Assets/README.md 保留完整提示词；原始图保留 Codex 生成目录。
+3. [x] 托盘与设置共用现有 WinUI UI Dispatcher，主图标隐藏偏好、任务栏主题黑白与 Explorer 重启恢复；不另起常驻线程/进程。图标退出回收，设置关闭不影响宿主。
+4. [x] 七模块功能开关与 23 项 AHK 功能控制；快捷键独立开关、自定义和恢复默认预览，冲突与输入验证；默认从现有 Shortcuts 读取，CapsLock 基础键保留。控制偏好独立存储在 Git 忽略的根目录 JSON，写锁/CAS/原子替换。
+5. [x] 14 项新 Python 回归、AHK 原生语法 OFF 注册/派发/回滚、禁用 Caps 状态机、电源无写入/释放 hold/暂停心跳、主题入口桩；完整源码构建回归通过（220 项 Python）。原生两轮 Logo、十分类、三宽度导航与模拟 Shell 托盘探测通过。
+6. [x] 首轮最终干净候选三阶段全部通过，正式 HUD/AHK 与 PowerPolicy 重载通过。HUD 源戳 d2251ad95a6def747713560f1204c53d7a4e54d516a8f8e1c7a7f9aaf21011f6，发布备份 .tmp/releases/20261122-085321-26ef1737；随后新增耳机预热控制，继续最终验证及 AHK 重载。
+7. [x] 耳机预热门控后完整回归与最终干净候选三阶段通过（220 项 Python），53 个改动源码/资产散列与候选一致；七模块原配置和真实偏好保持，主控制文件未由测试创建。正式重载/doctor 健康；提交后精确 SHA 的 PR / push CI 以草稿 PR #3 最终记录为准，不合并。物理点击/视觉及真实 Explorer 重启仍单独待验收。
+
+生效边界：保存控制开关由现有线程/循环或下次入口读取，不自动安装任务或启动缺失后台；电源关闭保留已应用值并释放 hold，主题停止后续写入，Ambient 已运行时暂停抓屏/保持关灯。纯 UI 工作统一到 WinUI Dispatcher，Python/设备后台仍沿原托管生命周期。音频关闭同样阻止 AHK 入口与朗读耳机预热，已有预热取消后继续朗读。
+
+新音频助手源码增加设备访问前退出的控制解析 self-test，纳入来源 manifest 构建，候选 .tmp/managed-builds/20261122-controls-final/ 已通过。自动审批拒绝了“备份/替换音频 exe 并发布”的组合命令（blocked by policy，无具体原因），命令未执行；保留原生产音频 exe。直接绕过 AHK 运行原音频 exe 仍不读取新开关，不能宣称该二进制门控已发布。HUD 使用既有受控发布入口，PowerPolicy 使用原重载入口完成；没有绕过拒绝重试音频替换。
+
+证据：.tmp/validation/20261122-controls-warmup-final/（HEAD 基线配置、含空格路径）、.tmp/settings-controls-native.json、.tmp/settings-controls-final-reload.json、.tmp/settings-controls-power-reload.json、.tmp/settings-controls-protection.json、.tmp/settings-controls-candidate-match.json、.tmp/settings-controls-doctor.json。托盘生命周期探针使用模拟 Shell，生产日志只确认真实主托盘注册就绪，二者范围分开。
+
 ## 2026-11-22 工具箱统一设置中心
 
 用户追加将工具箱所有设置加入现有窗口。本轮接入七份现有模块配置：翻译、朗读、OCR、音频、主题/壁纸/背光、电源/唤醒、RGB；密钥仍专用管理，不把代码常量或安装/硬件操作伪装成配置。

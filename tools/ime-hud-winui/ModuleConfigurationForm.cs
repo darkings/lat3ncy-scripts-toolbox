@@ -18,7 +18,6 @@ internal sealed class ModuleConfigurationForm
     {
         Revision = data.GetProperty("revision").GetString()!;
         Effect = data.GetProperty("effect").GetString()!;
-        Root.Children.Add(new TextBlock { Text = data.GetProperty("title").GetString(), FontSize = 24 });
         Root.Children.Add(new TextBlock { Text = Effect, TextWrapping = TextWrapping.Wrap });
         Root.Children.Add(new TextBlock { Text = "配置文件：" + data.GetProperty("config").GetString(), TextWrapping = TextWrapping.Wrap });
         string previous = "";

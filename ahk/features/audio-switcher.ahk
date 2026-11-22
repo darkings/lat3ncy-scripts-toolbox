@@ -126,6 +126,9 @@ class AudioSwitcher {
         if (IsObject(this.Job) && !this.Job.Done) {
             try this.Job.Dispose()
         }
+        if IsObject(this.Task) && !this.Task.phase.noOutput && this.Task.phase.outputFile != "" {
+            try FileDelete this.Task.phase.outputFile
+        }
         this.Busy := false
         this.Job := ""
         this.Task := ""

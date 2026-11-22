@@ -25,6 +25,8 @@ $repositoryRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $rgbRoot = Join-Path $repositoryRoot 'tools\rgb'
 $ambientPy = Join-Path $rgbRoot 'ambient.py'
 $startScript = Join-Path $rgbRoot 'Start-Ambient.ps1'
+. (Join-Path $repositoryRoot 'tools\ToolboxControls.ps1')
+if(-not(Test-ToolboxModuleEnabled -Module rgb -RepoRoot $repositoryRoot)){return}
 $stateDir = Join-Path $env:LOCALAPPDATA 'lat3ncy-toolbox'
 $disabledFlag = Join-Path $stateDir 'rgb-disabled.flag'
 

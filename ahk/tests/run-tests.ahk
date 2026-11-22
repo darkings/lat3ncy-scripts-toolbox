@@ -5,6 +5,9 @@
 ; Task 1 contract harness. Run via run-tests.ps1 so stale results are removed and
 ; AutoHotkey parse/include failures cannot be mistaken for a passing test run.
 resultFile := A_Args.Length >= 2 ? A_Args[2] : A_Temp "\lat3ncy-toolbox-test-result.txt"
+ToolboxControls.TestPath := resultFile ".controls.json"
+ToolboxControls.Active := Map()
+ToolboxControls.Loaded := true
 if FileExist(resultFile)
     FileDelete resultFile
 
@@ -1942,6 +1945,7 @@ TtsLifecycleTests()
 #Include text-workflow.ahk
 #Include translation-lifecycle.ahk
 #Include translation-request-files.ahk
+#Include toolbox-controls.ahk
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

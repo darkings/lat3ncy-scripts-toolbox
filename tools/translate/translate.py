@@ -1830,6 +1830,10 @@ def main(argv: list[str] | None = None) -> int:
         print("missing --output-file", file=sys.stderr)
         return 1
 
+    from toolbox_controls import module_enabled
+    if not module_enabled('translate', args.config):
+        return write_error(output, 'disabled', '翻译功能已关闭', DEFAULT_ENGINE)
+
     # 1) 配置：TOML 语法、非法数值都归 config，不能混进 network。
     try:
         cfg = load_config(args.config)

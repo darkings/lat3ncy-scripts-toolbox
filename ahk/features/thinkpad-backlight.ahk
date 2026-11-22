@@ -37,6 +37,10 @@ class ThinkPadBacklight {
     }
 
     static Start() {
+        if IsSet(ToolboxControls) && !ToolboxControls.FeatureEnabled("ThinkPadBacklight")
+            return false
+        if this.IsActive
+            return true
         if !this.Init()
             return false
 
@@ -44,6 +48,12 @@ class ThinkPadBacklight {
         SetTimer(this.TickCallback, this.PollMs)
         this.IsActive := true
         return true
+    }
+
+    static Stop() {
+        if this.TickCallback
+            SetTimer(this.TickCallback, 0)
+        this.IsActive := false
     }
 
     static Init() {

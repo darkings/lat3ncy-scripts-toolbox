@@ -44,6 +44,7 @@ internal sealed class HudHost : IDisposable
 
     TranslationPanelHost? _panel;
     ToolboxSettingsWindow? _settings;
+    ToolboxTray? _tray;
     IslandSystemBackdrop? _islandBackdrop;
     Storyboard? _showStoryboard;
     Storyboard? _hideStoryboard;
@@ -76,7 +77,7 @@ internal sealed class HudHost : IDisposable
             ? Native.DWMSBT_NONE
             : Native.DWMSBT_TRANSIENTWINDOW;
 
-    public HudHost()
+    public HudHost(bool enableTray = true)
     {
         _dispatcher = DispatcherQueue.GetForCurrentThread()
             ?? throw new InvalidOperationException("当前线程没有 DispatcherQueue");
@@ -128,6 +129,11 @@ internal sealed class HudHost : IDisposable
 
         // 不要在 Initialize / Content 赋值附近同步设 SystemBackdrop。
         _content.Root.Loaded += OnContentLoadedForBackdrop;
+        if (enableTray)
+        {
+            try { _tray = new ToolboxTray(_hwnd, ShowSettings, _dispatcher); }
+            catch (Exception error) { HudLog.Line("toolbox-tray=init-failed kind=" + error.GetType().Name); }
+        }
     }
 
     /// <summary>
@@ -288,7 +294,7 @@ internal sealed class HudHost : IDisposable
         if (_closing) return;
         if (_settings == null)
         {
-            _settings = new ToolboxSettingsWindow();
+            _settings = new ToolboxSettingsWindow(() => { if (_tray != null) _ = _tray.RefreshPreferencesAsync(force: true); });
             _settings.Closed += (_, _) => _settings = null;
         }
         _settings.Activate();
@@ -315,6 +321,7 @@ internal sealed class HudHost : IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        try { _tray?.Dispose(); } catch { }
         try { _uiSettings.ColorValuesChanged -= OnColorValuesChanged; } catch { }
         try { _cycleTimer.Tick -= OnCycleTick; } catch { }
         // CloseHud 已经 DetachIsland。这里只 unpin，避免二次 Dispose Island。
@@ -472,6 +479,7 @@ internal sealed class HudHost : IDisposable
         ApplyHostChrome(dark);
         ResizeIsland();
         _panel?.SyncThemeFromSystem(reason);
+        _tray?.SyncTheme();
     }
 
     void ApplyHostChrome(bool? dark = null)
@@ -782,6 +790,7 @@ internal sealed class HudHost : IDisposable
 
     IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        if (_tray?.HandleMessage(msg, wParam, lParam) == true) return IntPtr.Zero;
         switch (msg)
         {
             case Native.WM_MOUSEACTIVATE:
@@ -894,6 +903,8 @@ internal sealed class HudHost : IDisposable
         _panel = null;
         try { _settings?.Close(); } catch { }
         _settings = null;
+        try { _tray?.Dispose(); } catch { }
+        _tray = null;
         DetachIsland("close");
         if (Native.IsWindow(_hwnd))
             Native.DestroyWindow(_hwnd);

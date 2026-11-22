@@ -12,11 +12,12 @@ try {
 function Get-ThemeConfig {
     @{general=@{switch_type='mode';show_notification=$global:ThemeEntryState.Show}}
 }
+function Test-ThemeFeatureEnabled { return $global:ThemeEntryState.Enabled }
 function Get-ThemePersonalizeState {
     $value=if($global:ThemeEntryState.Reads++ -eq 0){$global:ThemeEntryState.Before}else{$global:ThemeEntryState.After}
     @{AppsUseLightTheme=$value;SystemUsesLightTheme=$value}
 }
-function Set-WindowsColorMode { param($Mode,$Config) }
+function Set-WindowsColorMode { param($Mode,$Config) $global:ThemeEntryState.Writes++ }
 function Invoke-ThemeNotify {
     param($Type,$Icon,$Text)
     $global:ThemeEntryState.Notifications+=@([pscustomobject]@{Icon=$Icon;Text=$Text})
@@ -30,7 +31,7 @@ function Write-ThemeLog { param($Text) }
             foreach($changed in @($true,$false)) {
                 $global:ThemeEntryState=[pscustomobject]@{
                     Before=$(if($changed){1-$after}else{$after});After=$after;Reads=0
-                    Show=$show;Notifications=@();Tails=0
+                    Show=$show;Notifications=@();Tails=0;Enabled=$true;Writes=0
                 }
                 $output=@(& (Join-Path $fixture "Set-Theme-$mode.ps1") -Force 2>&1)
                 Assert (@($output | Where-Object {$_ -is [Management.Automation.ErrorRecord]}).Count -eq 0) "$mode entry has no errors"
@@ -45,7 +46,10 @@ function Write-ThemeLog { param($Text) }
             }
         }
     }
-    [Console]::Out.WriteLine('PASS: isolated light/dark notification and tail entries')
+    $global:ThemeEntryState=[pscustomobject]@{Before=0;After=1;Reads=0;Writes=0;Show=$true;Notifications=@();Tails=0;Enabled=$false}
+    $null=& (Join-Path $fixture 'Set-Theme-Light.ps1') -Force
+    Assert ($global:ThemeEntryState.Reads -eq 0 -and $global:ThemeEntryState.Writes -eq 0 -and $global:ThemeEntryState.Tails -eq 0) 'disabled theme performs no color reads/writes or tail launch'
+    [Console]::Out.WriteLine('PASS: isolated light/dark notification, disabled policy and tail entries')
 } finally {
     # Only remove this test's verified, randomly named temp directory.
     $full=[IO.Path]::GetFullPath($fixture)

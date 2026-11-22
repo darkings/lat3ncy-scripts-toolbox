@@ -158,7 +158,7 @@ IsToolboxTestMode() {
 #Include features\foreground-process.ahk
 
 ; 摇动定位指针：快速左右反向时临时放大箭头，停下后交回当前光标方案。无快捷键。
-; 2026-11-06 暂时停用：FindMouse.Enabled = false，恢复改回 true 即可。
+; 默认启用，设置中心的功能开关控制鼠标定位钩子。
 #Include features\find-mouse.ahk
 
 ; ThinkPad 键盘背光：夜间敲击/点击唤醒、超时自动熄灭、晃动鼠标不唤醒。非 ThinkPad 自动跳过。
@@ -169,6 +169,7 @@ IsToolboxTestMode() {
 
 ; 统一路由层必须在全部 feature 之后加载。
 #Include features\text-workflow.ahk
+#Include ..\shared\toolbox-controls.ahk
 #Include hotkey-router.ahk
 
 ; 启动时清掉丢失引用的自定义 HUD，避免旧弹窗一直钉在桌面上。
@@ -194,5 +195,10 @@ if !IsToolboxTestMode() {
 
 if !IsToolboxTestMode()
     TextWorkflow.Init()
+
+if !IsToolboxTestMode() {
+    ToolboxControls.ApplyResidents()
+    ToolboxControls.Start()
+}
 
 ToolboxStarting := false

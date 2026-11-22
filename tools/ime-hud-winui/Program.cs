@@ -52,6 +52,7 @@ internal static class Program
         if (selfTest)
         {
             int code = Protocol.SelfTest();
+            if (code == 0) code = ToolboxTray.SelfTest();
             HudLog.Line("self-test=" + code);
             return code;
         }
@@ -247,7 +248,7 @@ internal static class Program
         {
             s_xamlManager = WindowsXamlManager.InitializeForCurrentThread();
             HudLog.Line("xaml-manager-ok");
-            s_host = new HudHost();
+            s_host = new HudHost(enableTray: cycleRounds <= 0);
             HudLog.Line("host-ok");
 
             if (cycleRounds > 0)

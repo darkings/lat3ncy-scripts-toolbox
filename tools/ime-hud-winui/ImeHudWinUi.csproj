@@ -37,6 +37,7 @@
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml" />
     <Page Remove="App.xaml" />
+    <Content Include="Assets\toolbox-logo.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- unpackaged WinUI 查 ms-appx 主题需要 exe 旁边的 resources.pri。 -->

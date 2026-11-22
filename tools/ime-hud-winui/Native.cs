@@ -756,6 +756,8 @@ internal static class Native
         return ReadPersonalizeDword("AppsUseLightTheme", fallback: 1) == 0;
     }
 
+    public static bool TaskbarUsesDarkMode() => ReadPersonalizeDword("SystemUsesLightTheme", fallback: 1) == 0;
+
     public static bool TransparencyEnabled()
     {
         return ReadPersonalizeDword("EnableTransparency", fallback: 1) == 1;

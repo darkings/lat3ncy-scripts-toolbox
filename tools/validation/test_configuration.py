@@ -229,6 +229,7 @@ except c.ConfigurationError as e:print(str(e))
         for name in ('PowerPolicy.ps1', 'PowerPolicy.Core.ps1', 'PowerPolicy.Identity.ps1'):
             shutil.copyfile(source / 'power-policy' / name, self.repo / 'tools/power-policy' / name)
         shutil.copyfile(source / 'theme-scheduler/ThemeUtils.ps1', self.repo / 'tools/theme-scheduler/ThemeUtils.ps1')
+        shutil.copyfile(source / 'ToolboxControls.ps1', self.repo / 'tools/ToolboxControls.ps1')
         config.save('power', {'general.interval_seconds': 7, 'power.dc_standby_seconds': 2345}, config.snapshot('power')['revision'])
         config.save('theme', {'schedule.fixed_light_time': '08:32', 'wallpaper.directory': r'C:\fixed path\图片'}, config.snapshot('theme')['revision'])
         script = self.root / 'read-only-consumers.ps1'

@@ -325,6 +325,12 @@ ahk/features/translate-selected-text.ahk
 * 冷启动只拉起 `ImeHudWinUi.exe`，等主 HWND 出现后再发第一条 `OPEN`
 * `CLOSE` 找不到窗口就当作已经关上，不再冷启动
 
+## 工具箱设置与主托盘（2026-11-22）
+
+设置中心采用 WinUI `NavigationView` 左栏菜单，右侧显示常规、功能与快捷键及七个模块配置。透明 Logo 随 publish 复制到 `Assets`，参与源码戳。主托盘复用 HUD HWND 和现有 UI Dispatcher，设置中可隐藏；读取任务栏主题以显示白色/黑色图标。`TaskbarCreated` 后重新注册，退出先删 Shell 图标再释放 HICON。完整使用和生效时机见 [设置中心](../settings/README.md)。
+
+`--self-test` 包含托盘结构布局、透明度与真实图标句柄创建/回收；`--settings-lifecycle-test` 包含两轮全部页面、Logo、三种导航宽度以及模拟 Shell 的托盘生命周期，不改实际控制偏好。探测不是物理点击或真实 Explorer 重启测试。
+
 ## 明确不做
 
 * 生产 CapsLock 状态和翻译面板统一打 WinUI 主窗口

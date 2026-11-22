@@ -48,6 +48,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot '..\ToolboxControls.ps1')
+if (-not (Test-ToolboxModuleEnabled -Module theme -RepoRoot (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent))) { return }
+
 # --- PowerShell 7 下自动改用 Windows PowerShell 5.1 重新执行 ---
 if ($PSVersionTable.PSEdition -eq 'Core')
 {

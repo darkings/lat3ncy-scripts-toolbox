@@ -8,6 +8,11 @@ param(
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'OcrHost.ps1')
+. (Join-Path $PSScriptRoot '..\..\ToolboxControls.ps1')
+if(-not(Test-ToolboxModuleEnabled -Module ocr -RepoRoot (Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent))){
+    [IO.File]::WriteAllText($ResultFile,"version=1`nrequest_id=$RequestId`nstatus=cancelled`nerror_kind=none`ntext=",[Text.UTF8Encoding]::new($false))
+    exit 0
+}
 try {
     $spec=Get-OcrLaunchSpec -ModuleDirectory $PSScriptRoot
     if(-not $spec -or $spec.Kind -ne 'base-host'){throw 'Matching OCR base environment is required'}

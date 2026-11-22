@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent))
+from toolbox_controls import module_enabled
 LIB = ROOT / "lib"
 LIB_HID = ROOT / "lib_hid"
 # insert(0) 后最靠前的是最后插入的：lib_hid/hid.pyd 必须压过 lib/hid
@@ -1498,7 +1500,7 @@ def main() -> int:
             if args.time and (time.monotonic() - start) > args.time:
                 break
             t0 = time.monotonic()
-            disabled_now = lights_are_disabled()
+            disabled_now = lights_are_disabled() or not module_enabled('rgb')
             if disabled_now != lights_disabled:
                 lights_disabled = disabled_now
                 if lights_disabled:

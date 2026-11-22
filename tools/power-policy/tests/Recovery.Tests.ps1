@@ -5,6 +5,8 @@ $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('toolbox-recovery-' + [Guid]::
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'PowerPolicy.ps1') -LibraryOnly -LogPath (Join-Path $testRoot 'test.log')
 function Write-Log($Message) {}
 function Assert($Condition, $Label) { if (-not $Condition) { throw "FAIL: $Label" } }
+$script:FeatureEnabled=$true
+function Test-PowerPolicyFeatureEnabled { return $script:FeatureEnabled }
 Add-Type @'
 using System;
 using System.IO;
@@ -13,6 +15,12 @@ namespace ToolboxPower {
  public static class Native {
   public static Dictionary<string,uint[]> Values = new Dictionary<string,uint[]>();
   public static string BackupPath;
+  public static int ReleaseCalls, HoldCalls, RequestBalance;
+  public static object GetSnapshot(){return new {ResetVersion=0,Lid=0,LidCallbacks=0,PowerCallbacks=0,DisplayCallbacks=0};}
+  public static string[] DrainEvents(){return new string[0];}
+  public static string PowerSource(){return "AC";}
+  public static bool Hold(bool reset){HoldCalls++;RequestBalance=1;return true;}
+  public static void Release(){ReleaseCalls++;RequestBalance=0;}
   public static Guid ActiveScheme(){return Guid.Parse("11111111-1111-1111-1111-111111111111");}
   public static uint Read(Guid s,Guid g,Guid k,bool ac){return Values[k.ToString()][ac?0:1];}
   public static void Write(Guid s,Guid g,Guid k,bool ac,uint value){
@@ -71,6 +79,24 @@ try {
     Invoke-WakeBlock
     Assert (([ToolboxPower.Native]::Values[$rtc] -join ',') -eq '2,1') 'timer DryRun is read-only'
     $DryRun=$false
+
+    $script:FeatureEnabled=$false; $script:Calls=@()
+    $WakeDisableDevices=$true
+    Invoke-WakeBlock
+    Assert ($script:Calls.Count -eq 0) 'disabled feature skips device reads and writes'
+    Assert (([ToolboxPower.Native]::Values[$rtc] -join ',') -eq '2,1') 'disabled feature skips timer writes'
+    $script:ResidentIdentity=@{}; $script:LastStatusSignature=''
+    $script:LastStatusUtc=[DateTime]::MinValue; $script:LastTickUtc=$null
+    $script:MaxLoopGapSeconds=0; $script:LargeLoopGapCount=0
+    function Test-CaffeineActive { throw 'disabled module must not read Caffeine input' }
+    [ToolboxPower.Native]::RequestBalance=1
+    Invoke-PowerPolicyTick
+    Assert ([ToolboxPower.Native]::ReleaseCalls -eq 1) 'disabled tick releases the existing hold'
+    Assert ([ToolboxPower.Native]::HoldCalls -eq 0) 'disabled tick never requests a new hold'
+    $beat=Get-Content -LiteralPath $script:StatusFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert (-not $beat.moduleEnabled -and -not $beat.caffeine -and $beat.requestBalance -eq 0) 'disabled tick still publishes a paused heartbeat'
+    Assert (([ToolboxPower.Native]::Values[$rtc] -join ',') -eq '2,1') 'disabled tick preserves system policies'
+    $script:FeatureEnabled=$true
 
     $WakeDisableDevices=$true; $WakeDisableTimers=$false; $WakeWhitelist=@()
     Invoke-WakeBlock

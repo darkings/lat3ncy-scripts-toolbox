@@ -120,6 +120,8 @@ class FindMouse {
 
     static Start(*) {
         SetTimer(this.StartCallback, 0)
+        if IsSet(ToolboxControls) && !ToolboxControls.FeatureEnabled("FindMouse")
+            return false
         if !this.Enabled || this.Hook
             return false
         this.Hook := 1

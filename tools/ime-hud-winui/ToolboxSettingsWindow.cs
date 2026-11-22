@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics;
 
 namespace Lat3ncyToolbox.ImeHudWinUi;
@@ -30,8 +31,14 @@ internal sealed class ToolboxSettingsWindow : Window
     readonly NumericField _rate = new("语速（-90 至 100，%）", -90, 100);
     readonly NumericField _pitch = new("音调（-100 至 100，Hz）", -100, 100);
     readonly NumericField _volume = new("音量调整（-100 至 100，%）", -100, 100);
-    readonly ComboBox _moduleChoice;
+    readonly NavigationView _navigation;
+    readonly StackPanel _brandName = new() { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
     readonly Dictionary<string, ModuleConfigurationForm> _moduleForms = new();
+    readonly Dictionary<string, ControlSettingsForm> _controlForms = new();
+    readonly StackPanel _moduleSwitches = new() { Spacing = 12, Padding = new Thickness(24, 0, 24, 8) };
+    readonly Action? _controlsChanged;
+    readonly bool _readOnlyProbe;
+    string _controlsRevision = "";
     string _module = "text";
     Task _moduleLoad = Task.CompletedTask;
     string _revision = "";
@@ -39,28 +46,52 @@ internal sealed class ToolboxSettingsWindow : Window
     bool _resetPending;
     bool _busy;
     bool _closed;
+    bool _brandLogoLoaded;
     public bool SettingsLoaded { get; private set; }
     internal bool DefaultsPreviewed => _resetPending;
+    internal bool BrandLogoLoaded => _brandLogoLoaded;
 
-    public ToolboxSettingsWindow()
+    public ToolboxSettingsWindow(Action? controlsChanged = null, bool readOnlyProbe = false)
     {
+        _controlsChanged = controlsChanged;
+        _readOnlyProbe = readOnlyProbe;
         Title = "工具箱设置";
         IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        HudApp.TryEnsureControlsResources("settings-window");
+        _navigation = new NavigationView
+        {
+            PaneDisplayMode = NavigationViewPaneDisplayMode.Auto,
+            IsSettingsVisible = false,
+            IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+            OpenPaneLength = 240,
+            CompactModeThresholdWidth = 600,
+            ExpandedModeThresholdWidth = 880,
+            Header = "翻译与朗读",
+        };
         double scale = Math.Max(96, Native.GetDpiForWindow(hwnd)) / 96.0;
         Native.RECT work = Native.TryGetWindowWorkArea(hwnd, out var area) ? area : Native.GetPrimaryWorkArea();
-        AppWindow.Resize(new SizeInt32(Math.Min((int)(640 * scale), Math.Max(320, work.Right - work.Left - 40)),
+        AppWindow.Resize(new SizeInt32(Math.Min((int)(1040 * scale), Math.Max(320, work.Right - work.Left - 40)),
                                       Math.Min((int)(800 * scale), Math.Max(320, work.Bottom - work.Top - 40))));
-        var root = new Grid();
+        var root = new Grid { MaxWidth = 960, HorizontalAlignment = HorizontalAlignment.Stretch };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        _moduleChoice = Choice("设置分类", ("翻译与朗读", "text"), ("翻译高级", "translate"),
-            ("朗读高级", "tts"), ("截图识别", "ocr"), ("音频切换", "audio"),
-            ("主题、壁纸与背光", "theme"), ("电源与唤醒", "power"), ("氛围灯", "rgb"));
-        _moduleChoice.Margin = new Thickness(24, 12, 24, 0);
-        _moduleChoice.SelectedIndex = 0;
-        root.Children.Add(_moduleChoice);
-        _form.Children.Add(new TextBlock { Text = "翻译与朗读", FontSize = 24 });
+        AddNavigationItem("常规", "general", Symbol.Setting);
+        AddNavigationItem("功能与快捷键", "hotkeys", Symbol.Keyboard);
+        AddNavigationItem("翻译与朗读", "text", Symbol.Document);
+        AddNavigationItem("翻译高级", "translate", Symbol.Globe);
+        AddNavigationItem("朗读高级", "tts", Symbol.Volume);
+        AddNavigationItem("截图识别", "ocr", Symbol.Camera);
+        AddNavigationItem("音频切换", "audio", Symbol.Switch);
+        AddNavigationItem("主题、壁纸与背光", "theme", Symbol.Pictures);
+        AddNavigationItem("电源与唤醒", "power", Symbol.Clock);
+        AddNavigationItem("氛围灯", "rgb", Symbol.Highlight);
+        SelectModule("text");
+        AutomationProperties.SetName(_navigation, "设置分类导航");
+        _navigation.PaneHeader = CreateBrandHeader();
+        _navigation.PaneOpened += (_, _) => UpdateBrandHeader();
+        _navigation.PaneClosed += (_, _) => UpdateBrandHeader();
+        _navigation.DisplayModeChanged += (_, _) => UpdateBrandHeader();
         _form.Children.Add(new TextBlock
         {
             Text = "设置在下次请求生效。密钥仍从原配置或环境变量读取，不会写入此窗口。在线翻译和在线朗读会把文本发送给对应服务。",
@@ -76,6 +107,7 @@ internal sealed class ToolboxSettingsWindow : Window
         foreach (UIElement element in new UIElement[] { _ttsEngine, _zhVoice, _enVoice, _rate.Root, _pitch.Root, _volume.Root })
             _form.Children.Add(element);
         _scroll.Content = _form;
+        root.Children.Add(_moduleSwitches);
         Grid.SetRow(_scroll, 1);
         root.Children.Add(_scroll);
 
@@ -83,19 +115,78 @@ internal sealed class ToolboxSettingsWindow : Window
         AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
         footer.Children.Add(_status);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        root.SizeChanged += (_, _) => buttons.Orientation = root.ActualWidth < 400 ? Orientation.Vertical : Orientation.Horizontal;
         buttons.Children.Add(_save); buttons.Children.Add(_reload);
         var close = new Button { Content = "关闭" };
         close.Click += (_, _) => Close();
         buttons.Children.Add(close); footer.Children.Add(buttons);
         footer.Children.Add(_restore);
-        Grid.SetRow(footer, 2); root.Children.Add(footer); Content = root;
+        Grid.SetRow(footer, 2); root.Children.Add(footer);
+        _navigation.Content = root; Content = _navigation;
         _save.Click += async (_, _) => await SaveAsync();
         _reload.Click += async (_, _) => await ReloadAsync();
-        _restore.Click += async (_, _) => await PreviewDefaultsAsync();
-        _moduleChoice.SelectionChanged += (_, _) => _moduleLoad = SwitchModuleAsync();
+        _restore.Click += async (_, _) =>
+        {
+            if (_module == "hotkeys" && _controlForms.TryGetValue(_module, out var shortcuts))
+            {
+                shortcuts.ResetBindings(); _status.Text = "已恢复默认快捷键预览，保存后生效；功能开关保持当前输入。";
+            }
+            else await PreviewDefaultsAsync();
+        };
+        _navigation.SelectionChanged += (_, _) => _moduleLoad = SwitchModuleAsync();
         Closed += (_, _) => { _closed = true; _lifetime.Cancel(); HudLog.Line("settings-closed"); };
         SetBusy(true);
         _ = ReloadAsync();
+    }
+
+    void AddNavigationItem(string label, string module, Symbol symbol)
+    {
+        _navigation.MenuItems.Add(new NavigationViewItem
+        {
+            Content = label, Tag = module, Icon = new SymbolIcon(symbol),
+        });
+    }
+
+    UIElement CreateBrandHeader()
+    {
+        var logo = new Image { Width = 32, Height = 32 };
+        AutomationProperties.SetName(logo, "lat3ncy 工具箱 Logo");
+        logo.ImageOpened += (_, _) => { _brandLogoLoaded = true; HudLog.Line("settings-brand-logo=loaded"); };
+        logo.ImageFailed += (_, _) => HudLog.Line("settings-brand-logo=failed");
+        logo.Source = new BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "toolbox-logo.png")));
+        _brandName.Children.Add(new TextBlock { Text = "lat3ncy", FontSize = 18 });
+        _brandName.Children.Add(new TextBlock { Text = "工具箱设置", FontSize = 12 });
+        var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(8, 12, 8, 16) };
+        header.Children.Add(logo); header.Children.Add(_brandName);
+        UpdateBrandHeader();
+        return header;
+    }
+
+    void UpdateBrandHeader() => _brandName.Visibility = _navigation.IsPaneOpen ? Visibility.Visible : Visibility.Collapsed;
+
+    void SelectModule(string module)
+    {
+        _navigation.SelectedItem = _navigation.MenuItems.Cast<NavigationViewItem>().Single(item => (string)item.Tag == module);
+    }
+
+    internal async Task VerifyNavigationLayoutAsync()
+    {
+        if (!_readOnlyProbe) throw new InvalidOperationException("probe_required");
+        var original = AppWindow.Size;
+        double scale = Math.Max(96, Native.GetDpiForWindow(WinRT.Interop.WindowNative.GetWindowHandle(this))) / 96.0;
+        try
+        {
+            foreach (var (width, mode) in new[] { (1040, NavigationViewDisplayMode.Expanded),
+                (720, NavigationViewDisplayMode.Compact), (360, NavigationViewDisplayMode.Minimal) })
+            {
+                AppWindow.Resize(new SizeInt32((int)(width * scale), original.Height));
+                await Task.Delay(120);
+                if (_navigation.DisplayMode != mode || (string)((NavigationViewItem)_navigation.SelectedItem).Tag != "text")
+                    throw new InvalidOperationException("navigation_layout_failed");
+            }
+            HudLog.Line("settings-navigation=passed expanded+compact+minimal");
+        }
+        finally { AppWindow.Resize(original); }
     }
 
     static ComboBox Choice(string header, params (string label, string value)[] options)
@@ -117,18 +208,34 @@ internal sealed class ToolboxSettingsWindow : Window
 
     void SetBusy(bool busy)
     {
-        _busy = busy; _scroll.IsEnabled = !busy; _moduleChoice.IsEnabled = !busy;
-        bool loaded = _module == "text" ? _revision.Length > 0 : _moduleForms.ContainsKey(_module);
+        _busy = busy; _scroll.IsEnabled = !busy;
+        foreach (Control toggle in _moduleSwitches.Children.OfType<Control>()) toggle.IsEnabled = !busy;
+        foreach (NavigationViewItem item in _navigation.MenuItems) item.IsEnabled = !busy;
+        bool loaded = _module == "text" ? _revision.Length > 0
+            : _module is "general" or "hotkeys" ? _controlForms.ContainsKey(_module) : _moduleForms.ContainsKey(_module);
         _save.IsEnabled = !busy && loaded; _reload.IsEnabled = !busy;
-        _restore.Visibility = _module == "text" ? Visibility.Visible : Visibility.Collapsed;
+        _restore.Visibility = _module is "text" or "hotkeys" ? Visibility.Visible : Visibility.Collapsed;
+        _restore.Content = _module == "hotkeys" ? "恢复默认快捷键" : "预览 TOML 设置";
         _restore.IsEnabled = !busy && loaded;
     }
 
     async Task SwitchModuleAsync()
     {
         if (_busy) return;
-        _module = Selected(_moduleChoice);
-        if (_module == "text")
+        if (_navigation.SelectedItem is not NavigationViewItem selected) return;
+        _module = (string)selected.Tag;
+        _navigation.Header = selected.Content;
+        if (_module is "general" or "hotkeys")
+        {
+            _moduleSwitches.Visibility = Visibility.Collapsed;
+            if (_controlForms.TryGetValue(_module, out var controls))
+            {
+                _scroll.Content = controls.Root; SetBusy(false);
+                _status.Text = "当前窗口保留了此页输入。保存应用，重新加载放弃修改。";
+            }
+            else await ReloadControlPageAsync();
+        }
+        else if (_module == "text")
         {
             _scroll.Content = _form;
             _status.Text = _resetPending ? "已预览 TOML 设置，尚未保存。重新加载可放弃。" : "当前窗口保留了各分类输入；关闭会放弃未保存内容。";
@@ -141,7 +248,12 @@ internal sealed class ToolboxSettingsWindow : Window
             SetBusy(false);
         }
         else await ReloadModuleAsync();
-        _scroll.ChangeView(null, 0, null);
+        if (_module is not ("general" or "hotkeys")) await RefreshModuleSwitchesAsync();
+        if (!_closed)
+        {
+            _scroll.ChangeView(null, 0, null);
+            if (_navigation.DisplayMode != NavigationViewDisplayMode.Expanded) _navigation.IsPaneOpen = false;
+        }
     }
 
     // Explicit lifecycle probe only: construct each real form, check that a
@@ -150,7 +262,7 @@ internal sealed class ToolboxSettingsWindow : Window
     {
         foreach (string module in new[] { "translate", "tts", "ocr", "audio", "theme", "power", "rgb" })
         {
-            Select(_moduleChoice, module);
+            SelectModule(module);
             await _moduleLoad;
             if (!_moduleForms.TryGetValue(module, out var form)) throw new InvalidOperationException("module_load_failed");
             object? request = form.ReadRequest();
@@ -163,9 +275,97 @@ internal sealed class ToolboxSettingsWindow : Window
                 throw new InvalidOperationException("module_draft_changed");
             }
         }
-        Select(_moduleChoice, "text");
+        foreach (string page in new[] { "general", "hotkeys" })
+        {
+            SelectModule(page); await _moduleLoad;
+            if (!_controlForms.TryGetValue(page, out var form)
+                || JsonSerializer.SerializeToElement(form.ReadRequest()).GetProperty("changes").EnumerateObject().Any())
+                throw new InvalidOperationException("control_draft_changed");
+        }
+        SelectModule("text");
         await _moduleLoad;
-        HudLog.Line("settings-module-pages=passed count=7");
+        HudLog.Line("settings-module-pages=passed count=7 controls=2");
+    }
+
+    async Task ReloadControlPageAsync()
+    {
+        SetBusy(true); _status.Text = "正在读取功能与快捷键设置…";
+        try
+        {
+            JsonElement data = await PreferencesBridge.RunControlsAsync(null, _lifetime.Token);
+            if (_closed) return;
+            var form = new ControlSettingsForm(data, _module);
+            _controlForms[_module] = form; _scroll.Content = form.Root;
+            _status.Text = "已读取。默认快捷键来自当前源码，保存不会改写源码。";
+        }
+        catch
+        {
+            if (!_closed)
+            {
+                if (!_controlForms.ContainsKey(_module)) _scroll.Content = new TextBlock { Text = "无法读取控制设置，请检查本仓库的控制配置后重新加载。", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(24) };
+                _status.Text = "读取失败，当前输入已保留。";
+            }
+        }
+        finally { if (!_closed) SetBusy(false); }
+    }
+
+    async Task RefreshModuleSwitchesAsync()
+    {
+        _moduleSwitches.Visibility = Visibility.Visible;
+        _moduleSwitches.Children.Clear(); SetBusy(true);
+        try
+        {
+            JsonElement data = await PreferencesBridge.RunControlsAsync(null, _lifetime.Token);
+            if (_closed) return;
+            _controlsRevision = data.GetProperty("revision").GetString()!;
+            JsonElement values = data.GetProperty("values");
+            foreach (JsonElement module in data.GetProperty("modules").EnumerateArray())
+            {
+                string id = module.GetProperty("id").GetString()!;
+                if (_module != id && !(_module == "text" && id is "translate" or "tts")) continue;
+                string key = "module_" + id + "_enabled";
+                var toggle = new ToggleSwitch { Header = "启用" + module.GetProperty("label").GetString(), IsOn = values.GetProperty(key).GetBoolean(), OnContent = "已启用", OffContent = "已关闭" };
+                AutomationProperties.SetAutomationId(toggle, key);
+                toggle.Toggled += async (_, _) => await SaveModuleSwitchAsync(key, toggle);
+                _moduleSwitches.Children.Add(toggle);
+            }
+        }
+        catch { if (!_closed) _moduleSwitches.Children.Add(new TextBlock { Text = "无法读取功能开关，请重新加载。" }); }
+        finally { if (!_closed) SetBusy(false); }
+    }
+
+    void RetargetOwnControlRevision(string previous, string current)
+    {
+        foreach (var form in _controlForms.Values) form.RetargetOwnRevision(previous, current);
+        if (_controlsRevision == previous) _controlsRevision = current;
+    }
+
+    async Task SaveModuleSwitchAsync(string key, ToggleSwitch toggle)
+    {
+        if (_readOnlyProbe || _busy || _controlsRevision.Length == 0) return;
+        bool requested = toggle.IsOn;
+        string revision = _controlsRevision;
+        SetBusy(true); _status.Text = "正在应用功能开关…";
+        try
+        {
+            var request = new { revision, changes = new Dictionary<string, object> { [key] = requested } };
+            JsonElement saved = await PreferencesBridge.RunControlsAsync(request, _lifetime.Token);
+            if (_closed) return;
+            RetargetOwnControlRevision(revision, saved.GetProperty("revision").GetString()!);
+            _controlsChanged?.Invoke();
+            _status.Text = "已保存功能开关。快捷键自动加载，注册失败保留旧键位；后台功能在下次调用或现有循环生效。";
+        }
+        catch (Exception error)
+        {
+            if (!_closed)
+            {
+                toggle.IsOn = !requested;
+                _status.Text = error.Message.StartsWith("hotkey_conflict_", StringComparison.Ordinal)
+                    ? "启用后快捷键存在冲突，请先在功能与快捷键页调整。当前开关未保存。"
+                    : "开关未保存，请重新加载后重试。当前运行策略保持。";
+            }
+        }
+        finally { if (!_closed) SetBusy(false); }
     }
 
     async Task ReloadModuleAsync()
@@ -194,7 +394,8 @@ internal sealed class ToolboxSettingsWindow : Window
 
     async Task ReloadAsync()
     {
-        if (_module != "text") { await ReloadModuleAsync(); return; }
+        if (_module is "general" or "hotkeys") { await ReloadControlPageAsync(); return; }
+        if (_module != "text") { await ReloadModuleAsync(); await RefreshModuleSwitchesAsync(); return; }
         _revision = "";
         SettingsLoaded = false;
         SetBusy(true); _status.Text = "正在读取设置…";
@@ -204,7 +405,6 @@ internal sealed class ToolboxSettingsWindow : Window
             if (_closed) return;
             Populate(data); _status.Text = "已读取当前设置。";
             _resetPending = false;
-            SettingsLoaded = true;
             HudLog.Line("settings-loaded");
         }
         catch
@@ -212,6 +412,8 @@ internal sealed class ToolboxSettingsWindow : Window
             if (!_closed) { _status.Text = "无法读取设置。请检查 Python 3.11+ 和本地配置，再重新加载。"; HudLog.Line("settings-load-failed"); }
         }
         finally { if (!_closed) SetBusy(false); }
+        await RefreshModuleSwitchesAsync();
+        SettingsLoaded = _revision.Length > 0;
     }
 
     void Populate(JsonElement data)
@@ -266,6 +468,8 @@ internal sealed class ToolboxSettingsWindow : Window
 
     async Task SaveAsync()
     {
+        if (_readOnlyProbe) return;
+        if (_module is "general" or "hotkeys") { await SaveControlPageAsync(); return; }
         if (_module != "text") { await SaveModuleAsync(); return; }
         if (_busy || _revision.Length == 0) return;
         NumericField? invalid = new[] { _rate, _pitch, _volume }.FirstOrDefault(field => !field.Validate());
@@ -306,6 +510,29 @@ internal sealed class ToolboxSettingsWindow : Window
             if (!_closed) _status.Text = ex.Message == "settings_changed_reload"
                 ? "设置或配置文件已变化。请重新加载后再保存。"
                 : "保存失败，当前输入已保留。请检查本地配置和文件权限后重试。";
+        }
+        finally { if (!_closed) SetBusy(false); }
+    }
+
+    async Task SaveControlPageAsync()
+    {
+        if (_busy || !_controlForms.TryGetValue(_module, out var form)) return;
+        string revision = form.Revision;
+        SetBusy(true); _status.Text = "正在保存控制设置…";
+        try
+        {
+            JsonElement data = await PreferencesBridge.RunControlsAsync(form.ReadRequest(), _lifetime.Token);
+            if (_closed) return;
+            RetargetOwnControlRevision(revision, data.GetProperty("revision").GetString()!);
+            var saved = new ControlSettingsForm(data, _module); _controlForms[_module] = saved; _scroll.Content = saved.Root;
+            _controlsChanged?.Invoke();
+            _status.Text = "已保存，快捷键自动加载；注册失败保留旧键位。默认键位仍保留在源码中。";
+        }
+        catch (Exception error)
+        {
+            if (!_closed) _status.Text = form.ConflictMessage(error.Message)
+                ?? (error.Message == "settings_changed_reload" ? "控制设置已变化，请重新加载后再保存。当前输入已保留。"
+                    : "保存失败，请检查快捷键格式和本地文件权限；当前输入已保留。");
         }
         finally { if (!_closed) SetBusy(false); }
     }

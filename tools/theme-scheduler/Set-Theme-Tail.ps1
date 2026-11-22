@@ -17,6 +17,7 @@
 
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'ThemeUtils.ps1')
+if(-not(Test-ThemeFeatureEnabled)){return}
 
 $config = Get-ThemeConfig
 $sw = [System.Diagnostics.Stopwatch]::StartNew()

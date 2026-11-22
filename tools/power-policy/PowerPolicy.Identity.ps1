@@ -3,7 +3,7 @@
 function Get-ToolboxPowerFingerprint {
     param([Parameter(Mandatory=$true)][string]$PowerScript)
     $root=Split-Path ([IO.Path]::GetFullPath($PowerScript)) -Parent
-    $names=@([IO.Path]::GetFileName($PowerScript),'PowerPolicy.Core.ps1','PowerNative.cs','PowerPolicy.Identity.ps1','Repair-TaskHost.ps1','Run-PowerPolicy.vbs','config.toml')
+    $names=@([IO.Path]::GetFileName($PowerScript),'PowerPolicy.Core.ps1','PowerNative.cs','PowerPolicy.Identity.ps1','Repair-TaskHost.ps1','Run-PowerPolicy.vbs','config.toml','..\ToolboxControls.ps1')
     $lines=foreach($name in $names){
         $path=Join-Path $root $name
         if(Test-Path -LiteralPath $path -PathType Leaf){$digest=(Get-FileHash -LiteralPath $path -Algorithm SHA256 -ErrorAction Stop).Hash}

@@ -267,7 +267,8 @@ p.save({'translate':{'target_language':'en'}},p.snapshot()['revision']);print('o
 
     def test_real_translation_and_speech_load_the_same_overlay_in_isolated_repo(self):
         source_tools = Path(prefs.__file__).parent
-        shutil.copyfile(source_tools / 'toolbox_preferences.py', self.repo / 'tools/toolbox_preferences.py')
+        for filename in ('toolbox_preferences.py', 'toolbox_controls.py'):
+            shutil.copyfile(source_tools / filename, self.repo / 'tools' / filename)
         for filename in ('translate.py', 'auth_cooldown.py', 'long_translation.py', 'engine_trace.py'):
             shutil.copyfile(source_tools / 'translate' / filename, self.repo / 'tools/translate' / filename)
         for filename in ('tts_player.py', 'task_protocol.py'):

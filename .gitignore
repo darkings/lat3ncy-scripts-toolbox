@@ -41,6 +41,8 @@ __pycache__/
 .tmp_caps/
 .lat3ncy-tools-tmp/
 **/.toolbox-config-*.tmp
+.toolbox-controls.json
+.toolbox-controls-*.tmp
 /test_*.ahk
 /test.txt
 /*.png

@@ -891,6 +891,9 @@ async def main_async() -> None:
 
 
 async def run_pipeline(args) -> None:
+    from toolbox_controls import module_enabled
+    if not module_enabled('tts', args.config):
+        raise TaskFailure('cancelled', 'TTS feature is disabled')
     logger = get_logger()
 
     input_text = args.text

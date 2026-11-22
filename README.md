@@ -151,6 +151,8 @@ OCR 依赖固定在专用 `.venv314`，使用 `requirements.lock` 的版本及 S
 
 腾讯云首选、Google 保底：顶层设置 `fallback_without_credentials = true` 和 `fallback_on_auth_error = true`，缺密钥或鉴权失败时使用 Google。回退成功不发系统通知，只记录后台诊断；密钥恢复后自动优先腾讯。完整回退顺序见 [翻译引擎与回退](tools/translate/README.md#引擎与回退)。
 
+统一设置采用 WinUI 左侧菜单、右侧配置，覆盖七个模块及其功能开关；“功能与快捷键”支持独立开关、AHK 键位自定义和恢复当前默认，固定 CapsLock 基础键。常规页可隐藏主托盘，图标随任务栏深浅主题切换黑白。入口、生效时机与配置保护见 [工具箱设置中心](tools/settings/README.md)。
+
 固定图片的连续联动验收入口为 `python tools/validation/text_workflow_smoke.py --ahk <AHK-v2路径>`，默认不联网、不播放声音，会替换并关闭当前翻译面板；覆盖真实 OCR、翻译进程、面板回传及失败/取消清理。显式 `--online` 才使用现有引擎发送固定测试文本，操作及验收边界见 [联动探针](tools/validation/README.md#连续联动探针)。
 
 ## 主题、RGB 与设备

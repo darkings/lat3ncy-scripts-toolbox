@@ -21,6 +21,9 @@ internal static class PreferencesBridge
         return RunHelperAsync("toolbox_configuration.py", request, cancellation, new[] { "--module", module }, 262144);
     }
 
+    public static Task<JsonElement> RunControlsAsync(object? request, CancellationToken cancellation) =>
+        RunHelperAsync("toolbox_controls.py", request, cancellation, Array.Empty<string>(), 65536);
+
     static async Task<JsonElement> RunHelperAsync(string filename, object? request, CancellationToken cancellation,
                                                  string[] arguments, int limit)
     {
@@ -55,6 +58,10 @@ internal static class PreferencesBridge
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         using Process process = Process.Start(start) ?? throw new InvalidOperationException("settings_unavailable");
+        using var killOnCancel = timeout.Token.Register(() =>
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+        });
         try
         {
             Task<string> output = process.StandardOutput.ReadToEndAsync(timeout.Token);
@@ -72,7 +79,8 @@ internal static class PreferencesBridge
             if (process.ExitCode != 0 || result.GetProperty("status").GetString() != "ok")
             {
                 string? code = result.TryGetProperty("code", out var value) ? value.GetString() : null;
-                bool fixedValidation = code != null && code.StartsWith("invalid_", StringComparison.Ordinal)
+                bool fixedValidation = code != null && (code.StartsWith("invalid_", StringComparison.Ordinal)
+                    || code.StartsWith("hotkey_conflict_", StringComparison.Ordinal))
                     && code.Length <= 100 && code.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '.');
                 throw new InvalidOperationException(code is "settings_changed_reload" or "protected_config_manual" || fixedValidation ? code : "settings_unavailable");
             }

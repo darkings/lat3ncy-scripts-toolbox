@@ -17,7 +17,7 @@ import uuid
 REPO = Path(__file__).resolve().parents[1]
 LIMIT = 16384
 MODULES = {'translate': '翻译', 'tts': '朗读', 'ocr': '截图识别', 'audio': '音频切换',
-           'theme': '主题、壁纸与背光', 'power': '电源与唤醒', 'rgb': '氛围灯'}
+           'theme': '主题、壁纸与背光', 'power': '电源与唤醒', 'rgb': '氛围灯', 'capture': '截图与录屏'}
 FEATURES = [
     ('CapsLockIme', 'CapsLock 输入法增强', '', 'leader'),
     ('SpeakSelectedText', '朗读选中文字', 'tts', 'hotkey'),
@@ -44,6 +44,7 @@ FEATURES = [
     ('FindMouse', '摇动定位指针', '', 'resident'),
 ]
 CONFIGS = {'ocr': 'tools/raycast-scripts/ocr/config.toml',
+           'capture': 'tools/raycast-scripts/capture/config.toml',
            **{name: f'tools/{name}/config.toml' for name in ('translate', 'tts', 'rgb')},
            'audio': 'tools/audio-switcher/config.toml',
            'power': 'tools/power-policy/config.toml', 'theme': 'tools/theme-scheduler/config.toml'}

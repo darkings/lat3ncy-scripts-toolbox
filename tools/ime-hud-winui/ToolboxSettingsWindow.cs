@@ -98,6 +98,7 @@ internal sealed class ToolboxSettingsWindow : Window
         AddNavigationItem("翻译设置", "translate", Symbol.Globe);
         AddNavigationItem("朗读设置", "tts", Symbol.Volume);
         AddNavigationItem("截图识别", "ocr", Symbol.Camera);
+        AddNavigationItem("截图与录屏", "capture", Symbol.Video);
         AddNavigationItem("音频切换", "audio", Symbol.Switch);
         AddNavigationItem("主题、壁纸与背光", "theme", Symbol.Pictures);
         AddNavigationItem("电源与唤醒", "power", Symbol.Clock);
@@ -193,6 +194,7 @@ internal sealed class ToolboxSettingsWindow : Window
                 if (page is "general" or "hotkeys")
                 {
                     var form = new ControlSettingsForm(await PreferencesBridge.RunControlsAsync(null, _lifetime.Token), page);
+                    if (page == "general") form.Root.Children.Add(new DiagnosticSettingsForm(_lifetime.Token).Root);
                     form.Edited += () => Edited(page); _controlForms[page] = form; _pages[page] = form.Root;
                 }
                 else
@@ -424,6 +426,14 @@ internal sealed class ToolboxSettingsWindow : Window
         prefs = await PreferencesBridge.RunAsync(null, _lifetime.Token);
         if (prefs.GetProperty("values").GetProperty("tts").GetProperty("rate").GetString() != "+5%") throw new InvalidOperationException("native_defaults_reset_other_page");
         if (!(await PreferencesBridge.RunCredentialsAsync(null, _lifetime.Token)).GetProperty("providers")[0].GetProperty("fields")[1].GetProperty("configured").GetBoolean()) throw new InvalidOperationException("native_defaults_erased_credentials");
+        SelectModule("capture"); await _moduleLoad;
+        _moduleForms["capture"].SetProbeValue("screenshot.copy_to_clipboard", false);
+        _moduleForms["capture"].SetProbeValue("record.wait_timeout_s", 3600);
+        if (!await FlushAsync()) throw new InvalidOperationException("native_capture_save");
+        var capture = await PreferencesBridge.RunConfigurationAsync("capture", null, _lifetime.Token);
+        if (capture.GetProperty("fields").EnumerateArray().Single(item => item.GetProperty("key").GetString() == "screenshot.copy_to_clipboard").GetProperty("value").GetBoolean()) throw new InvalidOperationException("native_capture_readback");
+        await RestoreDefaultsAsync();
+        if (_moduleForms["capture"].IsNonDefault) throw new InvalidOperationException("native_capture_defaults");
         SelectModule("theme"); await _moduleLoad;
         _moduleForms["theme"].SetProbeValue("schedule.latitude", "31.25");
         if (!await FlushAsync() || _reload.Visibility != Visibility.Visible) throw new InvalidOperationException("native_reload_button_missing");
@@ -438,7 +448,7 @@ internal sealed class ToolboxSettingsWindow : Window
     }
     internal async Task VerifyModulePagesAsync()
     {
-        foreach (string page in new[] { "translate", "tts", "ocr", "audio", "theme", "power", "rgb", "general", "hotkeys" })
+        foreach (string page in new[] { "translate", "tts", "ocr", "capture", "audio", "theme", "power", "rgb", "general", "hotkeys" })
         {
             SelectModule(page); await _moduleLoad;
             if (!_pages.ContainsKey(page)) throw new InvalidOperationException("module_load_failed");
@@ -446,7 +456,7 @@ internal sealed class ToolboxSettingsWindow : Window
             _preferenceForms.GetValueOrDefault(page)?.VerifyEditorRoundTrips();
         }
         SelectModule("translate"); await _moduleLoad;
-        HudLog.Line("settings-module-pages=passed count=9 merged=translate+tts credentials=metadata-only");
+        HudLog.Line("settings-module-pages=passed count=10 merged=translate+tts credentials=metadata-only");
     }
     internal async Task VerifyNavigationLayoutAsync()
     {

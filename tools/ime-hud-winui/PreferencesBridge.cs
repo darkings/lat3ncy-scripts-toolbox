@@ -18,7 +18,7 @@ internal static class PreferencesBridge
 
     public static Task<JsonElement> RunConfigurationAsync(string module, object? request, CancellationToken cancellation)
     {
-        if (module is not ("translate" or "tts" or "ocr" or "audio" or "theme" or "power" or "rgb"))
+        if (module is not ("translate" or "tts" or "ocr" or "audio" or "theme" or "power" or "rgb" or "capture"))
             throw new ArgumentException("settings_unavailable");
         return RunHelperAsync("toolbox_configuration.py", request, cancellation, new[] { "--module", module }, 262144);
     }
@@ -32,8 +32,11 @@ internal static class PreferencesBridge
     public static Task<JsonElement> RunReloadAsync(object? request, CancellationToken cancellation) =>
         RunHelperAsync("toolbox_reload.py", request, cancellation, Array.Empty<string>(), 16384);
 
+    public static Task<JsonElement> RunStatusAsync(CancellationToken cancellation) =>
+        RunHelperAsync("toolbox_status.py", null, cancellation, new[] { "--owner-pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) }, 16384, seconds: 20);
+
     static async Task<JsonElement> RunHelperAsync(string filename, object? request, CancellationToken cancellation,
-                                                 string[] arguments, int limit, string? probeTools = null)
+                                                 string[] arguments, int limit, string? probeTools = null, int seconds = 10)
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         string? helper = null;
@@ -65,7 +68,7 @@ internal static class PreferencesBridge
             start.ArgumentList.Add("--apply");
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        timeout.CancelAfter(TimeSpan.FromSeconds(seconds));
         using Process process = Process.Start(start) ?? throw new InvalidOperationException("settings_unavailable");
         using var killOnCancel = timeout.Token.Register(() =>
         {

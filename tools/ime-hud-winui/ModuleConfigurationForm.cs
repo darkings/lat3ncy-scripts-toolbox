@@ -62,7 +62,7 @@ internal sealed class ModuleConfigurationForm
 
     static string GroupLabel(string group) => group switch
     {
-        "general" => "常规", "cache" => "缓存", "tencent" => "腾讯云", "aliyun" => "阿里云",
+        "general" => "常规", "screenshot" => "截图", "record" => "录屏", "cache" => "缓存", "tencent" => "腾讯云", "aliyun" => "阿里云",
         "models.default" => "标准 OCR 模型", "models.mobile" => "轻量 OCR 模型", "preferred" => "首选设备与匹配",
         "behavior" => "运行行为", "tts" => "朗读联动", "schedule" => "自动切换时间", "mode_settings" => "深浅色联动",
         "wallpaper" => "桌面与锁屏壁纸", "theme_settings" => "Windows 主题", "cursor" => "鼠标指针方案",
@@ -219,6 +219,7 @@ internal sealed class ModuleConfigurationForm
 
         static string? PathKind(string key) => key switch
         {
+            "screenshot.extra_directory" or "record.extra_directory" => "folder",
             "wallpaper.directory" or "cursor.light_dir" or "cursor.dark_dir" or "caffeine.coffee_dir" => "folder",
             "wallpaper.light_wallpaper" or "wallpaper.dark_wallpaper" or "theme_settings.light_theme_file" or "theme_settings.dark_theme_file" or "hi75.exe" => "file",
             _ when key.StartsWith("models.") => "file", _ => null,

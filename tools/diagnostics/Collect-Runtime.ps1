@@ -1,6 +1,6 @@
 # Read-only runtime snapshot. No starts, stops, task changes or panel commands.
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$Repo)
+param([Parameter(Mandatory=$true)][string]$Repo,[switch]$ResidentsOnly)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 . (Join-Path $Repo 'tools\startup\Deployment.Runtime.ps1')
@@ -31,6 +31,7 @@ function Resolve-GlobalPythonW {
 }
 
 $result=@{residents=@{};globalPythonW=$null;ocr=$null}
+if(-not $ResidentsOnly){
 try {$result.globalPythonW=Resolve-GlobalPythonW} catch {$result.globalError=$_.Exception.GetType().Name}
 try {
     $spec=Get-OcrLaunchSpec -ModuleDirectory (Join-Path $Repo 'tools\raycast-scripts\ocr')
@@ -41,6 +42,7 @@ try {
     }
     if($spec){$result.ocr=@{python=$spec.Python;kind=$spec.Kind;prefix=@($spec.Prefix)}}
 } catch {$result.ocrError=$_.Exception.GetType().Name}
+}
 
 try {
     $processes=@(Get-CimInstance Win32_Process -OperationTimeoutSec 5 -ErrorAction Stop)
@@ -67,6 +69,12 @@ try {
     elseif($caret.Count -gt 1){$caretStatus='ambiguous'}
     elseif(-not $caret.Count -and -not @($processes | Where-Object {$_.Name -eq 'powershell.exe' -and -not $_.CommandLine}).Count){$caretStatus='not-running'}
     $result.residents.caret=@{status=$caretStatus;pids=@($caret | ForEach-Object {[int]$_.ProcessId})}
+    if($ResidentsOnly){
+    $ambient=@($processes | Where-Object {$_.Name -match '^pythonw?\.exe$' -and
+        (Test-ToolboxScriptCommandLine $_.CommandLine (Join-Path $Repo 'tools\rgb\ambient.py'))})
+    $rgbStatus=if($ambient.Count -eq 1){'running'}elseif($ambient.Count -gt 1){'ambiguous'}elseif(@($processes | Where-Object {$_.Name -match '^pythonw?\.exe$' -and -not $_.CommandLine}).Count){'query-failed'}else{'not-running'}
+    $result.residents.rgb=@{status=$rgbStatus;pids=@($ambient | ForEach-Object {[int]$_.ProcessId});evidence='process-only'}
+    }
 } catch {
     # A failed query never proves absence. Do not export exceptions/command lines.
     foreach($name in @('ahk','hud','caret')) {

@@ -47,7 +47,7 @@ class ConfigurationTests(unittest.TestCase):
                     self.assertEqual(value, config.entries(config.module_path(module).read_text('utf-8-sig'), module)[0][key])
                     config.save(module, {key: original}, saved['revision'])
                     count += 1
-        self.assertEqual(106, count)
+        self.assertEqual(114, count)
 
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()

@@ -1,0 +1,117 @@
+"""Read-only status for native settings; returns no logs, paths or credentials."""
+from __future__ import annotations
+import json
+import argparse
+import hashlib
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+ROOT = Path(__file__).resolve().parents[1]
+COMPONENTS = {'ahk':'快捷键主进程', 'hud':'界面与主托盘', 'caret':'光标定位', 'powerPolicy':'电源管理', 'rgb':'氛围灯进程'}
+STATES = {'running','not-running','ambiguous','query-failed','unresponsive','outdated','disabled','missing'}
+
+
+def sanitize(runtime: dict, enabled: dict, stamp: str, commit: str, *, limited: bool = False) -> dict:
+    residents = runtime.get('residents', {})
+    rows = []
+    for name, label in COMPONENTS.items():
+        entry = residents.get(name, {})
+        state = entry.get('status')
+        if state not in STATES: state = 'query-failed'
+        if limited and state in {'not-running','missing'}: state = 'query-failed'
+        module = 'power' if name == 'powerPolicy' else name
+        if enabled.get(module) is False: state = 'disabled'
+        rows.append({'id':name, 'label':label, 'state':state, 'evidence':'process-only' if name=='rgb' else 'metadata'})
+    return {'version':1, 'status':'ok', 'collected_utc':datetime.now(timezone.utc).isoformat(),
+            'commit':commit if re.fullmatch('[0-9a-f]{40}',commit) else '',
+            'source_stamp':stamp if re.fullmatch('[0-9a-f]{64}',stamp) else '', 'components':rows}
+
+
+def process_identity(pid: int) -> tuple[str, str] | None:
+    """Limited-query handles suffice even when WMI cannot enumerate other hosts."""
+    if os.name != 'nt': return None
+    import ctypes
+    from ctypes import wintypes as w
+    kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel.OpenProcess.argtypes=[w.DWORD,w.BOOL,w.DWORD];kernel.OpenProcess.restype=w.HANDLE
+    kernel.CloseHandle.argtypes=[w.HANDLE]
+    kernel.QueryFullProcessImageNameW.argtypes=[w.HANDLE,w.DWORD,w.LPWSTR,ctypes.POINTER(w.DWORD)]
+    kernel.GetProcessTimes.argtypes=[w.HANDLE,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p]
+    kernel.GetExitCodeProcess.argtypes=[w.HANDLE,ctypes.POINTER(w.DWORD)]
+    handle=kernel.OpenProcess(0x1000,False,pid)
+    if not handle:return None
+    try:
+        path=ctypes.create_unicode_buffer(32768);size=w.DWORD(len(path));code=w.DWORD()
+        times=[ctypes.c_ulonglong() for _ in range(4)]
+        if not kernel.GetExitCodeProcess(handle,ctypes.byref(code)) or code.value!=259:return None
+        if not kernel.QueryFullProcessImageNameW(handle,0,path,ctypes.byref(size)):return None
+        if not kernel.GetProcessTimes(handle,*(ctypes.byref(value) for value in times)):return None
+        return path.value,str(times[0].value)
+    finally:kernel.CloseHandle(handle)
+
+
+def verified_power() -> str | None:
+    path=Path(os.environ.get('USERPROFILE',str(Path.home())))/'AppData/Local/lat3ncy-toolbox/power-policy-status.json'
+    try:
+        with path.open('rb') as stream:raw=stream.read(65537)
+        if len(raw)>65536:return None
+        beat=json.loads(raw.decode('utf-8-sig'))
+        if beat.get('identityVersion')!=1 or Path(beat['repoRoot']).resolve()!=ROOT.resolve() or Path(beat['scriptPath']).resolve()!=(ROOT/'tools/power-policy/PowerPolicy.ps1').resolve():return None
+        age=(datetime.now(timezone.utc)-datetime.fromisoformat(beat['updatedUtc'].replace('Z','+00:00'))).total_seconds()
+        if not -5<=age<=60:return None
+        identity=process_identity(int(beat['pid']))
+        if not identity or Path(identity[0]).name.lower() not in {'powershell.exe','pwsh.exe'} or identity[1]!=str(beat['startTicks']):return None
+        names=['PowerPolicy.ps1','PowerPolicy.Core.ps1','PowerNative.cs','PowerPolicy.Identity.ps1','Repair-TaskHost.ps1','Run-PowerPolicy.vbs','config.toml','..\\ToolboxControls.ps1']
+        lines=[]
+        for name in names:
+            source=ROOT/'tools/power-policy'/name.replace('\\','/')
+            if source.exists():
+                if source.stat().st_size>2097152:return None
+                digest=hashlib.sha256(source.read_bytes()).hexdigest().upper()
+            else:digest='missing'
+            lines.append(name+'|'+digest)
+        fingerprint=hashlib.sha256('\n'.join(lines).encode()).hexdigest()
+        return 'running' if fingerprint==beat.get('sourceFingerprint') else 'outdated'
+    except (OSError,ValueError,KeyError,TypeError):return None
+
+
+def collect(owner_pid: int = 0) -> dict:
+    sys.path.insert(0, str(ROOT/'tools'))
+    import toolbox_controls as controls
+    enabled={name:controls.module_enabled(name) for name in ('power','rgb')}
+    powershell=Path(os.environ.get('SystemRoot','C:/Windows'))/'System32/WindowsPowerShell/v1.0/powershell.exe'
+    runtime={}
+    if os.name=='nt':
+        environment=os.environ.copy();environment['PSModulePath']=str(powershell.parent/'Modules')
+        try:
+            result=subprocess.run([str(powershell),'-NoProfile','-ExecutionPolicy','Bypass','-File',str(ROOT/'tools/diagnostics/Collect-Runtime.ps1'),'-Repo',str(ROOT),'-ResidentsOnly'],capture_output=True,timeout=12,env=environment,creationflags=subprocess.CREATE_NO_WINDOW)
+            if result.returncode==0 and len(result.stdout)<=65536: runtime=json.loads(result.stdout.decode('utf-8-sig'))
+        except (OSError,ValueError,subprocess.TimeoutExpired): pass
+    # Native requests prove their own live HUD identity independently of WMI.
+    identity=process_identity(owner_pid) if owner_pid>0 else None
+    limited=bool(owner_pid)
+    runtime.setdefault('residents',{})
+    if identity and Path(identity[0]).resolve()==(ROOT/'tools/ime-hud-winui/out/ImeHudWinUi.exe').resolve():
+        runtime['residents']['hud']={'status':'running'}
+    power=verified_power()
+    if power:runtime['residents']['powerPolicy']={'status':power}
+    try:
+        commit=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'],capture_output=True,text=True,timeout=2,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0).stdout.strip()
+    except (OSError,subprocess.TimeoutExpired): commit=''
+    try: stamp=(ROOT/'tools/ime-hud-winui/out/.source-stamp').read_text('utf-8-sig')[:128].strip()
+    except OSError: stamp=''
+    return sanitize(runtime,enabled,stamp,commit,limited=limited)
+
+
+def main() -> int:
+    if hasattr(sys.stdout,'reconfigure'):sys.stdout.reconfigure(encoding='utf-8')
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--owner-pid',type=int,default=0);args=parser.parse_args()
+    try:result=collect(args.owner_pid)
+    except (OSError,ValueError,TypeError):result=sanitize({}, {}, '', '')
+    print(json.dumps(result,ensure_ascii=False));return 0
+
+if __name__=='__main__':raise SystemExit(main())

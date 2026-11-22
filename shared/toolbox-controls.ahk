@@ -43,7 +43,7 @@ class ToolboxControls {
         if !values.Has("version") || values["version"] != "1" || !RegExMatch(text, '"version"\s*:\s*1\s*[,}]')
             throw Error("controls-version")
         allowed := Map("version", "number", "tray_visible", "bool")
-        for module in ["translate", "tts", "ocr", "audio", "theme", "power", "rgb"]
+        for module in ["translate", "tts", "ocr", "audio", "theme", "power", "rgb", "capture"]
             allowed["module_" module "_enabled"] := "bool"
         for name in this.FeatureNames {
             allowed["feature_" name "_enabled"] := "bool"

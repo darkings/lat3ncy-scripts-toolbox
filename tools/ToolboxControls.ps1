@@ -2,7 +2,7 @@
 function Test-ToolboxModuleEnabled {
     param([Parameter(Mandatory=$true)][string]$Module,
           [string]$RepoRoot = (Split-Path $PSScriptRoot -Parent))
-    $modules=@('translate','tts','ocr','audio','theme','power','rgb')
+    $modules=@('translate','tts','ocr','audio','theme','power','rgb','capture')
     if($Module -notin $modules){return $false}
     $path=Join-Path $RepoRoot '.toolbox-controls.json'
     if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return $true}

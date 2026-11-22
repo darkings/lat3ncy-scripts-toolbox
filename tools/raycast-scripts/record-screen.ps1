@@ -17,29 +17,11 @@ trap {
   exit 1
 }
 
-# 后台监视系统是否把 mp4 写进捕获目录；OCR 入口禁止调用。
-function Start-CaptureSaveWatcher {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string] $StartedAt
-  )
-
-  $watcher = Join-Path $PSScriptRoot 'capture\watch-save.ps1'
-  if (-not (Test-Path -LiteralPath $watcher -PathType Leaf)) {
-    return
-  }
-
-  # 隐藏启动、不等待：保存通知不能并进下面的 500ms 打开探测。
-  # -STA：落盘后写剪贴板必须在单线程单元，否则 Set-Clipboard 可能失败。
-  Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(
-    '-NoProfile',
-    '-STA',
-    '-ExecutionPolicy', 'Bypass',
-    '-File', $watcher,
-    '-Mode', 'Record',
-    '-StartedAt', $StartedAt
-  ) | Out-Null
-}
+. (Join-Path $PSScriptRoot 'capture\CaptureSupport.ps1')
+$repositoryRoot=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$options=Get-ToolboxCaptureOptions -Mode Record -Repo $repositoryRoot
+if(-not $options.Enabled){exit 0}
+$session=New-ToolboxCaptureSession -Mode Record -Options $options -Repo $repositoryRoot
 
 # 截图工具的录屏模式没有公开命令行参数，只能注入系统热键 Win+Shift+R
 # 直达录制模式（keybd_event 为低层注入，可触发系统注册热键）。
@@ -58,7 +40,7 @@ $VK_R = 0x52      # R
 $KEYEVENTF_KEYUP = 0x0002
 
 # 先记下本地时间，再出框，后台用它排除旧文件。
-$startedAt = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffffff')
+
 
 [ScreenRecordKey]::keybd_event($VK_LWIN, 0, 0, [UIntPtr]::Zero)
 [ScreenRecordKey]::keybd_event($VK_SHIFT, 0, 0, [UIntPtr]::Zero)
@@ -75,5 +57,5 @@ if (-not (Get-Process -Name 'SnippingTool' -ErrorAction SilentlyContinue))
   exit 1
 }
 
-Start-CaptureSaveWatcher -StartedAt $startedAt
+if($options.CopyToClipboard -or $options.ExtraDirectory){Start-ToolboxCaptureWatcher -Repo $repositoryRoot -Mode Record -SessionId $session.id}
 exit 0

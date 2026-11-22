@@ -15,6 +15,17 @@ def field(key, label, default, *, choices=None, minimum=None, maximum=None, help
 
 
 MODULES = {
+    'capture': dict(title='截图与录屏', path='tools/raycast-scripts/capture/config.toml',
+        effect='自动保存，下次从 Raycast 截图或录屏时生效。额外目录只复制成品文件，Windows 原保存位置不变。', fields=[
+        field('screenshot.enabled', '启用截图入口', True),
+        field('screenshot.copy_to_clipboard', '完成后复制截图到剪贴板', True, help='仅控制工具箱的完成后复制，Windows 截图工具自身的复制行为不变。'),
+        field('screenshot.wait_timeout_s', '截图等待上限（秒）', 180, minimum=5, maximum=3600),
+        field('screenshot.extra_directory', '额外保存目录（留空不复制）', ''),
+        field('record.enabled', '启用录屏入口', True),
+        field('record.copy_to_clipboard', '完成后复制视频文件到剪贴板', True, help='仅控制工具箱的完成后复制，不更改 Windows 截图工具设置。'),
+        field('record.wait_timeout_s', '录屏等待上限（秒）', 1800, minimum=30, maximum=86400),
+        field('record.extra_directory', '额外保存目录（留空不复制）', ''),
+    ]),
     'translate': dict(title='翻译设置', path='tools/translate/config.toml',
         effect='自动保存，下次翻译生效。厂商密钥在本页设置；Google 作为保底。', fields=[
         field('timeout_s', '单次网络操作超时（秒）', 4.0, minimum=.25, maximum=12),

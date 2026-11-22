@@ -69,11 +69,13 @@ if(Test-ToolboxCaptureSession $Repo Screenshot $b.id){throw 'expired session ret
 
     def test_cancel_does_not_reselect_an_old_file_or_an_edited_file(self):
         self.ps('''$dir=Join-Path $Repo 'captures';[void][IO.Directory]::CreateDirectory($dir)
+$since=[DateTime]::Parse('2020-01-01T00:00:00Z').ToUniversalTime()
 $path=Join-Path $dir 'old.png';[IO.File]::WriteAllText($path,'fixed fixture')
-[IO.File]::SetCreationTimeUtc($path,[DateTime]::UtcNow.AddMinutes(-5));[IO.File]::SetLastWriteTimeUtc($path,[DateTime]::UtcNow)
-if(Find-ToolboxCaptureFile $dir @('.png') ([DateTime]::UtcNow.AddSeconds(-1))){throw 'edited old file selected'}
+[IO.File]::SetCreationTimeUtc($path,$since.AddMinutes(-5));[IO.File]::SetLastWriteTimeUtc($path,$since.AddSeconds(1))
+if(Find-ToolboxCaptureFile $dir @('.png') $since){throw 'edited old file selected'}
 $new=Join-Path $dir 'new.png';[IO.File]::WriteAllText($new,'new fixture')
-if((Find-ToolboxCaptureFile $dir @('.png') ([DateTime]::UtcNow.AddSeconds(-1))).FullName -ne $new){throw 'new file not selected'}
+[IO.File]::SetCreationTimeUtc($new,$since.AddSeconds(1));[IO.File]::SetLastWriteTimeUtc($new,$since.AddSeconds(1))
+if((Find-ToolboxCaptureFile $dir @('.png') $since).FullName -ne $new){throw 'new file not selected'}
 ''')
 
     def test_recording_must_release_writer_and_be_stable(self):

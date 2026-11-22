@@ -75,6 +75,7 @@ class WorkflowTranslationEntry extends TranslateSelectedText {
     static ResolvePython() => this.PythonOverride != "" ? this.PythonOverride : TranslateSelectedText.ResolvePython()
     static ResolveConfig() => this.Script ".missing-config"
     static LogPath() => this.Script ".log"
+    static RequestRoot() => this.Script ".requests"
     static Open(text, x, y) {
         this.Opened := text
         return true
@@ -111,8 +112,15 @@ WorkflowLongEntryTests(root) {
         AssertEqual(true, !!FileExist(resume), "partial checkpoint remains owned by the open panel")
         AssertEqual(false, !!FileExist(task.outputFile), "partial terminal output is removed after delivery")
         AssertEqual("2|3|1", entry.ProgressFrames[entry.ProgressFrames.Length], "partial panel displays failed and completed counts")
-        WorkflowTestClient.ResumeFile := ""
-        entry.TranslateText("fixed long source 中文", 11, 22, true, Map("resumeFile", resume))
+        oldTask := task
+        ; Simulate a retry interrupting the previous completion's final cleanup.
+        oldTask.files.Busy := true
+        entry.TranslateText("fixed long source 中文", 11, 22, true, Map("resumeOwner", task.resumeOwner))
+        retryTask := entry.CurrentTask
+        AssertEqual(false, oldTask.inputFile = retryTask.inputFile, "retry never reuses an earlier attempt's input/result directory")
+        entry.CleanupTaskFiles(oldTask)
+        AssertEqual(true, !!FileExist(resume), "late cleanup cannot delete a checkpoint owned by the retry")
+        AssertEqual(true, !!FileExist(retryTask.inputFile), "late cleanup cannot remove the retry's separate input")
         deadline := A_TickCount + 5000
         while (entry.Tasks.Length && A_TickCount < deadline) {
             entry.Poll()
@@ -121,6 +129,7 @@ WorkflowLongEntryTests(root) {
         AssertEqual("完整长译文😀", WorkflowTestClient.ResultText, "retry returns complete result and enables speech")
         WorkflowTestClient.ClearContext()
         AssertEqual(false, !!FileExist(resume), "closing context removes the retained checkpoint")
+        AssertEqual(false, !!DirExist(oldTask.files.directory) || !!DirExist(retryTask.files.directory), "closing retry releases both checkpoint and attempt directories")
         task := {id: 42, job: {TimeoutMs: 14000}, outputFile: root "\forged-progress.txt"}
         FileAppend "status=progress`nversion=1`nrequest_id=41`ncompleted=0`ntotal=3`nfailed=0", task.outputFile, "UTF-8-RAW"
         entry.ReadProgress(task)

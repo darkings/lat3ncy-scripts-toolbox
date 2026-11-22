@@ -44,6 +44,7 @@ class PipelineTranslator extends TranslateSelectedText {
     static Errors := 0
     static ResolveConfig() => this.Config
     static LogPath() => PipelineRoot "\translation.log"
+    static RequestRoot() => PipelineRoot "\translate-requests"
     static OpenPanel(text, x, y) {
         this.Source := text
         opened := TranslationPanel.OpenText(text, x, y)
@@ -214,6 +215,8 @@ PipelineWait(PipelineIdle)
 PipelineRecord("translationFailure", PipelineTranslator.Errors = errors + 1
     && TranslationPanel.IsOpen() && PipelineTranslator.Output = "" && PipelineWorkflow.ResultText = ""
     && RegExReplace(StrLower(PipelineTranslator.Source), "\s", "") = "helloworkflow42")
+TranslationPanel.Close()
+PipelineWait(() => PipelineWorkflow.ContextId = 0, 3000)
 
 closed := true
 for job in PipelineWorkflow.Jobs
@@ -225,6 +228,8 @@ clean := true
 loop files PipelineRoot "\tasks\*", "D"
     clean := false
 loop files A_Temp "\lat3ncy-translate-*", "F"
+    clean := false
+if DirExist(PipelineTranslator.RequestRoot())
     clean := false
 PipelineRecord("tasksClean", clean)
 ExitApp 0

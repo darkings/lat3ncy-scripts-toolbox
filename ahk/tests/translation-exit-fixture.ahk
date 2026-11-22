@@ -17,6 +17,7 @@ class TranslationExitFixture extends TranslateSelectedText {
     static ResolveScript() => TranslationFixtureRoot "\worker.py"
     static ResolveConfig() => TranslationFixtureRoot "\missing-config.toml"
     static LogPath() => TranslationFixtureRoot "\translation.log"
+    static RequestRoot() => TranslationFixtureRoot "\requests"
 }
 
 TranslationExitObserve(*) {

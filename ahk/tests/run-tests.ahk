@@ -1437,7 +1437,6 @@ AssertEqual(true, HasMethod(TranslateSelectedText, "CancelCurrent"), "translate 
 AssertContains(translateSource, 'case "auth":', "translate maps cloud auth to a dedicated failure")
 AssertContains(translateSource, "翻译密钥无效", "translate auth failure has a stable toast fallback")
 AssertContains(translateSource, 'Notify.Error("×", message)', "translate failures use system toast, not HUD")
-AssertContains(translateSource, "lat3ncy-translate-in-", "translate uses unique input files")
 AssertContains(translateSource, "ProcessNoWindow.StartAsync(", "translate starts the helper without a console or blocking wait")
 AssertContains(translateSource, "14000", "translate parent timeout covers tencent plus fallbacks")
 panelOpenProbe := TranslationPanel.IsOpen()
@@ -1942,6 +1941,7 @@ AssertNotContains(smartPasteHelperSource, 'Remove-Item -LiteralPath $outputPath'
 TtsLifecycleTests()
 #Include text-workflow.ahk
 #Include translation-lifecycle.ahk
+#Include translation-request-files.ahk
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

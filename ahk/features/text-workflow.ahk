@@ -15,6 +15,7 @@ class TextWorkflow {
     static ResultText := ""
     static SourceText := ""
     static ResumeFile := ""
+    static ResumeOwner := 0
     static TargetLanguage := ""
     static ContextX := 0
     static ContextY := 0
@@ -40,6 +41,7 @@ class TextWorkflow {
         this.AllowMessages(this.Window.Hwnd)
         OnMessage(this.Message, ObjBindMethod(this, "OnMessage"))
         TranslateSelectedText.Workflow := this
+        TranslateSelectedText.ScavengeRequests()
         this.Scavenge()
         TranslationPanel.Close()
         this.OnExitCallback := ObjBindMethod(this, "Shutdown")
@@ -78,11 +80,8 @@ class TextWorkflow {
                 return
             text := this.SourceText, x := this.ContextX, y := this.ContextY
             target := action = 5 ? "zh" : action = 6 ? "en" : action = 7 ? "auto" : this.TargetLanguage
-            resume := action = 3 ? this.ResumeFile : ""
-            ; Transfer retry ownership before Begin clears the old context.
-            if (action = 3)
-                this.ResumeFile := ""
-            this.Translator().TranslateText(text, x, y, true, Map("target", target, "resumeFile", resume))
+            owner := action = 3 ? this.ResumeOwner : 0
+            this.Translator().TranslateText(text, x, y, true, Map("target", target, "resumeOwner", owner))
             return
         }
         text := action = 4 ? this.SourceText : this.ResultText
@@ -113,9 +112,10 @@ class TextWorkflow {
 
     static ClearContext() {
         this.StopSpeech()
-        if (this.ResumeFile != "")
-            try FileDelete this.ResumeFile
+        if IsObject(this.ResumeOwner)
+            this.ResumeOwner.Cleanup(false)
         this.ResumeFile := ""
+        this.ResumeOwner := 0
         this.ContextId := 0
         this.ResultText := ""
         this.SourceText := ""
@@ -129,11 +129,12 @@ class TextWorkflow {
         this.Busy := true
     }
 
-    static Context(id, text, x, y, resumeFile, target) {
+    static Context(id, text, x, y, resumeFile, target, resumeOwner := 0) {
         if (id != this.ContextId)
             return
         this.SourceText := text, this.ContextX := x, this.ContextY := y
         this.ResumeFile := resumeFile, this.TargetLanguage := target
+        this.ResumeOwner := resumeOwner
     }
 
     static Failed(id) {

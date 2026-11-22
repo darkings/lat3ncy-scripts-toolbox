@@ -1,5 +1,12 @@
 # 发现与决策
 
+## 2026-11-22：翻译异常退出后的私有文件归属
+
+- 平铺 TEMP 文件只有 tick/request/random，无法安全区分死宿主、活动任务和其他 checkout。新目录使用规范仓库身份、PID/创建 FILETIME/随机编号、完整仓库标记及独占 lease；旧格式不做批量删除。
+- 持有根/请求目录句柄，使用 OPEN_REPARSE_POINT + BACKUP_SEMANTICS，验证目录属性并拒绝 reparse point；不给目录 write/delete sharing，限制扫描期间路径被替换。依据 [CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew) 与 [目录句柄](https://learn.microsoft.com/en-us/windows/win32/fileio/obtaining-a-handle-to-a-directory)。不启用或修改权限。
+- 只清理有有效标记、原进程确定不再匹配且 lease 可独占打开的已知文件；未知内容/归属不明/链接/外部锁保留，不递归删除。重试共享检查点 lease，但新输入/结果独立，Busy 和短期 Hold 防止清理与重试交错。
+- 已有实际宿主强杀后回收、活 lease 防误删、PID 复用、未知/外仓库标记、陌生文件/子目录、预算和真实 junction 目标保留回归。源码测试移除弱平铺文件名断言，以实际文件生命周期测试验证唯一性。
+
 ## 2026-11-22：Google 间歇 TLS 失败的归因缺口
 
 - 不改网络设置的固定样本：短句 4 秒参数成功（1.18 秒），同句 12 秒参数出现 URLError→SSLEOFError（5.03 秒、非超时），1260 字节长段 4 秒参数成功（2.84 秒）。当前存在 http/https 代理配置，但没有证据定位到代理或服务端，也不能凭两次成功宣称长期恢复。

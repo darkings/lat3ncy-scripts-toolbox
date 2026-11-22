@@ -1,6 +1,7 @@
 #Requires AutoHotkey v2.0
 #Include ..\..\shared\notify\run-nowindow.ahk
 #Include ..\..\shared\notify\translation-panel.ahk
+#Include ..\..\shared\notify\translation-request-files.ahk
 
 ; 请求序号只负责"谁是最新请求"。旧请求完成时必须被丢弃，
 ; 不能覆盖或关闭新请求已经打开的面板。
@@ -95,6 +96,20 @@ class TranslateSelectedText {
 
     static ResolveConfig() {
         return this.RepoDir() "\tools\translate\config.toml"
+    }
+
+    static RequestRoot() => TranslationRequestFiles.Root(this.RepoDir())
+
+    static ScavengeRequests() {
+        result := TranslationRequestFiles.Scavenge(this.RequestRoot(), this.RepoDir())
+        if (result.removed || result.deferred)
+            this.Log("scavenge removed=" result.removed " deferred=" result.deferred)
+        return result
+    }
+
+    static KeepsResume(owner) {
+        return owner.Holds > 0 || (IsObject(this.Workflow) && this.Workflow.HasOwnProp("ResumeOwner")
+            && this.Workflow.ResumeOwner = owner && this.Workflow.ResumeFile = owner.resumeFile)
     }
 
     static LogPath() {
@@ -219,32 +234,43 @@ class TranslateSelectedText {
             return
         }
 
+        ; Pin a retry checkpoint across Begin/ClearContext. Each attempt gets
+        ; separate input/result files, even if an old completion is interrupted.
+        retryOwner := 0
+        if (IsObject(options) && options.Has("resumeOwner") && IsObject(options["resumeOwner"])) {
+            try {
+                retryOwner := options["resumeOwner"]
+                if (!(retryOwner is TranslationRequestFiles) || !retryOwner.CanResume(this.RequestRoot(), this.RepoDir()))
+                    throw Error("retry owner expired")
+                retryOwner.Holds += 1
+            } catch {
+                this.ShowError("重试任务已过期，请重新翻译")
+                return 0
+            }
+        }
         ; 连续触发：旧请求立即取消，它完成后的结果会因序号过期被丢弃。
         this.CancelCurrent()
 
         requestId := this.RequestGate.Begin()
         if IsObject(this.Workflow)
             this.Workflow.Begin(requestId)
-        stamp := A_TickCount "-" requestId "-" Random(1000, 9999)
-        inputFile := A_Temp "\lat3ncy-translate-in-" stamp ".txt"
-        outputFile := A_Temp "\lat3ncy-translate-out-" stamp ".txt"
-        resumeFile := IsObject(options) && options.Has("resumeFile") && options["resumeFile"] != "" ? options["resumeFile"] : outputFile ".resume.json"
         target := IsObject(options) && options.Has("target") ? options["target"] : ""
-        if (IsObject(this.Workflow) && HasMethod(this.Workflow, "Context"))
-            this.Workflow.Context(requestId, selected, hotkeyX, hotkeyY, resumeFile, target)
-        try FileDelete inputFile
-        try FileDelete outputFile
-
-        cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '" --output-file "' outputFile '"'
-        cmd .= ' --request-id ' requestId ' --resume-file "' resumeFile '" --trace-file "' outputFile '.trace"'
-        if RegExMatch(target, "^(auto|zh|en)$")
-            cmd .= ' --target-language ' target
-        if FileExist(configPath)
-            cmd .= ' --config "' configPath '"'
-
         job := ""
+        files := 0
         panelOpened := false
         try {
+            this.ScavengeRequests()
+            files := TranslationRequestFiles(this.RequestRoot(), this.RepoDir())
+            resumeOwner := IsObject(retryOwner) ? retryOwner : files
+            inputFile := files.inputFile, outputFile := files.outputFile, resumeFile := resumeOwner.resumeFile
+            if (IsObject(this.Workflow) && HasMethod(this.Workflow, "Context"))
+                this.Workflow.Context(requestId, selected, hotkeyX, hotkeyY, resumeFile, target, resumeOwner)
+            cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '" --output-file "' outputFile '"'
+            cmd .= ' --request-id ' requestId ' --resume-file "' resumeFile '" --trace-file "' outputFile '.trace"'
+            if RegExMatch(target, "^(auto|zh|en)$")
+                cmd .= ' --target-language ' target
+            if FileExist(configPath)
+                cmd .= ' --config "' configPath '"'
             FileAppend selected, inputFile, "UTF-8"
             ; 翻译一开始就打开 WinUI 面板显示原文。
             panelOpened := this.OpenPanel(selected, hotkeyX, hotkeyY)
@@ -253,9 +279,10 @@ class TranslateSelectedText {
             ; 非等待启动：热键线程立刻返回，翻译在子进程里跑，AHK 定时器不受阻。
             job := ProcessNoWindow.StartAsync(cmd, "", this.ProcessTimeoutMs, true)
         } catch as err {
-            try FileDelete inputFile
-            try FileDelete outputFile
-            try FileDelete outputFile ".trace"
+            if IsObject(files) {
+                files.Busy := false
+                files.Cleanup(this.KeepsResume(files))
+            }
             if !(keepSourceOnError && panelOpened && this.IsPanelOpen())
                 try this.ClosePanel()
             this.Log("start-failed id=" requestId " error=" err.Message)
@@ -263,6 +290,12 @@ class TranslateSelectedText {
                 this.Workflow.Failed(requestId)
             this.ShowError("翻译失败")
             return
+        } finally {
+            if IsObject(retryOwner) {
+                retryOwner.Holds -= 1
+                if !this.KeepsResume(retryOwner)
+                    retryOwner.Cleanup(false)
+            }
         }
 
         task := {
@@ -276,6 +309,8 @@ class TranslateSelectedText {
             keepSourceOnError: keepSourceOnError
         }
         task.resumeFile := resumeFile
+        task.files := files
+        task.resumeOwner := resumeOwner
         this.Tasks.Push(task)
         this.CurrentTask := task
         this.EnsurePoll()
@@ -322,6 +357,13 @@ class TranslateSelectedText {
     }
 
     static CleanupTaskFiles(task) {
+        if task.HasOwnProp("files") {
+            task.files.Busy := false
+            clean := task.files.Cleanup(this.KeepsResume(task.files))
+            if (task.resumeOwner != task.files)
+                clean := task.resumeOwner.Cleanup(this.KeepsResume(task.resumeOwner)) && clean
+            return clean
+        }
         clean := true
         try FileDelete task.inputFile
         try FileDelete task.outputFile
@@ -351,7 +393,7 @@ class TranslateSelectedText {
         this.ShuttingDown := true
         this.StopPoll()
         this.CancelCurrent()
-        retainedResume := IsObject(this.Workflow) && this.Workflow.HasOwnProp("ResumeFile") ? this.Workflow.ResumeFile : ""
+        retainedOwner := IsObject(this.Workflow) && this.Workflow.HasOwnProp("ResumeOwner") ? this.Workflow.ResumeOwner : 0
         if (IsObject(this.Workflow) && HasMethod(this.Workflow, "ClearContext"))
             this.Workflow.ClearContext()
         tasks := this.Tasks
@@ -376,10 +418,8 @@ class TranslateSelectedText {
             try task.job.Dispose()
         loop {
             clean := true
-            if (retainedResume != "") {
-                try FileDelete retainedResume
-                clean := !FileExist(retainedResume)
-            }
+            if IsObject(retainedOwner)
+                clean := retainedOwner.Cleanup(false)
             for task in tasks
                 clean := this.CleanupTaskFiles(task) && clean
             if (clean || A_TickCount >= deadline)

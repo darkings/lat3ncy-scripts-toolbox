@@ -10,6 +10,7 @@ internal sealed class CredentialsSettingsForm
 {
     public StackPanel Root { get; } = new() { Spacing = 8, Padding = new Thickness(24, 0, 24, 8) };
     readonly Dictionary<string, Dictionary<string, (PasswordBox input, TextBlock state)>> _providers = new();
+    readonly Dictionary<string, Expander> _searchGroups = new();
     public string Revision { get; private set; }
     public bool HasChanges => _providers.Values.Any(fields => fields.Values.Any(item => item.input.Password.Length > 0));
     public event Action? Edited;
@@ -36,12 +37,18 @@ internal sealed class CredentialsSettingsForm
                 var state = SettingsUi.Hint(Describe(field));
                 panel.Children.Add(input); panel.Children.Add(state); fields[key] = (input, state);
             }
-            Root.Children.Add(new Expander { Header = label + "密钥", Content = panel,
-                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch });
+            var expander = new Expander { Header = label + "密钥", Content = panel,
+                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            Root.Children.Add(expander); _searchGroups[id] = expander;
         }
     }
     static string Describe(JsonElement field) => field.GetProperty("source").GetString() switch
     { "environment" => "已配置 · 环境变量", "config" => "已配置 · 本机配置", _ => "尚未配置" };
+    internal FrameworkElement? Reveal(string provider)
+    {
+        if (!_searchGroups.TryGetValue(provider, out var group)) return null;
+        group.IsExpanded = true; return group;
+    }
 
     public IEnumerable<string> DirtyProviders => _providers.Where(item => item.Value.Values.Any(entry => entry.input.Password.Length > 0)).Select(item => item.Key).ToArray();
     public object ReadRequest(string provider) => new { provider, revision = Revision,

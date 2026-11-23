@@ -1,3 +1,12 @@
+## 2026-11-23 设置搜索与定位
+
+- [x] 左栏原生 AutoSuggestBox，名称/说明/英文模块关键词联合匹配；上下方向键、Enter、Ctrl+F、一次 Escape 清空，无结果不跳转。长名称与分类分行换行。
+- [x] 固定公开元数据目录，覆盖模块字段、12 项基础项、AHK 功能/键位、厂商密钥入口与诊断分组；不读取配置值、凭证或日志，不保存查询、不联网，移除功能不入目录。
+- [x] 选择后复用原导航和草稿缓存，展开对应分组，布局稳定后纠正滚动，目标控件完整可见；不执行开关或维护动作。
+- [x] 5 项 Python 元数据/隐私回归及原生匹配自检；四类原生探测通过，覆盖 8 类定位与搜索跳转保留跨页草稿。Computer Use 实测 Ctrl+F、中文检索、跨分类方向键选择、tts 缓存完整定位、无结果 Enter 与单次 Escape。
+- [x] 最终干净候选三阶段通过（271 项 Python、305 个源码/资产一致），个人七份配置及捕获默认值哈希不变。
+- 已部署源戳 8357135ea041db6ebe77536606b2d5e42e31745183a74de4344b297d40a842b8。证据：.tmp/validation/20261123-search-final-release/、.tmp/settings-search-tests.log、.tmp/settings-search-scroll-deploy.log、.tmp/search-config-protection.json。精确提交 CI 见草稿 PR #3 最终记录，不合并。
+
 ## 2026-11-23 移除手动标题栏配色
 
 - [x] 按用户要求移除整个手动窗口标题栏功能：设置项、应用控件、计划桥、PowerShell 执行器及原 Raycast 脚本。

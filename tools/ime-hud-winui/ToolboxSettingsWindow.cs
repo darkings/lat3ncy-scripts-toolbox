@@ -21,6 +21,9 @@ internal sealed class ToolboxSettingsWindow : Window
     readonly Button _restore = new() { Content = "默认", Visibility = Visibility.Collapsed };
     readonly Button _reload = new() { Content = "重载", Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(8) };
     readonly NavigationView _navigation;
+    readonly SettingsSearch _search;
+    readonly Dictionary<string, Expander> _searchSections = new();
+    int _searchNavigation;
     readonly TitleBar _titleBar;
     readonly TextBlock _pageTitle = new() { FontSize = 28, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
     readonly StackPanel _pageActions = new() { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
@@ -71,6 +74,8 @@ internal sealed class ToolboxSettingsWindow : Window
             IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed, OpenPaneLength = 240, CompactModeThresholdWidth = 600,
             ExpandedModeThresholdWidth = 880, IsPaneToggleButtonVisible = false, IsTitleBarAutoPaddingEnabled = false, AlwaysShowHeader = false };
         _navigation.Resources["NavigationViewContentPresenterMargin"] = new Thickness(0);
+        _search = new SettingsSearch(RevealSearchAsync, message => { if (!_closed) _status.Text = message; }, _lifetime.Token);
+        _navigation.AutoSuggestBox = _search.Box;
         _titleBar.PaneToggleRequested += (_, _) => _navigation.IsPaneOpen = !_navigation.IsPaneOpen;
         var pageHeader = new Grid { ColumnSpacing = 16, Margin = new Thickness(24, 20, 24, 12) };
         pageHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -113,6 +118,9 @@ internal sealed class ToolboxSettingsWindow : Window
         windowRoot.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         windowRoot.Children.Add(_titleBar); Grid.SetRow(_navigation, 1); windowRoot.Children.Add(_navigation);
         Content = windowRoot; ExtendsContentIntoTitleBar = true; SetTitleBar(_titleBar); AppWindow.IsShownInSwitchers = true;
+        var findSettings = new KeyboardAccelerator { Key = Windows.System.VirtualKey.F, Modifiers = Windows.System.VirtualKeyModifiers.Control };
+        findSettings.Invoked += (_, args) => { _navigation.IsPaneOpen = true; _search.Box.Focus(FocusState.Keyboard); args.Handled = true; };
+        windowRoot.KeyboardAccelerators.Add(findSettings);
         double scale = Math.Max(96, Native.GetDpiForWindow(hwnd)) / 96.0;
         Native.RECT work = Native.TryGetWindowWorkArea(hwnd, out var area) ? area : Native.GetPrimaryWorkArea();
         int width = Math.Min((int)(1040 * scale), Math.Max(320, work.Width - 40));
@@ -147,6 +155,53 @@ internal sealed class ToolboxSettingsWindow : Window
 
     void AddNavigationItem(string label, string module, Symbol symbol) => _navigation.MenuItems.Add(new NavigationViewItem { Content = label, Tag = module, Icon = new SymbolIcon(symbol) });
     void SelectModule(string module) => _navigation.SelectedItem = _navigation.MenuItems.Cast<NavigationViewItem>().Single(item => (string)item.Tag == module);
+    async Task RevealSearchAsync(SettingsSearchItem item)
+    {
+        int generation = ++_searchNavigation;
+        SelectModule(item.Page); await _moduleLoad;
+        if (_closed || _module != item.Page || generation != _searchNavigation) return;
+        if (!_pages.ContainsKey(item.Page)) { _status.Text = "此页未能载入，请检查配置后重新读取。"; return; }
+        FrameworkElement? target = item.Kind switch
+        {
+            "field" => _moduleForms.GetValueOrDefault(item.Page)?.Reveal(item.Target),
+            "preference" => _preferenceForms.GetValueOrDefault(item.Page)?.Reveal(item.Target),
+            "control" => _controlForms.GetValueOrDefault(item.Page)?.Reveal(item.Target),
+            "credential" => _credentials?.Reveal(item.Target),
+            "module" => _pageActions.Children.OfType<ToggleSwitch>().FirstOrDefault(element => AutomationProperties.GetAutomationId(element) == item.Target),
+            "section" => _searchSections.GetValueOrDefault(item.Page + ":" + item.Target),
+            _ => null,
+        };
+        if (item.Kind == "page") _scroll.ChangeView(null, 0, null, true);
+        else if (target == null) { _status.Text = "此设置暂时无法定位，可从当前分类继续查找。"; return; }
+        if (target is Expander expander) expander.IsExpanded = true;
+        if (target != null)
+        {
+            for (int i = 0; i < 20 && !target.IsLoaded && !_closed; i++) await Task.Delay(25);
+            if (_closed || _module != item.Page || generation != _searchNavigation) return;
+            if (!target.IsLoaded) { _status.Text = "设置控件尚未就绪，可稍后重试搜索。"; return; }
+            if (target is Control control && control.IsEnabled) control.Focus(FocusState.Programmatic);
+            if (item.Kind != "module")
+            {
+                // Expansion and editor focus can each request scrolling. Correct
+                // after layout settles so the target stays clear of the footer.
+                double previousExtent = -1; int stable = 0;
+                for (int i = 0; i < 12; i++)
+                {
+                    var rectangle = new Windows.Foundation.Rect(0, 0, target.ActualWidth,
+                        target is Expander || target.ActualHeight > _scroll.ViewportHeight * .7 ? Math.Min(48, target.ActualHeight) : target.ActualHeight);
+                    target.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false, VerticalAlignmentRatio = .5, TargetRect = rectangle });
+                    await Task.Delay(35);
+                    if (_closed || _module != item.Page || generation != _searchNavigation) return;
+                    var visible = target.TransformToVisual(_scroll).TransformBounds(rectangle);
+                    bool inside = visible.Top >= 4 && visible.Bottom <= _scroll.ViewportHeight - 4;
+                    stable = inside && Math.Abs(previousExtent - _scroll.ExtentHeight) < 1 ? stable + 1 : 0;
+                    previousExtent = _scroll.ExtentHeight;
+                    if (stable >= 2) break;
+                }
+            }
+        }
+        _status.Text = "已定位：" + item.Label;
+    }
     UIElement CreateBrandHeader()
     {
         var logo = new Image { Width = 32, Height = 32 };
@@ -199,9 +254,11 @@ internal sealed class ToolboxSettingsWindow : Window
                     var form = new ControlSettingsForm(await PreferencesBridge.RunControlsAsync(null, _lifetime.Token), page);
                     if (page == "general")
                     {
-                        form.Root.Children.Add(new DiagnosticSettingsForm(_lifetime.Token).Root);
-                        form.Root.Children.Add(new MaintenanceSettingsForm(_lifetime.Token, RunMaintenanceReloadAsync,
-                            module => _moduleValues.GetValueOrDefault(module) && !_reloading && !_startingReload, SelectModule).Root);
+                        var diagnostic = new DiagnosticSettingsForm(_lifetime.Token).Root;
+                        var maintenance = new MaintenanceSettingsForm(_lifetime.Token, RunMaintenanceReloadAsync,
+                            module => _moduleValues.GetValueOrDefault(module) && !_reloading && !_startingReload, SelectModule).Root;
+                        form.Root.Children.Add(diagnostic); form.Root.Children.Add(maintenance);
+                        _searchSections["general:diagnostics"] = diagnostic; _searchSections["general:maintenance"] = maintenance;
                     }
                     form.Edited += () => Edited(page); _controlForms[page] = form; _pages[page] = form.Root;
                 }
@@ -221,7 +278,11 @@ internal sealed class ToolboxSettingsWindow : Window
                     var advanced = new ModuleConfigurationForm(await PreferencesBridge.RunConfigurationAsync(page, null, _lifetime.Token), AppWindow,
                         page is "translate" or "tts" ? "高级设置" : null);
                     advanced.Edited += () => Edited(page); _moduleForms[page] = advanced; panel.Children.Add(advanced.Root); _pages[page] = panel;
-                    if (page == "capture") panel.Children.Add(new CaptureActivitySettingsForm(_lifetime.Token).Root);
+                    if (page == "capture")
+                    {
+                        var activity = new CaptureActivitySettingsForm(_lifetime.Token).Root;
+                        panel.Children.Add(activity); _searchSections["capture:capture_activity"] = activity.Children.OfType<Expander>().Single();
+                    }
                 }
             }
             }
@@ -450,7 +511,9 @@ internal sealed class ToolboxSettingsWindow : Window
         var prefs = await PreferencesBridge.RunAsync(null, _lifetime.Token);
         if (prefs.GetProperty("values").GetProperty("translate").GetProperty("target_language").GetString() != "en") throw new InvalidOperationException("native_autosave_readback");
         SelectModule("tts"); await _moduleLoad; _preferenceForms["tts"].SetProbeValue("rate", 5);
-        SelectModule("translate"); await _moduleLoad;
+        var searchTarget = (await _search.CatalogAsync()).Single(item => item.Page == "translate" && item.Kind == "preference" && item.Target == "target_language");
+        await RevealSearchAsync(searchTarget);
+        if (_module != "translate") throw new InvalidOperationException("native_search_navigation_failed");
         _moduleValues["translate"] = false; Edited("translate");
         if (!await FlushAsync()) throw new InvalidOperationException("native_switch_save");
         if ((await PreferencesBridge.RunControlsAsync(null, _lifetime.Token)).GetProperty("values").GetProperty("module_translate_enabled").GetBoolean()) throw new InvalidOperationException("native_switch_reverted");
@@ -488,7 +551,25 @@ internal sealed class ToolboxSettingsWindow : Window
             _preferenceForms.GetValueOrDefault(page)?.VerifyEditorRoundTrips();
         }
         SelectModule("translate"); await _moduleLoad;
+        await VerifySearchAsync();
         HudLog.Line("settings-module-pages=passed count=10 merged=translate+tts credentials=metadata-only");
+    }
+    async Task VerifySearchAsync()
+    {
+        if (!_readOnlyProbe) throw new InvalidOperationException("probe_required");
+        var catalog = await _search.CatalogAsync();
+        foreach (var (page, kind, target) in new[] {
+            ("tts","field","cache.max_files"), ("tts","preference","rate"), ("hotkeys","control","binding_SpeakSelectedText"),
+            ("translate","credential","tencent"), ("theme","module","module_theme_enabled"),
+            ("general","section","maintenance"), ("capture","section","capture_activity"), ("general","control","tray_visible") })
+        {
+            var item = catalog.Single(entry => entry.Page == page && entry.Kind == kind && entry.Target == target);
+            await RevealSearchAsync(item);
+            if (_module != page || _status.Text != "已定位：" + item.Label) throw new InvalidOperationException("settings_search_target_failed");
+        }
+        if (SettingsSearch.Match(catalog,"朗读快捷键").FirstOrDefault()?.Target != "binding_SpeakSelectedText") throw new InvalidOperationException("settings_search_ranking_failed");
+        SelectModule("translate"); await _moduleLoad;
+        HudLog.Line("settings-search=passed metadata+8-targets+ranking scope=read-only");
     }
     internal async Task VerifyNavigationLayoutAsync()
     {

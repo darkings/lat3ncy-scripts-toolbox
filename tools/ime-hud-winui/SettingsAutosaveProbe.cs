@@ -12,7 +12,7 @@ internal static class SettingsAutosaveProbe
         if (source == null) return 1;
         string root = Path.Combine(source.FullName, ".tmp", "settings-autosave-native-" + Guid.NewGuid().ToString("N"));
         string tools = Path.Combine(root, "tools"); Directory.CreateDirectory(tools); Directory.CreateDirectory(Path.Combine(root, "ahk"));
-        foreach (string file in new[] { "toolbox_preferences.py", "toolbox_configuration.py", "configuration_schema.py", "toolbox_controls.py", "toolbox_credentials.py", "toolbox_reload.py", "toolbox_capture_activity.py" })
+        foreach (string file in new[] { "toolbox_preferences.py", "toolbox_configuration.py", "configuration_schema.py", "toolbox_controls.py", "toolbox_credentials.py", "toolbox_reload.py", "toolbox_capture_activity.py", "toolbox_settings_search.py" })
             File.Copy(Path.Combine(source.FullName, "tools", file), Path.Combine(tools, file));
         File.Copy(Path.Combine(source.FullName, "ahk", "shortcuts.ahk"), Path.Combine(root, "ahk", "shortcuts.ahk"));
         foreach (string module in new[] { "translate", "tts", "theme-scheduler", "power-policy", "rgb", "audio-switcher", "raycast-scripts/ocr", "raycast-scripts/capture" })

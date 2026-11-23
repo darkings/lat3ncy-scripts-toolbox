@@ -14,6 +14,7 @@ internal sealed class ModuleConfigurationForm
     public string Revision { get; private set; }
     public string Effect { get; }
     readonly List<Field> _fields = new();
+    readonly Dictionary<string, Expander> _searchGroups = new();
     public bool HasChanges { get; private set; }
     public event Action? Edited;
     void MarkEdited() { HasChanges = true; Edited?.Invoke(); }
@@ -31,6 +32,7 @@ internal sealed class ModuleConfigurationForm
         if (Effect.Length > 0) Root.Children.Add(SettingsUi.Hint(Effect));
         string previous = "";
         StackPanel? groupPanel = null;
+        Expander? expander = null;
         foreach (JsonElement spec in data.GetProperty("fields").EnumerateArray())
         {
             string key = spec.GetProperty("key").GetString()!;
@@ -38,18 +40,27 @@ internal sealed class ModuleConfigurationForm
             if (group != previous)
             {
                 groupPanel = new StackPanel { Spacing = 4 };
-                Root.Children.Add(new Expander { Header = previous.Length == 0 && firstGroupTitle != null ? firstGroupTitle : GroupLabel(group), Content = groupPanel,
+                expander = new Expander { Header = previous.Length == 0 && firstGroupTitle != null ? firstGroupTitle : GroupLabel(group), Content = groupPanel,
                     IsExpanded = previous.Length == 0 || group == "schedule", HorizontalAlignment = HorizontalAlignment.Stretch,
-                    HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 4, 0, 0) });
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 4, 0, 0) };
+                Root.Children.Add(expander);
                 previous = group;
             }
             var field = new Field(spec.Clone(), owner, MarkEdited); _fields.Add(field); groupPanel!.Children.Add(field.Root);
+            _searchGroups[key] = expander!;
         }
         if (data.GetProperty("config").GetString() is string source && source.Length > 0) Root.Children.Add(new Expander { Header = "配置来源", Content = SettingsUi.Hint(source),
             HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, 8, 0, 0) });
     }
 
     public bool IsNonDefault => _fields.Any(item => item.IsNonDefault);
+    internal FrameworkElement? Reveal(string key)
+    {
+        Field? field = _fields.FirstOrDefault(item => item.Key == key);
+        if (field == null) return null;
+        _searchGroups[key].IsExpanded = true;
+        return field.Input;
+    }
     public void AcceptUnchanged() => HasChanges = false;
     public void RestoreDefaults() { foreach (var item in _fields) item.RestoreDefault(); }
     public void AcceptCommitted(JsonElement data)
@@ -122,6 +133,7 @@ internal sealed class ModuleConfigurationForm
     {
         JsonElement _spec;
         readonly Control _input;
+        internal Control Input => _input;
         readonly TextBlock _error = new() { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
         readonly string _original;
         readonly bool _readonly;

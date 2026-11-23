@@ -13,6 +13,7 @@ internal sealed class ControlSettingsForm
     readonly Dictionary<string, (Control input, string original)> _inputs = new();
     readonly Dictionary<string, string> _defaults = new();
     readonly Dictionary<string, string> _labels = new();
+    readonly Dictionary<string, Expander> _searchGroups = new();
     public bool HasChanges => _inputs.Values.Any(entry => entry.input is ToggleSwitch toggle
         ? (toggle.IsOn ? "true" : "false") != entry.original
         : entry.input is SettingsHotkeyEditor hotkey && hotkey.Value != entry.original);
@@ -55,12 +56,19 @@ internal sealed class ControlSettingsForm
             if (kind.StartsWith("editor-", StringComparison.Ordinal)) hint += "。这是发送给编辑器的键位，请同步编辑器内的复制路径绑定。";
             if (kind == "leader") hint += "。基础键供 Caps 组合键使用，不能更换。";
             detail.Children.Add(Description(hint));
-            Root.Children.Add(new Expander { Header = SettingsUi.Row(label, enabled), Content = detail,
-                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch });
+            var expander = new Expander { Header = SettingsUi.Row(label, enabled), Content = detail,
+                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+            Root.Children.Add(expander);
+            foreach (string target in new[] { "feature_" + id + "_enabled", "hotkey_" + id + "_enabled", "binding_" + id }) _searchGroups[target] = expander;
         }
     }
 
     static TextBlock Description(string text) => SettingsUi.Hint(text);
+    internal FrameworkElement? Reveal(string key)
+    {
+        if (_searchGroups.TryGetValue(key, out var group)) group.IsExpanded = true;
+        return _inputs.TryGetValue(key, out var field) ? field.input : null;
+    }
 
     ToggleSwitch Switch(string key, JsonElement values, string name)
     {

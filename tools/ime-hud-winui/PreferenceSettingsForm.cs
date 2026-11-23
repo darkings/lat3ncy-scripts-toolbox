@@ -12,6 +12,7 @@ internal sealed class PreferenceSettingsForm
     public Microsoft.UI.Xaml.Controls.StackPanel Root => _form.Root;
     public bool HasChanges => _form.HasChanges;
     public bool IsNonDefault => _form.IsNonDefault;
+    internal Microsoft.UI.Xaml.FrameworkElement? Reveal(string key) => _form.Reveal(key);
     public string Revision => _form.Revision;
     public string BaseRevision { get; private set; }
     public event Action? Edited { add => _form.Edited += value; remove => _form.Edited -= value; }

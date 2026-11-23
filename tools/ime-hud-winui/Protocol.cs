@@ -291,6 +291,8 @@ internal static class Protocol
         int diagnostics = SettingsDiagnosticReport.SelfTest();
         if (diagnostics != 0)
             return 600 + diagnostics;
+        int search = SettingsSearch.SelfTest();
+        if (search != 0) return 610 + search;
         return 0;
     }
 

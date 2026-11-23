@@ -41,6 +41,9 @@ internal static class PreferencesBridge
     public static Task<JsonElement> RunCaptureActivityAsync(CancellationToken cancellation) =>
         RunHelperAsync("toolbox_capture_activity.py", null, cancellation, Array.Empty<string>(), 16384);
 
+    public static Task<JsonElement> RunSearchCatalogAsync(CancellationToken cancellation) =>
+        RunHelperAsync("toolbox_settings_search.py", null, cancellation, Array.Empty<string>(), 131072);
+
     static async Task<JsonElement> RunHelperAsync(string filename, object? request, CancellationToken cancellation,
                                                  string[] arguments, int limit, string? probeTools = null, int seconds = 10)
     {
@@ -120,7 +123,7 @@ internal static class PreferencesBridge
         if (directory == null) throw new InvalidOperationException("probe_repo_missing");
         string repo = Path.Combine(directory.FullName, ".tmp", "settings-native-write-" + Guid.NewGuid().ToString("N"));
         string tools = Path.Combine(repo, "tools"); Directory.CreateDirectory(tools); Directory.CreateDirectory(Path.Combine(repo, "ahk"));
-        foreach (string file in new[] { "toolbox_preferences.py", "toolbox_controls.py", "toolbox_configuration.py", "configuration_schema.py", "toolbox_credentials.py", "toolbox_reload.py", "toolbox_capture_activity.py" })
+        foreach (string file in new[] { "toolbox_preferences.py", "toolbox_controls.py", "toolbox_configuration.py", "configuration_schema.py", "toolbox_credentials.py", "toolbox_reload.py", "toolbox_capture_activity.py", "toolbox_settings_search.py" })
             await File.WriteAllBytesAsync(Path.Combine(tools, file), await File.ReadAllBytesAsync(Path.Combine(directory.FullName, "tools", file)));
         await File.WriteAllBytesAsync(Path.Combine(repo, "ahk", "shortcuts.ahk"), await File.ReadAllBytesAsync(Path.Combine(directory.FullName, "ahk", "shortcuts.ahk")));
         foreach (string module in new[] { "translate", "tts", "theme-scheduler" })

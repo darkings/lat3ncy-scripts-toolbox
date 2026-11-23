@@ -1,3 +1,11 @@
+## 2026-11-23 跨页保存失败恢复
+
+- [x] 保存错误按分类保留，其他页的恢复入口只导航；到达失败页后才明确提供丢弃该页输入并重读。
+- [x] 模块开关分开保留修订，单页重读不重置其他页草稿或绕过外部冲突；重读前检查配置可读性。
+- [x] 原生四类探测通过；隔离自动保存回归制造两页真实 CAS 冲突，覆盖导航不丢输入、损坏配置重读失败保留、单页恢复保护另一页及恢复后保存。
+- [x] 干净候选 offline/helpers/full 三阶段通过（271 项 Python）；Computer Use 复核部署窗口、跨分类导航与系统关闭，七份个人配置及捕获默认值未变。
+- 已部署源戳 55924f2676d68580b6103256129ff7cf4bf7fae7191b083dc9c0cd6104d2b116；证据 .tmp/validation/20261123-save-recovery/、.tmp/settings-recovery-native-tests.log、.tmp/settings-recovery-deploy.log、.tmp/recovery-config-protection.json。精确提交 CI 以草稿 PR #3 最终记录为准，不合并。
+
 ## 2026-11-23 设置搜索与定位
 
 - [x] 左栏原生 AutoSuggestBox，名称/说明/英文模块关键词联合匹配；上下方向键、Enter、Ctrl+F、一次 Escape 清空，无结果不跳转。长名称与分类分行换行。

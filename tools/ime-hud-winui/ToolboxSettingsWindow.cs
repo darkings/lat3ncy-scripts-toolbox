@@ -18,6 +18,9 @@ internal sealed class ToolboxSettingsWindow : Window
     readonly ScrollViewer _scroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
     readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
     readonly InfoBar _error = new() { IsOpen = false, IsClosable = true, Severity = InfoBarSeverity.Error };
+    readonly Button _recover = new();
+    readonly Dictionary<string, string> _saveErrors = new();
+    string? _errorPage;
     readonly Button _restore = new() { Content = "默认", Visibility = Visibility.Collapsed };
     readonly Button _reload = new() { Content = "重载", Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(8) };
     readonly NavigationView _navigation;
@@ -34,6 +37,7 @@ internal sealed class ToolboxSettingsWindow : Window
     readonly Dictionary<string, UIElement> _pages = new();
     readonly Dictionary<string, bool> _moduleValues = new();
     readonly Dictionary<string, bool> _moduleOriginals = new();
+    readonly Dictionary<string, string> _moduleRevisions = new();
     readonly HashSet<string> _pending = new();
     readonly HashSet<string> _resetPreferences = new();
     readonly Action? _controlsChanged;
@@ -97,8 +101,8 @@ internal sealed class ToolboxSettingsWindow : Window
         var feedback = new StackPanel { Spacing = 4, Padding = new Thickness(24, 4, 24, 12) };
         AutomationProperties.SetLiveSetting(_status, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
         feedback.Children.Add(_status); feedback.Children.Add(_error); Grid.SetRow(feedback, 2); root.Children.Add(feedback);
-        var reread = new Button { Content = "重新读取当前页" }; _error.ActionButton = reread;
-        reread.Click += async (_, _) => await RereadAsync();
+        _error.ActionButton = _recover;
+        _recover.Click += async (_, _) => await RecoverAsync();
         _navigation.Content = root; _navigation.PaneFooter = _reload;
         AddNavigationItem("常规", "general", Symbol.Setting);
         AddNavigationItem("功能与快捷键", "hotkeys", Symbol.Keyboard);
@@ -233,6 +237,7 @@ internal sealed class ToolboxSettingsWindow : Window
         {
             string id = item.GetProperty("id").GetString()!;
             _moduleValues[id] = _moduleOriginals[id] = data.GetProperty("values").GetProperty("module_" + id + "_enabled").GetBoolean();
+            _moduleRevisions[id] = _controlsRevision;
         }
     }
     async Task SwitchModuleAsync()
@@ -294,7 +299,7 @@ internal sealed class ToolboxSettingsWindow : Window
             await RefreshReloadAsync();
             if (!_readOnlyProbe) await FlushAsync();
         }
-        catch { if (!_closed && page == _module) ShowError("无法读取此页，请检查本地配置和 Python 后重新读取。已有输入保留。"); }
+        catch { if (!_closed && page == _module) ShowError("无法读取此页，请检查本地配置和 Python 后重新读取。已有输入保留。", page); }
     }
     void RebuildModuleSwitch()
     {
@@ -336,9 +341,39 @@ internal sealed class ToolboxSettingsWindow : Window
         Edited(page); if (!_readOnlyProbe) await FlushAsync();
     }
     internal Task PreviewDefaultsAsync() => RestoreDefaultsAsync();
-    void ShowError(string message) { _status.Text = "有更改尚未保存。"; _error.Message = message; _error.IsOpen = true; }
+    string PageLabel(string page) => _navigation.MenuItems.Cast<NavigationViewItem>().Single(item => (string)item.Tag == page).Content.ToString()!;
+    void ShowError(string message, string? page = null)
+    {
+        _status.Text = _pending.Count > 0 ? "有更改尚未保存。" : "操作未完成。";
+        _errorPage = page; _error.Message = page == null ? message : PageLabel(page) + "：" + message;
+        _recover.Visibility = page == null ? Visibility.Collapsed : Visibility.Visible;
+        _recover.Content = page == _module ? "丢弃此页输入并重读" : "查看" + (page == null ? "" : PageLabel(page));
+        _error.IsOpen = true;
+    }
+    void PresentSaveErrors()
+    {
+        string? page = _saveErrors.ContainsKey(_module) ? _module : _saveErrors.Keys.FirstOrDefault();
+        if (page != null) ShowError(_saveErrors[page], page);
+    }
+    async Task RecoverAsync()
+    {
+        string? page = _errorPage;
+        if (page == null || _closed) return;
+        _recover.IsEnabled = false;
+        try
+        {
+            if (page != _module) { SelectModule(page); await _moduleLoad; }
+            else await RereadAsync(page);
+        }
+        catch { if (!_closed) ShowError("重新读取失败，当前输入已保留。请检查配置和 Python 后重试。", page); }
+        finally { _recover.IsEnabled = true; }
+    }
     void RetargetControls(string oldRevision, string current)
-    { foreach (var form in _controlForms.Values) form.RetargetOwnRevision(oldRevision, current); if (_controlsRevision == oldRevision) _controlsRevision = current; }
+    {
+        foreach (var form in _controlForms.Values) form.RetargetOwnRevision(oldRevision, current);
+        foreach (string page in _moduleRevisions.Keys.ToArray()) if (_moduleRevisions[page] == oldRevision) _moduleRevisions[page] = current;
+        if (_controlsRevision == oldRevision) _controlsRevision = current;
+    }
     void RetargetTranslation(string oldRevision, string current)
     { _moduleForms.GetValueOrDefault("translate")?.RetargetRevision(oldRevision, current); _credentials?.RetargetRevision(oldRevision, current); }
     static bool HasChanges(object request) => JsonSerializer.SerializeToElement(request).GetProperty("changes").EnumerateObject().Any();
@@ -353,18 +388,19 @@ internal sealed class ToolboxSettingsWindow : Window
             foreach (string page in _pending.ToArray())
             {
                 _pending.Remove(page);
-                try { await SavePageAsync(page); }
+                try { await SavePageAsync(page); _saveErrors.Remove(page); }
                 catch (Exception error)
                 {
                     _pending.Add(page); success = false;
                     bool invalid = _moduleForms.GetValueOrDefault(page)?.ShowValidation(error.Message) == true;
                     string? conflict = _controlForms.GetValueOrDefault(page)?.ConflictMessage(error.Message);
-                    ShowError(conflict ?? (error.Message == "settings_changed_reload" ? "配置已被其他窗口修改，当前输入已保留。请重新读取此页后修改。"
-                        : invalid ? "请修正标记的字段，修正后自动保存。" : "自动保存失败，当前输入已保留。请检查配置格式和目录写入权限。"));
+                    _saveErrors[page] = conflict ?? (error.Message == "settings_changed_reload" ? "配置已被其他窗口修改，当前输入已保留。可重新读取此页后修改。"
+                        : invalid ? "请修正标记的字段，修正后自动保存。" : "自动保存失败，当前输入已保留。请检查配置格式和目录写入权限。");
                     HudLog.Line("settings-autosave=failed page=" + page + " kind=" + error.GetType().Name);
                 }
             }
             if (success) { _status.Text = "已自动保存。"; _error.IsOpen = false; }
+            PresentSaveErrors();
             UpdateDefault(); await RefreshReloadAsync();
         }
         finally { _writer.Release(); }
@@ -374,7 +410,7 @@ internal sealed class ToolboxSettingsWindow : Window
     {
         if (_moduleValues.TryGetValue(page, out bool enabled) && enabled != _moduleOriginals[page])
         {
-            string previous = _controlsRevision;
+            string previous = _moduleRevisions[page];
             var data = await PreferencesBridge.RunControlsAsync(new { revision = previous, changes = new Dictionary<string, object> { ["module_" + page + "_enabled"] = enabled } }, _lifetime.Token);
             _moduleOriginals[page] = enabled; RetargetControls(previous, data.GetProperty("revision").GetString()!); _controlsChanged?.Invoke();
         }
@@ -411,14 +447,28 @@ internal sealed class ToolboxSettingsWindow : Window
                 RetargetTranslation(previous, _credentials.Revision);
             }
     }
-    async Task RereadAsync()
+    async Task RereadAsync(string page)
     {
         await _writer.WaitAsync();
-        try { _pending.Remove(_module); _resetPreferences.Remove(_module); _pages.Remove(_module); _moduleForms.Remove(_module);
-            _preferenceForms.Remove(_module); _controlForms.Remove(_module); if (_module == "translate") _credentials = null;
-            _controlsRevision = ""; await EnsureControlsAsync(); }
+        try
+        {
+            // Read first: a failed read must not discard drafts. Rebase only the requested
+            // page; other module switches retain their drafts and conflict revisions.
+            var data = await PreferencesBridge.RunControlsAsync(null, _lifetime.Token);
+            if (page is not ("general" or "hotkeys"))
+                await PreferencesBridge.RunConfigurationAsync(page, null, _lifetime.Token);
+            if (page is "translate" or "tts") await PreferencesBridge.RunAsync(null, _lifetime.Token);
+            if (page == "translate") await PreferencesBridge.RunCredentialsAsync(null, _lifetime.Token);
+            if (_moduleValues.ContainsKey(page))
+            {
+                _moduleValues[page] = _moduleOriginals[page] = data.GetProperty("values").GetProperty("module_" + page + "_enabled").GetBoolean();
+                _moduleRevisions[page] = data.GetProperty("revision").GetString()!;
+            }
+            _pending.Remove(page); _saveErrors.Remove(page); _resetPreferences.Remove(page); _pages.Remove(page); _moduleForms.Remove(page);
+            _preferenceForms.Remove(page); _controlForms.Remove(page); if (page == "translate") _credentials = null;
+        }
         finally { _writer.Release(); }
-        await SwitchModuleAsync();
+        if (_module == page) await SwitchModuleAsync();
     }
     async Task RefreshReloadAsync()
     {
@@ -533,13 +583,53 @@ internal sealed class ToolboxSettingsWindow : Window
         _moduleForms["theme"].SetProbeValue("schedule.latitude", "31.25");
         if (!await FlushAsync() || _reload.Visibility != Visibility.Visible) throw new InvalidOperationException("native_reload_button_missing");
         SelectModule("translate"); await _moduleLoad;
+        await VerifySaveRecoveryAsync();
         _preferenceForms["translate"].SetProbeValue("target_language", "zh");
         var closed = new TaskCompletionSource(); Closed += (_, _) => closed.TrySetResult();
         Native.SendMessage(WinRT.Interop.WindowNative.GetWindowHandle(this), Native.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
         await closed.Task.WaitAsync(TimeSpan.FromSeconds(15));
         prefs = await PreferencesBridge.RunAsync(null, CancellationToken.None);
         if (prefs.GetProperty("values").GetProperty("translate").GetProperty("target_language").GetString() != "zh") throw new InvalidOperationException("native_close_dropped_changes");
-        HudLog.Line("settings-autosave-probe=passed timer+mixed-writes+pages+defaults+credential-retention+switch+reload-indicator+close-flush scope=isolated");
+        HudLog.Line("settings-autosave-probe=passed timer+mixed-writes+pages+defaults+credential-retention+switch+reload-indicator+cross-page-recovery+close-flush scope=isolated");
+    }
+    async Task VerifySaveRecoveryAsync()
+    {
+        // Two genuine CAS failures on an isolated controls file, viewed from an unrelated
+        // page. Recovery must navigate first and discard only its explicitly named page.
+        SelectModule("power"); await _moduleLoad;
+        SelectModule("audio"); await _moduleLoad;
+        _moduleValues["power"] = false; Edited("power");
+        _moduleValues["audio"] = false; Edited("audio"); _debounce.Stop();
+        var data = await PreferencesBridge.RunControlsAsync(null, _lifetime.Token);
+        await PreferencesBridge.RunControlsAsync(new { revision = data.GetProperty("revision").GetString(), changes = new { tray_visible = false } }, _lifetime.Token);
+        SelectModule("general"); await _moduleLoad;
+        if (_saveErrors.Count != 2 || _errorPage == null || _errorPage == "general" || !_error.IsOpen)
+            throw new InvalidOperationException("native_recovery_wrong_page");
+        string first = _errorPage, other = first == "power" ? "audio" : "power";
+        await RecoverAsync();
+        if (_module != first || _moduleValues[first] || _moduleValues[other] || _saveErrors.Count != 2)
+            throw new InvalidOperationException("native_recovery_navigation_discarded");
+        string configPath = Path.Combine(PreferencesBridge.ProbeTools!, first == "power" ? "power-policy" : "audio-switcher", "config.toml");
+        byte[] original = File.ReadAllBytes(configPath);
+        try
+        {
+            File.WriteAllText(configPath, "[invalid fixture");
+            await RecoverAsync();
+            if (_moduleValues[first] || _moduleValues[other] || _saveErrors.Count != 2 || !_pending.Contains(first))
+                throw new InvalidOperationException("native_failed_reread_discarded_draft");
+        }
+        finally { File.WriteAllBytes(configPath, original); }
+        await RecoverAsync();
+        if (!_moduleValues[first] || _moduleValues[other] || !_pending.Contains(other) || _saveErrors.Count != 1 || _errorPage != other)
+            throw new InvalidOperationException("native_recovery_lost_other_draft");
+        await RecoverAsync(); await RecoverAsync();
+        if (_saveErrors.Count > 0 || _error.IsOpen || _pending.Count > 0 || !_moduleValues[other])
+            throw new InvalidOperationException("native_recovery_did_not_clear");
+        _moduleValues[other] = false; Edited(other);
+        if (!await FlushAsync()) throw new InvalidOperationException("native_recovery_revision_stale");
+        _moduleValues[other] = true; Edited(other);
+        if (!await FlushAsync()) throw new InvalidOperationException("native_recovery_revision_retarget");
+        SelectModule("translate"); await _moduleLoad;
     }
     internal async Task VerifyModulePagesAsync()
     {

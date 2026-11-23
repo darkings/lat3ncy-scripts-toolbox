@@ -99,7 +99,35 @@ def verified_caret(now: datetime | None = None) -> bool:
     except (OSError,ValueError,KeyError,TypeError):return False
 
 
-def collect(owner_pid: int = 0) -> dict:
+def diagnostic_summary(report: dict) -> list[dict]:
+    rows=[]
+    for name,label in (('translate','翻译环境'),('tts','朗读环境'),('ocr','截图识别环境')):
+        config=report.get('configs',{}).get(name,{})
+        runtime=report.get('modules',{}).get(name,{})
+        config_state=config.get('status','query-failed')
+        runtime_state=runtime.get('status','query-failed')
+        if config_state not in {'ok','default','invalid'}:config_state='query-failed'
+        if runtime_state not in {'ok','attention','not-applicable','invalid','missing','query-failed'}:runtime_state='query-failed'
+        mismatches=runtime.get('mismatches',[])
+        count=min(100,len(mismatches)) if isinstance(mismatches,list) else 0
+        reason=('dependencies' if count else 'temp_unwritable' if runtime.get('tempWritable') is False else
+                'limited_integrity' if runtime.get('integrity')=='low' else
+                'unavailable' if runtime_state not in {'ok','not-applicable'} else 'none')
+        rows.append({'id':name,'label':label,'config_state':config_state,'runtime_state':runtime_state,
+                     'runtime_reason':reason,'dependency_mismatches':count})
+    return rows
+
+
+def full_diagnostics() -> list[dict]:
+    try:
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('toolbox_settings_doctor',ROOT/'tools/diagnostics/doctor.py')
+        doctor=importlib.util.module_from_spec(spec);spec.loader.exec_module(doctor)
+        return diagnostic_summary(doctor.collect(include_logs=False))
+    except (OSError,ValueError,RuntimeError,ImportError,TypeError,KeyError):return diagnostic_summary({})
+
+
+def collect(owner_pid: int = 0, *, full: bool = False) -> dict:
     sys.path.insert(0, str(ROOT/'tools'))
     import toolbox_controls as controls
     enabled={name:controls.module_enabled(name) for name in ('power','rgb')}
@@ -125,13 +153,15 @@ def collect(owner_pid: int = 0) -> dict:
     except (OSError,subprocess.TimeoutExpired): commit=''
     try: stamp=(ROOT/'tools/ime-hud-winui/out/.source-stamp').read_text('utf-8-sig')[:128].strip()
     except OSError: stamp=''
-    return sanitize(runtime,enabled,stamp,commit,limited=limited)
+    result=sanitize(runtime,enabled,stamp,commit,limited=limited)
+    if full:result['diagnostics']=full_diagnostics()
+    return result
 
 
 def main() -> int:
     if hasattr(sys.stdout,'reconfigure'):sys.stdout.reconfigure(encoding='utf-8')
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--owner-pid',type=int,default=0);args=parser.parse_args()
-    try:result=collect(args.owner_pid)
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--owner-pid',type=int,default=0);parser.add_argument('--full',action='store_true');args=parser.parse_args()
+    try:result=collect(args.owner_pid,full=args.full)
     except (OSError,ValueError,TypeError):result=sanitize({}, {}, '', '')
     print(json.dumps(result,ensure_ascii=False));return 0
 

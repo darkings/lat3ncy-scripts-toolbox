@@ -73,9 +73,13 @@ def reconcile() -> dict:
 
 def snapshot() -> dict:
     result = reconcile(); data = pending()
+    from toolbox_capture_activity import recording_state
+    errors=result.get('errors',{})
     return {'version': 1, 'pending': [{'id': module, 'label': MODULES[module], 'revision': revision(module),
                                      'enabled': controls.module_enabled(module)} for module in data],
-            'result': {key: result[key] for key in ('id', 'status', 'completed', 'failed') if key in result}}
+            'recording_state': recording_state(config.REPO),
+            'result': {**{key: result[key] for key in ('id', 'status', 'completed', 'failed') if key in result},
+                       'errors':{key:value for key,value in errors.items() if key in {*MODULES,'busy'} and value in {'busy','capture_busy','disabled','config_changed','ownership','operation_failed'}} if isinstance(errors,dict) else {}}}
 
 
 def process_ticks(pid: int) -> str:
@@ -95,14 +99,21 @@ def process_ticks(pid: int) -> str:
     finally: kernel.CloseHandle(handle)
 
 
-def request_reload() -> dict:
+def request_reload(modules: list[str] | None = None) -> dict:
+    if modules is not None and (not isinstance(modules,list) or len(modules)!=1 or not isinstance(modules[0],str) or modules[0] not in MODULES):raise ReloadError('invalid_reload_action')
     with prefs._writer_lock(state_path('request')):
         current = snapshot(); existing = read('request'); result = read('result')
         age = time.time() - float(existing.get('created_unix', 0))
-        if existing and age < 180 and result.get('id') == existing.get('id') and result.get('status') == 'running':
+        running=False
+        if result.get('id')==existing.get('id') and result.get('status')=='running' and type(result.get('worker_pid')) is int:
+            try:running=process_ticks(result['worker_pid'])==result.get('worker_ticks')
+            except (OSError,ValueError):pass
+        if existing and (age < 180 or running) and not (result.get('id') == existing.get('id') and result.get('status') == 'completed'):
             raise ReloadError('reload_busy')
-        modules = [item['id'] for item in current['pending']]
+        modules = modules if modules is not None else [item['id'] for item in current['pending']]
         if not modules: return {'version': 1, 'id': '', 'pending': []}
+        if current['recording_state']!='idle':raise ReloadError('reload_capture_busy' if current['recording_state']=='active' else 'reload_capture_unavailable')
+        if any(not controls.module_enabled(module) for module in modules):raise ReloadError('reload_disabled')
         owner = os.getppid(); token = uuid.uuid4().hex
         document = {'version': 1, 'id': token, 'actions': ','.join(modules), 'owner_pid': owner,
                     'owner_ticks': process_ticks(owner), 'created_unix': int(time.time())}
@@ -118,12 +129,14 @@ def main() -> int:
     try:
         if args.apply:
             request = json.loads(sys.stdin.read(1025))
-            if request != {'action': 'reload'}: raise ReloadError('invalid_reload_action')
-            result = request_reload()
+            if not isinstance(request,dict) or request.get('action')!='reload' or set(request) not in ({'action'},{'action','modules'}): raise ReloadError('invalid_reload_action')
+            if 'modules' in request and not isinstance(request['modules'],list):raise ReloadError('invalid_reload_action')
+            result = request_reload(request.get('modules'))
         else: result = snapshot()
         print(json.dumps({'status': 'ok', **result}, ensure_ascii=False)); return 0
-    except (ValueError, OSError, KeyError, TypeError):
-        print(json.dumps({'status': 'error', 'code': 'reload_unavailable'})); return 1
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        code=str(error) if isinstance(error,ReloadError) and str(error) in {'reload_busy','reload_capture_busy','reload_capture_unavailable','reload_disabled'} else 'reload_unavailable'
+        print(json.dumps({'status': 'error', 'code': code})); return 1
 
 
 if __name__ == '__main__': raise SystemExit(main())

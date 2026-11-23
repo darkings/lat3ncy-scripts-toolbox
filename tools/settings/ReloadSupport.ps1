@@ -1,9 +1,27 @@
 # Fixed settings reload validation helpers. No commands are accepted from state.
 Set-StrictMode -Version Latest
 function Read-SettingsReloadJson {
-    param([string]$Path)
-    if ((Get-Item -LiteralPath $Path -ErrorAction Stop).Length -gt 8192) { throw 'reload-state-size' }
+    param([string]$Path,[int]$Limit=8192)
+    if ((Get-Item -LiteralPath $Path -ErrorAction Stop).Length -gt $Limit) { throw 'reload-state-size' }
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)
+}
+function Get-SettingsRecordingState {
+    param([string]$Repo,[long]$Now=([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()))
+    $path=Join-Path $Repo '.toolbox-state\capture-record.json'
+    if(-not(Test-Path -LiteralPath $path)){return 'idle'}
+    try{
+        $session=Read-SettingsReloadJson $path 16384
+        if($session.version -ne 1 -or $session.mode -cne 'Record' -or $session.id -cnotmatch '^[0-9a-f]{32}$'){return 'unknown'}
+        if($session.deadlineUtc -notmatch '(?:Z|[+-]\d\d:\d\d)$'){return 'unknown'}
+        if($Now -ge [DateTimeOffset]::Parse($session.deadlineUtc).ToUnixTimeSeconds()){return 'idle'}
+        $resultPath=Join-Path $Repo '.toolbox-state\capture-result-record.json'
+        if(Test-Path -LiteralPath $resultPath){
+            $result=Read-SettingsReloadJson $resultPath
+            if($result.version -eq 1 -and $result.id -ceq $session.id -and $result.mode -ceq 'Record' -and
+                $result.state -cin @('completed','partial','failed','timeout','stopped','processing_disabled')){return 'idle'}
+        }
+        return 'active'
+    }catch{return 'unknown'}
 }
 function Assert-SettingsReloadRequest {
     param($Request, [string]$RequestId, [long]$Now)

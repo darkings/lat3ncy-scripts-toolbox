@@ -29,6 +29,21 @@ def instant(value: object) -> datetime:
     return result.astimezone(timezone.utc)
 
 
+def recording_state(root: Path, now: datetime | None = None) -> str:
+    now=now or datetime.now(timezone.utc)
+    try:
+        directory=root/'.toolbox-state'
+        session=read_document(directory/'capture-record.json',16384)
+        if session is None:return 'idle'
+        if session.get('version')!=1 or session.get('mode')!='Record' or not re.fullmatch('[0-9a-f]{32}',str(session.get('id',''))):return 'unknown'
+        deadline=instant(session.get('deadlineUtc'))
+        if now>=deadline:return 'idle'
+        result=read_document(directory/'capture-result-record.json',8192)
+        if result and result.get('version')==1 and result.get('id')==session['id'] and result.get('mode')=='Record' and result.get('state') in STATES-{'waiting','processing'}:return 'idle'
+        return 'active'
+    except (OSError,ValueError,TypeError):return 'unknown'
+
+
 def snapshot(now: datetime | None = None) -> dict:
     now=now or datetime.now(timezone.utc)
     items=[]

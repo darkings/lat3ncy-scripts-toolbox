@@ -152,31 +152,7 @@ function Get-ToolboxAutoHotkeyProcess
 # main.ahk 启动时会 Warm() 预热，会自己冷启动新的 HUD，所以这里只管停。
 function Stop-ToolboxImeHud
 {
-  $hudProcesses = @(Get-Process -Name 'ImeHudWinUi' -ErrorAction SilentlyContinue)
-  foreach ($hud in $hudProcesses)
-  {
-    try
-    {
-      Stop-Process -Id $hud.Id -Force -ErrorAction SilentlyContinue
-    }
-    catch
-    {
-      # 权限不足时不要静默：旧 HUD 还在跑，新协议不会生效。
-      # 但也不能往 stdout 写：Raycast 会把任何脚本输出当成结果弹自己的通知。
-      # 结论由下面的检查统一抛错，再走系统 Toast。
-    }
-  }
-  if ($hudProcesses.Count -gt 0)
-  {
-    Start-Sleep -Milliseconds 300
-  }
-  # 已退出但句柄未放空的僵尸条目杀不掉也不需要杀：HasExited 一律视为已清除。
-  $left = @(Get-Process -Name 'ImeHudWinUi' -ErrorAction SilentlyContinue |
-    Where-Object { -not $_.HasExited })
-  if ($left.Count -gt 0)
-  {
-    throw ("ImeHudWinUi.exe 仍在运行（{0}），新协议不会生效。请用管理员权限重跑本脚本。" -f (($left.Id) -join ', '))
-  }
+  Stop-ToolboxOwnedHudProcess -Repo $repositoryRoot
 }
 
 $toolboxProcesses = Get-ToolboxAutoHotkeyProcess

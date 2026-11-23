@@ -48,6 +48,8 @@ internal sealed class ToolboxSettingsWindow : Window
     bool _brandLogoLoaded;
     bool _defaultsPreviewed;
     bool _reloading;
+    bool _startingReload;
+    TaskCompletionSource<JsonElement>? _reloadCompletion;
     string _reloadId = "";
     DateTime _reloadStarted;
     IntPtr _windowIcon;
@@ -137,6 +139,7 @@ internal sealed class ToolboxSettingsWindow : Window
             if (!_closing) _ = CloseAfterSaveAsync();
         };
         Closed += (_, _) => { _closed = true; _debounce.Stop(); _reloadPoll.Stop(); _lifetime.Cancel();
+            _reloadCompletion?.TrySetCanceled(_lifetime.Token);
             ToolboxTray.ReleaseWindowIcon(_windowIcon); _windowIcon = IntPtr.Zero; HudLog.Line("settings-closed"); };
         _ = InitializeWindowIconAsync();
         SelectModule("translate");
@@ -194,7 +197,12 @@ internal sealed class ToolboxSettingsWindow : Window
                 if (page is "general" or "hotkeys")
                 {
                     var form = new ControlSettingsForm(await PreferencesBridge.RunControlsAsync(null, _lifetime.Token), page);
-                    if (page == "general") form.Root.Children.Add(new DiagnosticSettingsForm(_lifetime.Token).Root);
+                    if (page == "general")
+                    {
+                        form.Root.Children.Add(new DiagnosticSettingsForm(_lifetime.Token).Root);
+                        form.Root.Children.Add(new MaintenanceSettingsForm(_lifetime.Token, RunMaintenanceReloadAsync,
+                            module => _moduleValues.GetValueOrDefault(module) && !_reloading && !_startingReload).Root);
+                    }
                     form.Edited += () => Edited(page); _controlForms[page] = form; _pages[page] = form.Root;
                 }
                 else
@@ -366,23 +374,46 @@ internal sealed class ToolboxSettingsWindow : Window
                 if (result.TryGetProperty("id", out var id) && id.GetString() == _reloadId && result.GetProperty("status").GetString() == "completed")
                 {
                     _reloading = false; _reloadPoll.Stop(); _reload.IsEnabled = true; _reload.Content = "重载";
+                    _reload.Visibility = pending.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    _reloadCompletion?.TrySetResult(result.Clone());
                     if (result.GetProperty("failed").GetString()?.Length > 0) ShowError("部分功能未能重载，已保留待重载状态。请确认功能已启用且任务属于当前仓库。");
                     else _status.Text = "重载完成。";
                 }
                 else if (DateTime.UtcNow - _reloadStarted > TimeSpan.FromSeconds(150))
-                { _reloading = false; _reloadPoll.Stop(); _reload.IsEnabled = true; _reload.Content = "重载"; ShowError("重载未完成，请确认工具箱 AHK 主进程正在运行后重试。"); }
+                { _reloading = false; _reloadPoll.Stop(); _reload.IsEnabled = true; _reload.Content = "重载"; _reloadCompletion?.TrySetException(new InvalidOperationException("reload_timeout")); ShowError("重载未完成，请确认工具箱 AHK 主进程正在运行后重试。"); }
             }
         }
         catch { if (_reloading) _status.Text = "正在等待重载结果…"; }
     }
     async Task ApplyReloadAsync()
     {
-        if (_readOnlyProbe || _reloading || !await FlushAsync()) return;
-        try { var result = await PreferencesBridge.RunReloadAsync(new { action = "reload" }, _lifetime.Token);
+        try { await StartReloadAsync(null); }
+        catch (Exception error) { ShowError(MaintenanceSettingsForm.ErrorText(error.Message)); }
+    }
+    async Task<JsonElement> RunMaintenanceReloadAsync(string module)
+    {
+        if (module is not ("power" or "theme" or "rgb")) throw new InvalidOperationException("invalid_module");
+        if (!await StartReloadAsync(new[] { module })) throw new InvalidOperationException("settings_unavailable");
+        return await _reloadCompletion!.Task.WaitAsync(TimeSpan.FromSeconds(160), _lifetime.Token);
+    }
+    async Task<bool> StartReloadAsync(string[]? modules)
+    {
+        if (_readOnlyProbe) return false;
+        if (_reloading || _startingReload) throw new InvalidOperationException("reload_busy");
+        _startingReload = true;
+        try
+        {
+            if (!await FlushAsync()) throw new InvalidOperationException("settings_not_saved");
+            object request = modules == null ? new { action = "reload" } : new { action = "reload", modules };
+            var result = await PreferencesBridge.RunReloadAsync(request, _lifetime.Token);
             _reloadId = result.GetProperty("id").GetString()!;
-            if (_reloadId.Length == 0) return;
-            _reloading = true; _reloadStarted = DateTime.UtcNow; _reload.IsEnabled = false; _reload.Content = "重载中…"; _reloadPoll.Start(); }
-        catch { ShowError("无法提交重载，请确认 AHK 主进程正在运行后重试。"); }
+            if (_reloadId.Length == 0) return false;
+            _reloadCompletion = new TaskCompletionSource<JsonElement>();
+            _reloading = true; _reloadStarted = DateTime.UtcNow; _reload.IsEnabled = false; _reload.Visibility = Visibility.Visible;
+            _reload.Content = "重载中…"; _reloadPoll.Start();
+            return true;
+        }
+        finally { _startingReload = false; }
     }
     async Task CloseAfterSaveAsync()
     {

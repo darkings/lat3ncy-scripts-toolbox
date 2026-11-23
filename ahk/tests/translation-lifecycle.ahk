@@ -27,7 +27,11 @@ TranslationLifecycleTests() {
         . 'with open(a.input_file,encoding="utf-8-sig") as held:`n'
         . '    child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"],creationflags=0x08000000)`n'
         . '    pathlib.Path(a.output_file).write_text("status=ok\nengine=fixture\ncached=0\ntext=pending",encoding="utf-8")`n'
-        . '    pathlib.Path(__file__).with_name("ready.txt").write_text(str(child.pid),encoding="utf-8")`n'
+        . '    ready=pathlib.Path(__file__).with_name("ready.txt")`n'
+        . '    with ready.with_suffix(".tmp").open("w",encoding="utf-8") as signal:`n'
+        . '        time.sleep(0.05)`n'
+        . '        signal.write(str(child.pid))`n'
+        . '    ready.with_suffix(".tmp").replace(ready)`n'
         . '    time.sleep(60)`n'
     job := 0
     try {

@@ -58,3 +58,5 @@ Google 在线排查须显式运行 `python tools/translate/probe_google.py --onl
 设置窗口的常规页增加“运行状态与版本”手动刷新入口。`tools/toolbox_status.py` 使用 `Collect-Runtime.ps1 -ResidentsOnly` 查询当前仓库常驻状态，另返回提交和已部署 HUD 源码戳；仅输出固定状态/标签/版本散列，不返回路径、PID、命令行、正文、原始日志或凭证。氛围灯仅核实进程，不能推断设备正常。原 doctor 的完整检查范围与健康退出码保持原语义。
 
 光标助手另有仓库内忽略的 `caret-status.json` 归属心跳，由既有 AHK 控制定时循环发布。设置诊断验证仓库哈希、拥有者和子进程创建时间以及 20 秒新鲜窗口，从而在 WMI 受限时仍能提供正面证据；不会读取 UIA 坐标缓存，也不增加线程或常驻程序。
+
+设置常规页的“维护操作 → 完整离线检查”调用 `toolbox_status.py --full`，使用 `collect(include_logs=False)` 跳过所有日志读取，仅返回固定模块、配置/环境状态及依赖不匹配数量。不返回路径、进程参数、凭证或异常原文；不调用网络或加载模型。默认命令行 doctor 仍保留原有脱敏日志摘要行为。

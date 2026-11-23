@@ -216,7 +216,7 @@ def select_tts_spec(module: Path, local_data: str | None, global_spec: dict) -> 
     return global_spec
 
 
-def collect() -> dict:
+def collect(*, include_logs: bool = True) -> dict:
     powershell = Path(os.environ.get('SystemRoot', 'C:/Windows'))/'System32/WindowsPowerShell/v1.0/powershell.exe'
     environment = os.environ.copy()
     environment['PSModulePath'] = str(powershell.parent/'Modules')
@@ -234,7 +234,7 @@ def collect() -> dict:
     logs = {name: log_summary(path, name) for name, path in {
         'translate': Path(os.environ.get('TEMP', '.'))/'lat3ncy-translate.log',
         'tts': ROOT/MODULES['tts']/'tts.log', 'ocr': ROOT/MODULES['ocr']/'.debug.log',
-        'startup': Path(os.environ.get('LOCALAPPDATA', Path.home()/'AppData/Local'))/'lat3ncy-toolbox/startup.log'}.items()}
+        'startup': Path(os.environ.get('LOCALAPPDATA', Path.home()/'AppData/Local'))/'lat3ncy-toolbox/startup.log'}.items()} if include_logs else {}
     attention = (any(item['status'] == 'invalid' for item in configs.values())
                  or any(item['status'] not in {'ok', 'not-applicable'} for item in modules.values())
                  or not runtime.get('residents')

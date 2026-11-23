@@ -222,7 +222,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(old + b'\n# external edit\n', path.read_bytes())
 
     def test_cli_fixed_errors_and_isolated_round_trip(self):
-        for filename in ('toolbox_configuration.py', 'configuration_schema.py', 'toolbox_preferences.py', 'toolbox_reload.py', 'toolbox_controls.py'):
+        for filename in ('toolbox_configuration.py', 'configuration_schema.py', 'toolbox_preferences.py', 'toolbox_reload.py', 'toolbox_controls.py', 'toolbox_capture_activity.py'):
             shutil.copyfile(Path(config.__file__).parent / filename, self.repo / 'tools' / filename)
         helper = self.repo / 'tools/toolbox_configuration.py'
         snap = config.snapshot('ocr')

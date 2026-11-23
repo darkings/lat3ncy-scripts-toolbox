@@ -35,6 +35,9 @@ internal static class PreferencesBridge
     public static Task<JsonElement> RunStatusAsync(CancellationToken cancellation) =>
         RunHelperAsync("toolbox_status.py", null, cancellation, new[] { "--owner-pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) }, 16384, seconds: 20);
 
+    public static Task<JsonElement> RunFullStatusAsync(CancellationToken cancellation) =>
+        RunHelperAsync("toolbox_status.py", null, cancellation, new[] { "--owner-pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), "--full" }, 16384, seconds: 75);
+
     public static Task<JsonElement> RunCaptureActivityAsync(CancellationToken cancellation) =>
         RunHelperAsync("toolbox_capture_activity.py", null, cancellation, Array.Empty<string>(), 16384);
 
@@ -97,7 +100,7 @@ internal static class PreferencesBridge
                 bool fixedValidation = code != null && (code.StartsWith("invalid_", StringComparison.Ordinal)
                     || code.StartsWith("hotkey_conflict_", StringComparison.Ordinal))
                     && code.Length <= 100 && code.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '.');
-                throw new InvalidOperationException(code is "settings_changed_reload" or "protected_config_manual" || fixedValidation ? code : "settings_unavailable");
+                throw new InvalidOperationException(code is "settings_changed_reload" or "protected_config_manual" or "reload_busy" or "reload_capture_busy" or "reload_capture_unavailable" or "reload_disabled" || fixedValidation ? code : "settings_unavailable");
             }
             return result.Clone();
         }
@@ -117,7 +120,7 @@ internal static class PreferencesBridge
         if (directory == null) throw new InvalidOperationException("probe_repo_missing");
         string repo = Path.Combine(directory.FullName, ".tmp", "settings-native-write-" + Guid.NewGuid().ToString("N"));
         string tools = Path.Combine(repo, "tools"); Directory.CreateDirectory(tools); Directory.CreateDirectory(Path.Combine(repo, "ahk"));
-        foreach (string file in new[] { "toolbox_preferences.py", "toolbox_controls.py", "toolbox_configuration.py", "configuration_schema.py", "toolbox_credentials.py", "toolbox_reload.py" })
+        foreach (string file in new[] { "toolbox_preferences.py", "toolbox_controls.py", "toolbox_configuration.py", "configuration_schema.py", "toolbox_credentials.py", "toolbox_reload.py", "toolbox_capture_activity.py" })
             await File.WriteAllBytesAsync(Path.Combine(tools, file), await File.ReadAllBytesAsync(Path.Combine(directory.FullName, "tools", file)));
         await File.WriteAllBytesAsync(Path.Combine(repo, "ahk", "shortcuts.ahk"), await File.ReadAllBytesAsync(Path.Combine(directory.FullName, "ahk", "shortcuts.ahk")));
         foreach (string module in new[] { "translate", "tts", "theme-scheduler" })

@@ -288,6 +288,9 @@ internal static class Protocol
         int dismiss = TranslationPanelDismiss.SelfTest();
         if (dismiss != 0)
             return dismiss;
+        int diagnostics = SettingsDiagnosticReport.SelfTest();
+        if (diagnostics != 0)
+            return 600 + diagnostics;
         return 0;
     }
 

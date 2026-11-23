@@ -201,7 +201,7 @@ internal sealed class ToolboxSettingsWindow : Window
                     {
                         form.Root.Children.Add(new DiagnosticSettingsForm(_lifetime.Token).Root);
                         form.Root.Children.Add(new MaintenanceSettingsForm(_lifetime.Token, RunMaintenanceReloadAsync,
-                            module => _moduleValues.GetValueOrDefault(module) && !_reloading && !_startingReload).Root);
+                            module => _moduleValues.GetValueOrDefault(module) && !_reloading && !_startingReload, SelectModule).Root);
                     }
                     form.Edited += () => Edited(page); _controlForms[page] = form; _pages[page] = form.Root;
                 }

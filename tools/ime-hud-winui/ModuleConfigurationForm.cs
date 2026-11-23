@@ -50,6 +50,12 @@ internal sealed class ModuleConfigurationForm
     }
 
     public bool IsNonDefault => _fields.Any(item => item.IsNonDefault);
+    internal bool BooleanValue(string key) => _fields.First(item => item.Key == key).CurrentBoolean;
+    internal void AddGroupContent(string group, UIElement content)
+    {
+        var expander = Root.Children.OfType<Expander>().First(item => item.Header?.ToString() == GroupLabel(group));
+        ((StackPanel)expander.Content).Children.Add(content);
+    }
     public void AcceptUnchanged() => HasChanges = false;
     public void RestoreDefaults() { foreach (var item in _fields) item.RestoreDefault(); }
     public void AcceptCommitted(JsonElement data)
@@ -62,7 +68,7 @@ internal sealed class ModuleConfigurationForm
 
     static string GroupLabel(string group) => group switch
     {
-        "general" => "常规", "screenshot" => "截图", "record" => "录屏", "cache" => "缓存", "tencent" => "腾讯云", "aliyun" => "阿里云",
+        "general" => "常规", "titlebar" => "手动窗口标题栏", "screenshot" => "截图", "record" => "录屏", "cache" => "缓存", "tencent" => "腾讯云", "aliyun" => "阿里云",
         "models.default" => "标准 OCR 模型", "models.mobile" => "轻量 OCR 模型", "preferred" => "首选设备与匹配",
         "behavior" => "运行行为", "tts" => "朗读联动", "schedule" => "自动切换时间", "mode_settings" => "深浅色联动",
         "wallpaper" => "桌面与锁屏壁纸", "theme_settings" => "Windows 主题", "cursor" => "鼠标指针方案",
@@ -75,6 +81,7 @@ internal sealed class ModuleConfigurationForm
         string raw = value.ValueKind == JsonValueKind.String ? value.GetString()! : value.GetRawText();
         return (key, raw) switch
         {
+            ("titlebar.mode", "dark") => "深色", ("titlebar.mode", "light") => "浅色", ("titlebar.mode", "system") => "执行时使用系统配色",
             ("general.switch_type", "mode") => "切换深浅色模式", ("general.switch_type", "theme") => "切换主题文件",
             ("schedule.trigger_mode", "sun") => "跟随日出日落", ("schedule.trigger_mode", "fixed") => "指定时间",
             ("ocr", "system") => "Windows 系统识别", ("ocr", "rapidocr") => "本地 RapidOCR",
@@ -104,6 +111,8 @@ internal sealed class ModuleConfigurationForm
 
     internal void VerifyEditorRoundTrips()
     {
+        if (_fields.Any(field => field.Key == "titlebar.enabled") && BooleanValue("titlebar.enabled") != _fields.First(field => field.Key == "titlebar.enabled").CommittedBoolean)
+            throw new InvalidOperationException("unchanged_titlebar_boolean_unreadable");
         foreach (Field field in _fields) field.VerifyRoundTrip();
         if (JsonSerializer.SerializeToElement(ReadRequest()).GetProperty("changes").EnumerateObject().Any())
             throw new InvalidOperationException("editor_roundtrip_changed_draft");
@@ -257,6 +266,8 @@ internal sealed class ModuleConfigurationForm
         }
         public bool IsNonDefault => !_readonly && (!TryRead(out object? value, out _, false)
             || !JsonElement.DeepEquals(value == null ? _spec.GetProperty("value") : JsonSerializer.SerializeToElement(value), _spec.GetProperty("default")));
+        internal bool CurrentBoolean => _input is ToggleSwitch toggle && toggle.IsOn;
+        internal bool CommittedBoolean => _spec.GetProperty("value").GetBoolean();
         public void AcceptCommitted(JsonElement data)
         {
             bool valid = TryRead(out object? current, out _, false);

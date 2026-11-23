@@ -152,6 +152,7 @@ internal sealed class MaintenanceSettingsForm
         "reload_capture_busy" => "录屏会话仍在等待或处理中，暂缓后台重载。",
         "reload_capture_unavailable" => "无法确认录屏状态，暂缓后台重载。",
         "reload_disabled" => "所选功能已关闭，请先在对应页面启用。",
+        "reload_config_changed" => "配置已在外部变化，请关闭并重新打开设置后再应用。",
         "settings_not_saved" => "设置尚未保存，请修正标记的字段后重试。",
         "reload_timeout" => "后台操作尚未完成，可稍后刷新运行状态。",
         _ => "无法提交重载，请确认工具箱主进程正在运行后重试。",

@@ -70,6 +70,9 @@ MODULES = {
         effect='保存不立即更改桌面。下次主题操作读取；修改调度后需运行 Update-ThemeSchedule.ps1 更新既有计划任务。', fields=[
         field('general.switch_type', '切换类型', 'mode', choices=['mode', 'theme']),
         field('general.show_notification', '切换时显示通知', False),
+        field('titlebar.enabled', '启用手动标题栏样式', True, help='关闭仅阻止后续应用，不自动撤销已经应用的窗口样式。'),
+        field('titlebar.mode', '手动标题栏配色', 'dark', choices=['dark', 'light', 'system'], help='仅执行时应用一次；应用当前系统配色不代表持续跟随。'),
+        field('titlebar.process_names', '标题栏目标进程（每行一个）', ['Androws', 'AndrowsStore', 'AndrowsAssistant', 'AndrowsLauncher'], help='可带 .exe，不支持路径或通配符；留空不匹配任何进程。'),
         field('schedule.trigger_mode', '调度方式', 'sun', choices=['sun', 'fixed']),
         field('schedule.latitude', '纬度（留空按既有 IP 定位）', ''),
         field('schedule.longitude', '经度（留空按既有 IP 定位）', ''),

@@ -157,6 +157,9 @@ def validate(module: str, changes: object) -> dict:
                              and type(v) is int and 0 <= v <= 4096 for k, v in value.items()))
         if field['choices'] is not None:
             valid = valid and value in field['choices']
+        if valid and module == 'theme' and key == 'titlebar.process_names':
+            names = [re.sub(r'(?i)\.exe$', '', item) for item in value]
+            valid = len(names) <= 32 and len({item.casefold() for item in names}) == len(names) and all(re.fullmatch(r'\w[\w .-]{0,63}', item) and item == item.strip() for item in names)
         if valid and module == 'theme' and key.startswith('schedule.fixed_'):
             valid = re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', value) is not None
         if valid and module == 'theme' and key in ('schedule.latitude', 'schedule.longitude') and value:

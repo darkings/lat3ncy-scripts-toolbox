@@ -1621,7 +1621,16 @@ def _atomic_long_output(output: str, status: str, **fields: str) -> None:
     temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
     try:
         write_output(str(temporary), status, **fields)
-        os.replace(temporary, target)
+        for attempt in range(4):
+            try:
+                os.replace(temporary, target)
+                break
+            except OSError as error:
+                # Windows readers/scanners can briefly deny replacement even
+                # when both files are writable. Keep retries short and bounded.
+                if getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 3:
+                    raise
+                time.sleep(0.015 * (attempt + 1))
     finally:
         temporary.unlink(missing_ok=True)
 

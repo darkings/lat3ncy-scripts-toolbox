@@ -29,7 +29,7 @@ internal static class SettingsAutosaveProbe
                 ToolboxSettingsWindow? window = null;
                 try { window = new ToolboxSettingsWindow(); window.Activate(); await window.VerifyAutosaveAsync().WaitAsync(TimeSpan.FromSeconds(50)); code = 0; }
                 catch (Exception error) { HudLog.Line("settings-autosave-probe=failed kind=" + error.GetType().Name + " code=" + (error is InvalidOperationException ? error.Message : "probe_exception")); }
-                finally { try { window?.CloseForShutdown(); } catch { } Application.Current.Exit(); }
+                finally { PreferencesBridge.ProbeAfterWrite = null; try { window?.CloseForShutdown(); } catch { } Application.Current.Exit(); }
             });
         });
         PreferencesBridge.ProbeTools = null;

@@ -64,5 +64,5 @@ internal sealed class CredentialsSettingsForm
                 _providers[provider.GetProperty("id").GetString()!][field.GetProperty("id").GetString()!].state.Text = Describe(field);
     }
     public void RetargetRevision(string previous, string current) { if (Revision == previous) Revision = current; }
-    internal void SetProbeValues() { _providers["tencent"]["secret_id"].input.Password = "ISOLATED_NATIVE_ID"; _providers["tencent"]["secret_key"].input.Password = "ISOLATED_NATIVE_SECRET"; }
+    internal void SetProbeValues(string suffix = "") { _providers["tencent"]["secret_id"].input.Password = "ISOLATED_NATIVE_ID" + suffix; _providers["tencent"]["secret_key"].input.Password = "ISOLATED_NATIVE_SECRET" + suffix; }
 }

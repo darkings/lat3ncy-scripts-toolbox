@@ -9,6 +9,9 @@ internal static class PreferencesBridge
 {
     // Set only by the explicit isolated native test entry point.
     internal static string? ProbeTools;
+    // Isolated tests can hold a successful write response to exercise later edits
+    // deterministically. No requests, values or secrets are passed to the callback.
+    internal static Func<Task>? ProbeAfterWrite;
     public static Task<JsonElement> RunAsync(object? request, CancellationToken cancellation, bool defaults = false)
     {
         if (defaults && request != null) throw new ArgumentException("settings_unavailable");
@@ -105,6 +108,8 @@ internal static class PreferencesBridge
                     && code.Length <= 100 && code.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '.');
                 throw new InvalidOperationException(code is "settings_changed_reload" or "protected_config_manual" or "reload_busy" or "reload_capture_busy" or "reload_capture_unavailable" or "reload_disabled" || fixedValidation ? code : "settings_unavailable");
             }
+            if (request != null && ProbeTools != null && ProbeAfterWrite is { } afterWrite)
+                await afterWrite().WaitAsync(timeout.Token);
             return result.Clone();
         }
         finally

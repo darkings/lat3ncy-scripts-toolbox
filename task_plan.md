@@ -1,3 +1,11 @@
+## 2026-11-23 保存期间编辑与关闭等待
+
+- [x] 隔离原生测试复现旧代码在关闭保存期间漏掉后续输入（native_close_dropped_late_edit），未改动个人配置。
+- [x] 关闭与重载提交前等待保存队列清空；等待期间暂时停用编辑，失败恢复，多个并发等待者共同保持禁用状态。
+- [x] 保存反馈区分正在保存与仍待自动保存，后续草稿存在时不提前显示成功。
+- [x] 原生四类探测及五类并发编辑、关闭追加输入、保存失败恢复编辑/保留重载恢复入口通过。干净候选 offline/helpers/full 全通过（271 项 Python）；Computer Use 复核翻译/朗读切换与系统关闭。
+- 源戳 dc208b9765b7a5f3d32906183c818ab1e665b8be68dbbb1b4dac61f5763f37b8 已部署；个人配置及捕获默认值不变。证据 .tmp/validation/20261123-save-drain/、.tmp/settings-flight-repro.log、.tmp/settings-flight-native-tests.log、.tmp/settings-flight-deploy.log、.tmp/settings-flight-config-protection.json。精确提交 CI 以草稿 PR #3 最终记录为准，不合并。
+
 ## 2026-11-23 跨页保存失败恢复
 
 - [x] 保存错误按分类保留，其他页的恢复入口只导航；到达失败页后才明确提供丢弃该页输入并重读。

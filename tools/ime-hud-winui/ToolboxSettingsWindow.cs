@@ -56,6 +56,7 @@ internal sealed class ToolboxSettingsWindow : Window
     bool _defaultsPreviewed;
     bool _reloading;
     bool _startingReload;
+    int _saveActions;
     TaskCompletionSource<JsonElement>? _reloadCompletion;
     string _reloadId = "";
     DateTime _reloadStarted;
@@ -385,6 +386,7 @@ internal sealed class ToolboxSettingsWindow : Window
         bool success = true;
         try
         {
+            if (_pending.Count > 0) _status.Text = "正在保存…";
             foreach (string page in _pending.ToArray())
             {
                 _pending.Remove(page);
@@ -399,12 +401,25 @@ internal sealed class ToolboxSettingsWindow : Window
                     HudLog.Line("settings-autosave=failed page=" + page + " kind=" + error.GetType().Name);
                 }
             }
-            if (success) { _status.Text = "已自动保存。"; _error.IsOpen = false; }
+            if (success) { _status.Text = _pending.Count == 0 ? "已自动保存。" : "等待自动保存…"; _error.IsOpen = false; }
             PresentSaveErrors();
             UpdateDefault(); await RefreshReloadAsync();
         }
         finally { _writer.Release(); }
         return success;
+    }
+    async Task<bool> FlushBeforeActionAsync()
+    {
+        if (_readOnlyProbe || _closed) return true;
+        _saveActions++; _navigation.IsEnabled = false;
+        try
+        {
+            // A helper saves a snapshot. Editor callbacks already in flight may enqueue
+            // a newer draft while awaiting it; close/reload must include those drafts.
+            do { if (!await FlushAsync()) return false; } while (!_closed && _pending.Count > 0);
+            return true;
+        }
+        finally { if (--_saveActions == 0 && !_closed) _navigation.IsEnabled = true; }
     }
     async Task SavePageAsync(string page)
     {
@@ -499,7 +514,11 @@ internal sealed class ToolboxSettingsWindow : Window
     async Task ApplyReloadAsync()
     {
         try { await StartReloadAsync(null); }
-        catch (Exception error) { ShowError(MaintenanceSettingsForm.ErrorText(error.Message)); }
+        catch (Exception error)
+        {
+            if (error.Message == "settings_not_saved") PresentSaveErrors();
+            else ShowError(MaintenanceSettingsForm.ErrorText(error.Message));
+        }
     }
     async Task<JsonElement> RunMaintenanceReloadAsync(string module)
     {
@@ -514,7 +533,7 @@ internal sealed class ToolboxSettingsWindow : Window
         _startingReload = true;
         try
         {
-            if (!await FlushAsync()) throw new InvalidOperationException("settings_not_saved");
+            if (!await FlushBeforeActionAsync()) throw new InvalidOperationException("settings_not_saved");
             object request = modules == null ? new { action = "reload" } : new { action = "reload", modules };
             var result = await PreferencesBridge.RunReloadAsync(request, _lifetime.Token);
             _reloadId = result.GetProperty("id").GetString()!;
@@ -531,7 +550,7 @@ internal sealed class ToolboxSettingsWindow : Window
         _closing = true; _debounce.Stop();
         try
         {
-            if (!await FlushAsync())
+            if (!await FlushBeforeActionAsync())
             {
                 var dialog = new ContentDialog { XamlRoot = ((FrameworkElement)Content).XamlRoot, Title = "仍有设置未保存",
                     Content = "保存失败。保留窗口可继续修正，或放弃未保存的输入并关闭。", PrimaryButtonText = "继续编辑", SecondaryButtonText = "放弃并关闭" };
@@ -584,13 +603,75 @@ internal sealed class ToolboxSettingsWindow : Window
         if (!await FlushAsync() || _reload.Visibility != Visibility.Visible) throw new InvalidOperationException("native_reload_button_missing");
         SelectModule("translate"); await _moduleLoad;
         await VerifySaveRecoveryAsync();
+        await VerifyInFlightEditsAsync();
         _preferenceForms["translate"].SetProbeValue("target_language", "zh");
+        _moduleForms["translate"].SetProbeValue("timeout_s", 8);
         var closed = new TaskCompletionSource(); Closed += (_, _) => closed.TrySetResult();
+        var written = new TaskCompletionSource(); var resume = new TaskCompletionSource();
+        PreferencesBridge.ProbeAfterWrite = () => { written.TrySetResult(); return resume.Task; };
         Native.SendMessage(WinRT.Interop.WindowNative.GetWindowHandle(this), Native.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        await written.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        if (!_closing || closed.Task.IsCompleted) throw new InvalidOperationException("native_close_not_in_flight");
+        if (_navigation.IsEnabled) throw new InvalidOperationException("native_close_editors_not_paused");
+        // Simulate an editor callback already in flight when closing began. The first
+        // helper has an immutable snapshot; this later value must be committed too.
+        _preferenceForms["translate"].SetProbeValue("target_language", "en");
+        _moduleForms["translate"].SetProbeValue("timeout_s", 9);
+        _debounce.Stop(); PreferencesBridge.ProbeAfterWrite = null; resume.TrySetResult();
         await closed.Task.WaitAsync(TimeSpan.FromSeconds(15));
         prefs = await PreferencesBridge.RunAsync(null, CancellationToken.None);
-        if (prefs.GetProperty("values").GetProperty("translate").GetProperty("target_language").GetString() != "zh") throw new InvalidOperationException("native_close_dropped_changes");
-        HudLog.Line("settings-autosave-probe=passed timer+mixed-writes+pages+defaults+credential-retention+switch+reload-indicator+cross-page-recovery+close-flush scope=isolated");
+        if (prefs.GetProperty("values").GetProperty("translate").GetProperty("target_language").GetString() != "en") throw new InvalidOperationException("native_close_dropped_late_edit");
+        var saved = await PreferencesBridge.RunConfigurationAsync("translate", null, CancellationToken.None);
+        if (saved.GetProperty("fields").EnumerateArray().Single(item => item.GetProperty("key").GetString() == "timeout_s").GetProperty("value").GetDouble() != 9)
+            throw new InvalidOperationException("native_close_dropped_late_config");
+        HudLog.Line("settings-autosave-probe=passed timer+mixed-writes+pages+defaults+credential-retention+switch+reload-indicator+cross-page-recovery+in-flight-edits+close-drain scope=isolated");
+    }
+    async Task VerifyInFlightEditsAsync()
+    {
+        async Task Check(string kind, string page, Action first, Action next, Func<bool> dirty)
+        {
+            HudLog.Line("settings-in-flight-probe kind=" + kind);
+            var written = new TaskCompletionSource(); var resume = new TaskCompletionSource();
+            PreferencesBridge.ProbeAfterWrite = () => { written.TrySetResult(); return resume.Task; };
+            first(); _debounce.Stop(); Task<bool> saving = FlushAsync();
+            try
+            {
+                try { await written.Task.WaitAsync(TimeSpan.FromSeconds(10)); }
+                catch (TimeoutException) { throw new InvalidOperationException("native_write_gate_timeout_" + kind); }
+                next(); _debounce.Stop();
+            }
+            finally { PreferencesBridge.ProbeAfterWrite = null; resume.TrySetResult(); }
+            if (!await saving) throw new InvalidOperationException("native_save_failed_" + kind);
+            // A timer flush may already be queued on the same writer. It may either
+            // retain the later draft or commit it; both are valid, but not a false success.
+            if ((_pending.Count > 0 || dirty()) && _status.Text == "已自动保存。")
+                throw new InvalidOperationException("native_save_wrong_status_" + kind);
+            if (!await FlushBeforeActionAsync() || _pending.Count > 0 || !_navigation.IsEnabled || dirty())
+                throw new InvalidOperationException("native_save_did_not_drain");
+        }
+        var preferences = _preferenceForms["translate"]; var config = _moduleForms["translate"];
+        await Check("preference", "translate", () => preferences.SetProbeValue("target_language", "zh"), () => preferences.SetProbeValue("target_language", "en"), () => preferences.HasChanges);
+        await Check("configuration", "translate", () => config.SetProbeValue("timeout_s", 6), () => config.SetProbeValue("timeout_s", 7), () => config.HasChanges);
+        SelectModule("general"); await _moduleLoad;
+        var controls = _controlForms["general"]; var tray = (ToggleSwitch)controls.Reveal("tray_visible")!;
+        await Check("control", "general", () => tray.IsOn = true, () => tray.IsOn = false, () => controls.HasChanges);
+        SelectModule("translate"); await _moduleLoad;
+        void SetModule(bool value) { _moduleValues["translate"] = value; Edited("translate"); }
+        await Check("module", "translate", () => SetModule(false), () => SetModule(true), () => _moduleValues["translate"] != _moduleOriginals["translate"]);
+        _credentials!.Reveal("tencent"); await Task.Delay(100);
+        await Check("credential", "translate", () => _credentials!.SetProbeValues("_A"), () => _credentials!.SetProbeValues("_B"), () => _credentials!.HasChanges);
+        var data = await PreferencesBridge.RunAsync(null, _lifetime.Token);
+        if (data.GetProperty("values").GetProperty("translate").GetProperty("target_language").GetString() != "en")
+            throw new InvalidOperationException("native_save_late_readback");
+        data = await PreferencesBridge.RunConfigurationAsync("translate", null, _lifetime.Token);
+        if (data.GetProperty("fields").EnumerateArray().Single(item => item.GetProperty("key").GetString() == "timeout_s").GetProperty("value").GetDouble() != 7)
+            throw new InvalidOperationException("native_save_late_config_readback");
+        data = await PreferencesBridge.RunControlsAsync(null, _lifetime.Token);
+        if (data.GetProperty("values").GetProperty("tray_visible").GetBoolean() || !data.GetProperty("values").GetProperty("module_translate_enabled").GetBoolean())
+            throw new InvalidOperationException("native_save_late_controls_readback");
+        string fixture = File.ReadAllText(Path.Combine(PreferencesBridge.ProbeTools!, "translate", "config.toml"));
+        if (!fixture.Contains("ISOLATED_NATIVE_ID_B") || !fixture.Contains("ISOLATED_NATIVE_SECRET_B"))
+            throw new InvalidOperationException("native_save_late_credential_readback");
     }
     async Task VerifySaveRecoveryAsync()
     {
@@ -605,6 +686,11 @@ internal sealed class ToolboxSettingsWindow : Window
         SelectModule("general"); await _moduleLoad;
         if (_saveErrors.Count != 2 || _errorPage == null || _errorPage == "general" || !_error.IsOpen)
             throw new InvalidOperationException("native_recovery_wrong_page");
+        if (await FlushBeforeActionAsync() || !_navigation.IsEnabled || _pending.Count != 2)
+            throw new InvalidOperationException("native_failed_save_left_editors_paused");
+        await ApplyReloadAsync();
+        if (_errorPage == null || !_saveErrors.ContainsKey(_errorPage) || !_navigation.IsEnabled || _reloading)
+            throw new InvalidOperationException("native_reload_hid_save_error");
         string first = _errorPage, other = first == "power" ? "audio" : "power";
         await RecoverAsync();
         if (_module != first || _moduleValues[first] || _moduleValues[other] || _saveErrors.Count != 2)

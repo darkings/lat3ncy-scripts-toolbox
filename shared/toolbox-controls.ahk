@@ -148,6 +148,7 @@ class ToolboxControls {
 
     static Poll(*) {
         ToolboxReload.Poll()
+        this.PublishCaretStatus()
         if GetKeyState("CapsLock", "P")
             return
         try {
@@ -165,6 +166,36 @@ class ToolboxControls {
                 this.Log("apply-rejected")
                 this.LastFailureTick := A_TickCount
             }
+        }
+    }
+
+    static LastCaretStatusTick := -5000
+    static PublishCaretStatus() {
+        if IsToolboxTestMode() || A_TickCount - this.LastCaretStatusTick < 5000
+            return
+        this.LastCaretStatusTick := A_TickCount
+        if !ImeHud.CaretIdentityMatches(ImeHud._caretServerPid, ImeHud._caretServerCreated)
+            return
+        owner := DllCall("GetCurrentProcessId", "UInt")
+        ownerCreated := ImeHud.ProcessCreationTicks(owner)
+        if ownerCreated <= 0
+            return
+        SplitPath this.ProfilePath(), , &repo
+        directory := repo "\.toolbox-state"
+        path := directory "\caret-status.json"
+        temporary := path "." owner ".tmp"
+        try {
+            DirCreate directory
+            text := '{"version":1,"repo_hash":"' ToolboxInstance.Hash(repo) '","owner_pid":' owner
+                . ',"owner_ticks":"' ownerCreated '","pid":' ImeHud._caretServerPid ',"start_ticks":"' ImeHud._caretServerCreated
+                . '","updated_unix":' DateDiff(A_NowUTC, "19700101000000", "Seconds") '}'
+            file := FileOpen(temporary, "w", "UTF-8-RAW")
+            try file.Write(text)
+            finally file.Close()
+            if !DllCall("MoveFileExW", "WStr", temporary, "WStr", path, "UInt", 9)
+                throw Error("status-publish")
+        } catch {
+            try FileDelete temporary
         }
     }
 

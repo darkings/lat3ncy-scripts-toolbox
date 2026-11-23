@@ -113,7 +113,10 @@ function Find-ToolboxCaptureFile {
 }
 function Wait-ToolboxCaptureFile {
     param([string]$Directory,[string[]]$Extensions,[DateTime]$Since,[DateTime]$Deadline,[scriptblock]$IsCurrent)
-    if(-not (Test-Path -LiteralPath $Directory -PathType Container)){return $null}
+    while(-not (Test-Path -LiteralPath $Directory -PathType Container)){
+        if([DateTime]::UtcNow -ge $Deadline -or -not (& $IsCurrent)){return $null}
+        Start-Sleep -Milliseconds 200
+    }
     $watcher=$null;$created='ToolboxCaptureCreated-'+[guid]::NewGuid().ToString('N');$renamed='ToolboxCaptureRenamed-'+[guid]::NewGuid().ToString('N')
     try{
         $watcher=[IO.FileSystemWatcher]::new($Directory);$watcher.Filter='*.*';$watcher.IncludeSubdirectories=$false
@@ -184,10 +187,19 @@ function Copy-ToolboxCaptureExtra {
 }
 function Complete-ToolboxCapture {
     param([string]$Path,$Options,[string]$Repo,[string]$Mode,[scriptblock]$IsCurrent)
-    if(-not (& $IsCurrent)){return}
+    $result=@{state='stopped';clipboard='not_attempted';extra_copy='not_attempted'}
+    if(-not $Options.CopyToClipboard){$result.clipboard='off'}
+    if(-not $Options.ExtraDirectory){$result.extra_copy='off'}
+    if(-not (& $IsCurrent)){return $result}
     # Copy and clipboard are independent: a bad optional directory cannot prevent paste.
-    try{[void](Copy-ToolboxCaptureExtra $Path $Options.ExtraDirectory $Repo $IsCurrent)}catch{}
+    if($Options.ExtraDirectory){
+        try{if(Copy-ToolboxCaptureExtra $Path $Options.ExtraDirectory $Repo $IsCurrent){$result.extra_copy='success'}}catch{$result.extra_copy='failed'}
+    }
     if($Options.CopyToClipboard){try{Invoke-ToolboxCaptureCommit $Repo {
-        if(& $IsCurrent){Copy-CaptureFileToClipboard -Path $Path -Mode $Mode}
-    }}catch{}}
+        if(& $IsCurrent){Copy-CaptureFileToClipboard -Path $Path -Mode $Mode;$result.clipboard='success'}
+    }}catch{$result.clipboard='failed'}}
+    $outcomes=@($result.clipboard,$result.extra_copy)
+    if($outcomes -contains 'failed'){$result.state=if($outcomes -contains 'success'){'partial'}else{'failed'}}
+    elseif($outcomes -notcontains 'not_attempted'){$result.state='completed'}
+    return $result
 }

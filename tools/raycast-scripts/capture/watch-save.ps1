@@ -4,7 +4,10 @@ param(
     [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{32}$')][string]$SessionId
 )
 $ErrorActionPreference='Stop'
-trap { exit 0 }
+trap {
+    if($repo -and $session){try{Set-ToolboxCaptureResult $repo $Mode $SessionId failed internal}catch{}}
+    exit 0
+}
 . (Join-Path $PSScriptRoot 'CaptureSupport.ps1')
 . (Join-Path $PSScriptRoot 'CaptureRuntime.ps1')
 $repo=Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent
@@ -24,7 +27,17 @@ if($Mode -eq 'Screenshot'){
     $extensions=@('.mp4','.mov','.mkv')
 }
 $file=Wait-ToolboxCaptureFile $directory $extensions $since $deadline $isCurrent
-if(-not $file){exit 0}
-if(-not (Wait-ToolboxCaptureStable $file.FullName $deadline $isCurrent)){exit 0}
-Complete-ToolboxCapture $file.FullName $options $repo $Mode $isCurrent
+if(-not $file){
+    if([DateTime]::UtcNow -ge $deadline){Set-ToolboxCaptureResult $repo $Mode $SessionId timeout no_file}
+    else{Set-ToolboxCaptureResult $repo $Mode $SessionId stopped module_disabled}
+    exit 0
+}
+Set-ToolboxCaptureResult $repo $Mode $SessionId processing none pending pending
+if(-not (Wait-ToolboxCaptureStable $file.FullName $deadline $isCurrent)){
+    if([DateTime]::UtcNow -ge $deadline){Set-ToolboxCaptureResult $repo $Mode $SessionId timeout file_not_ready}
+    else{Set-ToolboxCaptureResult $repo $Mode $SessionId stopped module_disabled}
+    exit 0
+}
+$outcome=Complete-ToolboxCapture $file.FullName $options $repo $Mode $isCurrent
+Set-ToolboxCaptureResult $repo $Mode $SessionId $outcome.state none $outcome.clipboard $outcome.extra_copy
 exit 0

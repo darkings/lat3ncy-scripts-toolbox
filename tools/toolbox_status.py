@@ -79,6 +79,26 @@ def verified_power() -> str | None:
     except (OSError,ValueError,KeyError,TypeError):return None
 
 
+def verified_caret(now: datetime | None = None) -> bool:
+    """AHK attests the exact child it launched; no coordinates/text are read."""
+    now=now or datetime.now(timezone.utc)
+    try:
+        with (ROOT/'.toolbox-state/caret-status.json').open('rb') as stream:raw=stream.read(4097)
+        if len(raw)>4096:return False
+        beat=json.loads(raw.decode('utf-8-sig'))
+        if beat.get('version')!=1 or type(beat.get('updated_unix')) is not int:return False
+        if not -5<=now.timestamp()-beat['updated_unix']<=20:return False
+        digest=2166136261
+        for value in str(ROOT.resolve()).rstrip('\\/').lower().encode('utf-8'):digest=((digest^value)*16777619)&0xffffffff
+        if beat.get('repo_hash')!=format(digest,'08x'):return False
+        if type(beat.get('owner_pid')) is not int or type(beat.get('pid')) is not int or beat['pid']<=0 or beat['owner_pid']<=0:return False
+        owner=process_identity(beat['owner_pid']);child=process_identity(beat['pid'])
+        if not owner or not child:return False
+        if not re.fullmatch(r'AutoHotkey(?:32|64|UX)?\.exe',Path(owner[0]).name,re.IGNORECASE) or Path(child[0]).name.lower() not in {'powershell.exe','pwsh.exe'}:return False
+        return owner[1]==beat.get('owner_ticks') and child[1]==beat.get('start_ticks')
+    except (OSError,ValueError,KeyError,TypeError):return False
+
+
 def collect(owner_pid: int = 0) -> dict:
     sys.path.insert(0, str(ROOT/'tools'))
     import toolbox_controls as controls
@@ -99,6 +119,7 @@ def collect(owner_pid: int = 0) -> dict:
         runtime['residents']['hud']={'status':'running'}
     power=verified_power()
     if power:runtime['residents']['powerPolicy']={'status':power}
+    if verified_caret():runtime['residents']['caret']={'status':'running'}
     try:
         commit=subprocess.run(['git','-C',str(ROOT),'rev-parse','HEAD'],capture_output=True,text=True,timeout=2,creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0).stdout.strip()
     except (OSError,subprocess.TimeoutExpired): commit=''

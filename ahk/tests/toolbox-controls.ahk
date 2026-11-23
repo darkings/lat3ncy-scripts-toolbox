@@ -139,3 +139,7 @@ ToolboxControlTests() {
 }
 
 ToolboxControlTests()
+AssertEqual(true, ImeHud.CaretIdentityMatches(17, 100, (pid) => 100), "caret status accepts the original creation identity")
+AssertEqual(false, ImeHud.CaretIdentityMatches(17, 100, (pid) => 101), "caret status rejects a reused PID")
+AssertEqual(false, ImeHud.CaretIdentityMatches(17, 0, (pid) => 100), "unknown caret identity is never attested")
+AssertEqual(true, ImeHud.ProcessCreationTicks(DllCall("GetCurrentProcessId", "UInt")) > 0, "caret identity reads the current process without UIA")

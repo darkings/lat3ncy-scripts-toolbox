@@ -213,6 +213,7 @@ internal sealed class ToolboxSettingsWindow : Window
                     var advanced = new ModuleConfigurationForm(await PreferencesBridge.RunConfigurationAsync(page, null, _lifetime.Token), AppWindow,
                         page is "translate" or "tts" ? "高级设置" : null);
                     advanced.Edited += () => Edited(page); _moduleForms[page] = advanced; panel.Children.Add(advanced.Root); _pages[page] = panel;
+                    if (page == "capture") panel.Children.Add(new CaptureActivitySettingsForm(_lifetime.Token).Root);
                 }
             }
             }

@@ -60,24 +60,47 @@ function New-ToolboxCaptureSession {
     $temporary=$path+'.'+$session.id+'.tmp'
     try{
         [IO.File]::WriteAllText($temporary,($session|ConvertTo-Json -Depth 4 -Compress),[Text.UTF8Encoding]::new($false))
-        Invoke-ToolboxCaptureCommit $Repo {Move-Item -LiteralPath $temporary -Destination $path -Force}
+        Invoke-ToolboxCaptureCommit $Repo {
+            Move-Item -LiteralPath $temporary -Destination $path -Force
+            if($Options.CopyToClipboard -or $Options.ExtraDirectory){Set-ToolboxCaptureResult $Repo $Mode $session.id waiting none pending pending}
+            else{Set-ToolboxCaptureResult $Repo $Mode $session.id processing_disabled none off off}
+        }
     }
     finally{if([IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}}
     return $session
 }
 function Read-ToolboxCaptureSession {
-    param([string]$Repo,[ValidateSet('Screenshot','Record')][string]$Mode,[string]$SessionId)
+    param([string]$Repo,[ValidateSet('Screenshot','Record')][string]$Mode,[string]$SessionId,[switch]$AllowExpired)
     try{
         $path=Get-ToolboxCaptureSessionPath $Repo $Mode
         if((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 16384){return $null}
         $session=Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
         if($session.version -ne 1 -or $session.id -cne $SessionId -or $SessionId -cnotmatch '^[0-9a-f]{32}$' -or $session.mode -cne $Mode){return $null}
         $start=[DateTime]::Parse($session.startedUtc).ToUniversalTime();$deadline=[DateTime]::Parse($session.deadlineUtc).ToUniversalTime()
-        if($start -gt [DateTime]::UtcNow.AddSeconds(5) -or $deadline -le [DateTime]::UtcNow -or $deadline -gt $start.AddSeconds(86400)){return $null}
+        if($start -gt [DateTime]::UtcNow.AddSeconds(5) -or (-not $AllowExpired -and $deadline -le [DateTime]::UtcNow) -or $deadline -gt $start.AddSeconds(86400)){return $null}
         $o=$session.options
         if($o.CopyToClipboard -isnot [bool] -or $o.ExtraDirectory -isnot [string] -or $o.ExtraDirectory.Length -gt 2048 -or $o.ExtraDirectory -match '[\x00-\x1F]'){return $null}
         return $session
     }catch{return $null}
+}
+function Set-ToolboxCaptureResult {
+    param([string]$Repo,[ValidateSet('Screenshot','Record')][string]$Mode,[string]$SessionId,
+          [ValidateSet('waiting','processing','completed','partial','failed','timeout','stopped','processing_disabled')][string]$State,
+          [ValidateSet('none','launch_failed','watcher_failed','no_file','file_not_ready','module_disabled','internal')][string]$Reason='none',
+          [ValidateSet('pending','off','success','failed','not_attempted')][string]$Clipboard='not_attempted',
+          [ValidateSet('pending','off','success','failed','not_attempted')][string]$ExtraCopy='not_attempted')
+    # Correlate and publish under the same short commit lock as session replacement.
+    Invoke-ToolboxCaptureCommit $Repo {
+        $current=Read-ToolboxCaptureSession $Repo $Mode $SessionId -AllowExpired
+        if(-not $current){return}
+        if(-not $current.options.CopyToClipboard){$Clipboard='off'}
+        if(-not $current.options.ExtraDirectory){$ExtraCopy='off'}
+        $result=@{version=1;id=$SessionId;mode=$Mode;state=$State;reason=$Reason;clipboard=$Clipboard;extra_copy=$ExtraCopy;updated_utc=[DateTime]::UtcNow.ToString('o')}
+        $path=Join-Path $Repo ('.toolbox-state\capture-result-'+$Mode.ToLowerInvariant()+'.json')
+        $temporary=$path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
+        try{[IO.File]::WriteAllText($temporary,($result|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false));Move-Item -LiteralPath $temporary -Destination $path -Force}
+        finally{if([IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}}
+    }
 }
 function Test-ToolboxCaptureSession {
     param([string]$Repo,[ValidateSet('Screenshot','Record')][string]$Mode,[string]$SessionId)

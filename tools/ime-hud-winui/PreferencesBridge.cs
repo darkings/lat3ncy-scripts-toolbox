@@ -35,6 +35,9 @@ internal static class PreferencesBridge
     public static Task<JsonElement> RunStatusAsync(CancellationToken cancellation) =>
         RunHelperAsync("toolbox_status.py", null, cancellation, new[] { "--owner-pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) }, 16384, seconds: 20);
 
+    public static Task<JsonElement> RunCaptureActivityAsync(CancellationToken cancellation) =>
+        RunHelperAsync("toolbox_capture_activity.py", null, cancellation, Array.Empty<string>(), 16384);
+
     static async Task<JsonElement> RunHelperAsync(string filename, object? request, CancellationToken cancellation,
                                                  string[] arguments, int limit, string? probeTools = null, int seconds = 10)
     {

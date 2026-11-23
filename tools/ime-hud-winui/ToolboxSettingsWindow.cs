@@ -49,8 +49,6 @@ internal sealed class ToolboxSettingsWindow : Window
     bool _defaultsPreviewed;
     bool _reloading;
     bool _startingReload;
-    bool _applyingTitlebar;
-    TitlebarSettingsAction? _titlebarAction;
     TaskCompletionSource<JsonElement>? _reloadCompletion;
     string _reloadId = "";
     DateTime _reloadStarted;
@@ -223,12 +221,6 @@ internal sealed class ToolboxSettingsWindow : Window
                     var advanced = new ModuleConfigurationForm(await PreferencesBridge.RunConfigurationAsync(page, null, _lifetime.Token), AppWindow,
                         page is "translate" or "tts" ? "高级设置" : null);
                     advanced.Edited += () => Edited(page); _moduleForms[page] = advanced; panel.Children.Add(advanced.Root); _pages[page] = panel;
-                    if (page == "theme")
-                    {
-                        _titlebarAction = new TitlebarSettingsAction(() => RunMaintenanceReloadAsync("titlebar"),
-                            () => _moduleValues.GetValueOrDefault("theme") && advanced.BooleanValue("titlebar.enabled") && !_reloading && !_startingReload, _lifetime.Token);
-                        advanced.AddGroupContent("titlebar", _titlebarAction.Root);
-                    }
                     if (page == "capture") panel.Children.Add(new CaptureActivitySettingsForm(_lifetime.Token).Root);
                 }
             }
@@ -256,7 +248,6 @@ internal sealed class ToolboxSettingsWindow : Window
     void Edited(string page)
     {
         if (_suppress || _closed) return;
-        if (page == "theme") _titlebarAction?.RefreshEnabled();
         _pending.Add(page); if (page == _module) UpdateDefault();
         if (_readOnlyProbe) return;
         _status.Text = "等待自动保存…"; _debounce.Stop(); _debounce.Start();
@@ -385,8 +376,7 @@ internal sealed class ToolboxSettingsWindow : Window
                     _reloading = false; _reloadPoll.Stop(); _reload.IsEnabled = true; _reload.Content = "重载";
                     _reload.Visibility = pending.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
                     _reloadCompletion?.TrySetResult(result.Clone());
-                    if (_applyingTitlebar) _status.Text = result.GetProperty("failed").GetString()?.Length > 0 ? "标题栏操作未完成，请查看操作结果。" : "标题栏操作完成。";
-                    else if (result.GetProperty("failed").GetString()?.Length > 0) ShowError("部分功能未能重载，已保留待重载状态。请确认功能已启用且任务属于当前仓库。");
+                    if (result.GetProperty("failed").GetString()?.Length > 0) ShowError("部分功能未能重载，已保留待重载状态。请确认功能已启用且任务属于当前仓库。");
                     else _status.Text = "重载完成。";
                 }
                 else if (DateTime.UtcNow - _reloadStarted > TimeSpan.FromSeconds(150))
@@ -402,7 +392,7 @@ internal sealed class ToolboxSettingsWindow : Window
     }
     async Task<JsonElement> RunMaintenanceReloadAsync(string module)
     {
-        if (module is not ("power" or "theme" or "rgb" or "titlebar")) throw new InvalidOperationException("invalid_module");
+        if (module is not ("power" or "theme" or "rgb")) throw new InvalidOperationException("invalid_module");
         if (!await StartReloadAsync(new[] { module })) throw new InvalidOperationException("settings_unavailable");
         return await _reloadCompletion!.Task.WaitAsync(TimeSpan.FromSeconds(160), _lifetime.Token);
     }
@@ -414,15 +404,13 @@ internal sealed class ToolboxSettingsWindow : Window
         try
         {
             if (!await FlushAsync()) throw new InvalidOperationException("settings_not_saved");
-            object request = modules == null ? new { action = "reload" } : modules.SequenceEqual(new[] { "titlebar" })
-                ? new { action = "reload", modules, revision = _moduleForms["theme"].Revision } : new { action = "reload", modules };
+            object request = modules == null ? new { action = "reload" } : new { action = "reload", modules };
             var result = await PreferencesBridge.RunReloadAsync(request, _lifetime.Token);
             _reloadId = result.GetProperty("id").GetString()!;
             if (_reloadId.Length == 0) return false;
             _reloadCompletion = new TaskCompletionSource<JsonElement>();
-            _applyingTitlebar = modules?.SequenceEqual(new[] { "titlebar" }) == true;
             _reloading = true; _reloadStarted = DateTime.UtcNow; _reload.IsEnabled = false; _reload.Visibility = Visibility.Visible;
-            _reload.Content = _applyingTitlebar ? "应用中…" : "重载中…"; _reloadPoll.Start();
+            _reload.Content = "重载中…"; _reloadPoll.Start();
             return true;
         }
         finally { _startingReload = false; }

@@ -31,11 +31,10 @@ function Assert-SettingsReloadRequest {
     if ($actions.Count -lt 1 -or $actions.Count -gt 3 -or @($actions | Select-Object -Unique).Count -ne $actions.Count) { throw 'reload-actions' }
     $allowed = @('version','id','actions','owner_pid','owner_ticks','created_unix')
     foreach ($action in $actions) {
-        if ($action -cnotin @('power','theme','rgb','titlebar')) { throw 'reload-action' }
+        if ($action -cnotin @('power','theme','rgb')) { throw 'reload-action' }
         $key = $action + '_revision'; $allowed += $key
         if ($Request.$key -cnotmatch '^[0-9a-f]{64}$') { throw 'reload-revision' }
     }
-    if($actions -contains 'titlebar' -and $actions.Count -ne 1){throw 'reload-actions'}
     foreach ($property in $Request.PSObject.Properties.Name) { if ($property -cnotin $allowed) { throw 'reload-field' } }
     if ($Request.owner_pid -isnot [int] -or $Request.owner_pid -le 0 -or $Request.owner_ticks -cnotmatch '^[0-9]{10,20}$') { throw 'reload-owner' }
     $age = $Now - [long]$Request.created_unix

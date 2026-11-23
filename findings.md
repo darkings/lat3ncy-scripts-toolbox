@@ -159,7 +159,7 @@ powershell -NoProfile -Command "\$e=\$null; [void][Management.Automation.Languag
   3. DWM 美化工具（Mica For Everyone 等）仅作用于底层非客户区，被上层 Qt 白色控件完全遮挡。
   4. 外部透明浮层（Overlay）在 3D 渲染交换链上方会导致高频 Z-fighting 频闪，无法用于生产。
 - **决策**：
-  - 工具箱不保留侵入式浮层；`tools/raycast-scripts/force-dark-titlebar.ps1` 保留参数净化与 `-Silent` 健壮性修复。
+  - 工具箱不保留侵入式浮层；此前的手动窗口标题栏配色功能及脚本已于 2026-11-23 按用户要求移除。
   - 需要单窗口、原生深浅跟随与比例保持的用户推荐使用独立模拟器方案（如 MuMu 12 单应用独立窗口模式）或 Scrcpy 极客封装。
 
 

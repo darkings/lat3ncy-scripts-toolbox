@@ -100,7 +100,7 @@ internal static class PreferencesBridge
                 bool fixedValidation = code != null && (code.StartsWith("invalid_", StringComparison.Ordinal)
                     || code.StartsWith("hotkey_conflict_", StringComparison.Ordinal))
                     && code.Length <= 100 && code.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '.');
-                throw new InvalidOperationException(code is "settings_changed_reload" or "protected_config_manual" or "reload_busy" or "reload_capture_busy" or "reload_capture_unavailable" or "reload_disabled" or "reload_config_changed" || fixedValidation ? code : "settings_unavailable");
+                throw new InvalidOperationException(code is "settings_changed_reload" or "protected_config_manual" or "reload_busy" or "reload_capture_busy" or "reload_capture_unavailable" or "reload_disabled" || fixedValidation ? code : "settings_unavailable");
             }
             return result.Clone();
         }

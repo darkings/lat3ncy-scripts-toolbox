@@ -1,11 +1,9 @@
-## 2026-11-23 手动窗口标题栏设置
+## 2026-11-23 移除手动标题栏配色
 
-- [x] 主题页新增独立启用、单次配色与进程列表，保持原四个 Androws + 深色默认。保存不执行；独立按钮先保存再应用，关闭不撤销已应用样式。
-- [x] Raycast 与设置共用固定计划/执行函数，禁用/空列表/无窗口准确反馈，兼容 Light/Reset/ProcessNames；Reset 明确为执行时系统配色，不持续跟随。
-- [x] 校验进程创建时间及窗口归属，DWM 20→19 回退并对实际属性读回；不读取窗口标题，设置不发系统通知。使用现有 AHK 分发，无新常驻线程；界面修订绑定请求，外部目标修改拒绝应用。
-- [x] 7 项新 Python 回归通过；临时测试窗口实际 dark/light/system 均读回成功。原生四类探测通过，补齐未编辑开关值的回归；Computer Use 实点应用获得 no_windows，按钮恢复且等待入口收起。
-- [x] 最终干净候选三阶段通过：273 项 Python，307 个源码/资产散列一致；117 个可编辑配置字段。个人七份原配置和捕获默认值哈希不变。
-- 已部署源戳 fb600a1cf373dee3e45ce149f17a75be8702cbde712f56ef9d53bf0c418ee6ad。证据：.tmp/validation/20261123-titlebar-release/、.tmp/titlebar-native-probe.log、.tmp/titlebar-tests.log、.tmp/titlebar-release-deploy.log。精确 SHA CI 见草稿 PR #3，保持草稿不合并。
+- [x] 按用户要求移除整个手动窗口标题栏功能：设置项、应用控件、计划桥、PowerShell 执行器及原 Raycast 脚本。
+- [x] 回收关联重载动作、配置白名单和专用测试；保留 WinUI 内置标题栏与工具箱自己的主题适配。当前 Raycast 顶层入口 11 个，模块可编辑字段恢复 114 项。
+- [x] 从源码构建并重载，原生四类探测、干净候选三阶段通过（266 项 Python，302 个源码/资产一致）。Computer Use 确认主题页不含该功能。
+- 源戳 502502baa589edbf153b5bec56b7d210fce10594bcbd5970a7ab96cbdaf6d8d9；个人配置哈希不变。证据 .tmp/validation/20261123-remove-titlebar/、.tmp/remove-titlebar-deploy.log；精确 SHA CI 以草稿 PR #3 最终记录为准，不合并。
 
 ## 2026-11-23 诊断恢复指引与长文结果交付
 

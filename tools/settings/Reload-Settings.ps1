@@ -4,7 +4,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ReloadSupport.ps1')
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 . (Join-Path $repo 'tools\ToolboxControls.ps1')
-. (Join-Path $repo 'tools\raycast-scripts\_lib\TitlebarSupport.ps1')
 $state = Join-Path $repo '.toolbox-state'
 $requestPath = Join-Path $state 'reload-request.json'
 $resultPath = Join-Path $state 'reload-result.json'
@@ -26,29 +25,20 @@ try {
     try{$hostTicks=$hostProcess.StartTime.ToUniversalTime().ToFileTimeUtc().ToString()}finally{$hostProcess.Dispose()}
     $result = @{id=$RequestId;status='running';completed='';failed='';worker_pid=$PID;worker_ticks=$hostTicks}
     Write-SettingsReloadResult $resultPath $result
-    $completed=@();$failed=@();$errors=@{};$details=@{}
+    $completed=@();$failed=@();$errors=@{}
     foreach ($action in $actions) {
         $failureReason='operation_failed'
         try {
             $failureReason='capture_busy'
             if((Get-SettingsRecordingState $repo) -ne 'idle'){throw 'reload-capture-busy'}
             $failureReason='disabled'
-            $control=if($action -eq 'titlebar'){'theme'}else{$action}
-            if(-not(Test-ToolboxModuleEnabled -Module $control -RepoRoot $repo)){throw 'reload-disabled'}
-            $config = switch($action) { power {'tools\power-policy\config.toml'} theme {'tools\theme-scheduler\config.toml'} titlebar {'tools\theme-scheduler\config.toml'} rgb {'tools\rgb\config.toml'} }
+            if(-not(Test-ToolboxModuleEnabled -Module $action -RepoRoot $repo)){throw 'reload-disabled'}
+            $config = switch($action) { power {'tools\power-policy\config.toml'} theme {'tools\theme-scheduler\config.toml'} rgb {'tools\rgb\config.toml'} }
             $failureReason='config_changed'
             $hash = (Get-FileHash -LiteralPath (Join-Path $repo $config) -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($hash -cne $request.($action+'_revision')) { throw 'reload-config-changed' }
             $failureReason='operation_failed'
             switch ($action) {
-                titlebar {
-                    $outcome=Invoke-ToolboxTitlebar -Repo $repo -ExpectedRevision $request.titlebar_revision
-                    $details.titlebar=@{matched=[int]$outcome.matched;applied=[int]$outcome.applied;failed=[int]$outcome.failed}
-                    if($outcome.status -ne 'applied'){
-                        $failureReason=switch($outcome.status){disabled {'disabled'} no_windows {'no_windows'} default {'titlebar_partial'}}
-                        throw 'titlebar-not-applied'
-                    }
-                }
                 power { & (Join-Path $repo 'tools\power-policy\Restart-PowerPolicy.ps1') | Out-Null }
                 theme {
                     $failureReason='ownership'
@@ -80,14 +70,10 @@ try {
                 }
             }
             $completed += $action
-        } catch {
-            if($action -eq 'titlebar' -and $_.Exception.Message -ceq 'titlebar-config-changed'){$failureReason='config_changed'}
-            $failed += $action;$errors[$action]=$failureReason
-        }
+        } catch { $failed += $action;$errors[$action]=$failureReason }
     }
     $result.status='completed';$result.completed=($completed -join ',');$result.failed=($failed -join ',')
     $result.errors=$errors
-    $result.details=$details
     Write-SettingsReloadResult $resultPath $result
 } catch {
     # Never log parser/provider/config text. The native window keeps pending state.

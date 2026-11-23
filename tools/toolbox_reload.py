@@ -16,7 +16,6 @@ import toolbox_preferences as prefs
 import toolbox_controls as controls
 
 MODULES = {'power': '电源与唤醒', 'theme': '主题切换计划', 'rgb': '氛围灯'}
-ACTIONS = {*MODULES, 'titlebar'}
 
 
 class ReloadError(ValueError): pass
@@ -43,13 +42,7 @@ def write(name: str, value: dict) -> None:
     finally: temporary.unlink(missing_ok=True)
 
 
-def revision(module: str) -> str: return hashlib.sha256(config.read_bytes(config.module_path('theme' if module == 'titlebar' else module))).hexdigest()
-
-
-def action_enabled(module: str) -> bool:
-    if module != 'titlebar': return controls.module_enabled(module)
-    import toolbox_titlebar
-    return toolbox_titlebar.plan()['enabled']
+def revision(module: str) -> str: return hashlib.sha256(config.read_bytes(config.module_path(module))).hexdigest()
 
 
 def pending() -> dict:
@@ -86,8 +79,7 @@ def snapshot() -> dict:
                                      'enabled': controls.module_enabled(module)} for module in data],
             'recording_state': recording_state(config.REPO),
             'result': {**{key: result[key] for key in ('id', 'status', 'completed', 'failed') if key in result},
-                       'details':{name:{key:value for key,value in detail.items() if key in {'matched','applied','failed'} and type(value) is int and 0<=value<=4096} for name,detail in result.get('details',{}).items() if name=='titlebar' and isinstance(detail,dict)} if isinstance(result.get('details'),dict) else {},
-                       'errors':{key:value for key,value in errors.items() if key in {*ACTIONS,'busy'} and value in {'busy','capture_busy','disabled','config_changed','ownership','operation_failed','no_windows','titlebar_partial'}} if isinstance(errors,dict) else {}}}
+                       'errors':{key:value for key,value in errors.items() if key in {*MODULES,'busy'} and value in {'busy','capture_busy','disabled','config_changed','ownership','operation_failed'}} if isinstance(errors,dict) else {}}}
 
 
 def process_ticks(pid: int) -> str:
@@ -107,9 +99,8 @@ def process_ticks(pid: int) -> str:
     finally: kernel.CloseHandle(handle)
 
 
-def request_reload(modules: list[str] | None = None, expected_revision: str | None = None) -> dict:
-    if modules is not None and (not isinstance(modules,list) or len(modules)!=1 or not isinstance(modules[0],str) or modules[0] not in ACTIONS):raise ReloadError('invalid_reload_action')
-    if expected_revision is not None and (modules != ['titlebar'] or not isinstance(expected_revision,str) or not re.fullmatch('[0-9a-f]{64}',expected_revision)):raise ReloadError('invalid_reload_action')
+def request_reload(modules: list[str] | None = None) -> dict:
+    if modules is not None and (not isinstance(modules,list) or len(modules)!=1 or not isinstance(modules[0],str) or modules[0] not in MODULES):raise ReloadError('invalid_reload_action')
     with prefs._writer_lock(state_path('request')):
         current = snapshot(); existing = read('request'); result = read('result')
         age = time.time() - float(existing.get('created_unix', 0))
@@ -122,13 +113,11 @@ def request_reload(modules: list[str] | None = None, expected_revision: str | No
         modules = modules if modules is not None else [item['id'] for item in current['pending']]
         if not modules: return {'version': 1, 'id': '', 'pending': []}
         if current['recording_state']!='idle':raise ReloadError('reload_capture_busy' if current['recording_state']=='active' else 'reload_capture_unavailable')
-        if any(not action_enabled(module) for module in modules):raise ReloadError('reload_disabled')
-        if expected_revision is not None and expected_revision != revision('titlebar'):raise ReloadError('reload_config_changed')
+        if any(not controls.module_enabled(module) for module in modules):raise ReloadError('reload_disabled')
         owner = os.getppid(); token = uuid.uuid4().hex
         document = {'version': 1, 'id': token, 'actions': ','.join(modules), 'owner_pid': owner,
                     'owner_ticks': process_ticks(owner), 'created_unix': int(time.time())}
         document.update({module + '_revision': revision(module) for module in modules})
-        if expected_revision is not None:document['titlebar_revision']=expected_revision
         write('request', document)
         return {'version': 1, 'id': token, 'pending': current['pending']}
 
@@ -140,14 +129,13 @@ def main() -> int:
     try:
         if args.apply:
             request = json.loads(sys.stdin.read(1025))
-            if not isinstance(request,dict) or request.get('action')!='reload' or set(request) not in ({'action'},{'action','modules'},{'action','modules','revision'}): raise ReloadError('invalid_reload_action')
+            if not isinstance(request,dict) or request.get('action')!='reload' or set(request) not in ({'action'},{'action','modules'}): raise ReloadError('invalid_reload_action')
             if 'modules' in request and not isinstance(request['modules'],list):raise ReloadError('invalid_reload_action')
-            if 'revision' in request and request['revision'] is None:raise ReloadError('invalid_reload_action')
-            result = request_reload(request.get('modules'),request.get('revision'))
+            result = request_reload(request.get('modules'))
         else: result = snapshot()
         print(json.dumps({'status': 'ok', **result}, ensure_ascii=False)); return 0
     except (ValueError, OSError, KeyError, TypeError) as error:
-        code=str(error) if isinstance(error,ReloadError) and str(error) in {'reload_busy','reload_capture_busy','reload_capture_unavailable','reload_disabled','reload_config_changed'} else 'reload_unavailable'
+        code=str(error) if isinstance(error,ReloadError) and str(error) in {'reload_busy','reload_capture_busy','reload_capture_unavailable','reload_disabled'} else 'reload_unavailable'
         print(json.dumps({'status': 'error', 'code': code})); return 1
 
 

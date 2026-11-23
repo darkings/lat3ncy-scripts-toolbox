@@ -89,7 +89,8 @@ if((Get-SettingsRecordingState $Repo) -ne 'active'){throw 'active recording not 
 if((Get-SettingsRecordingState $Repo) -ne 'idle'){throw 'completed recording not released'}
 . (Join-Path $Root 'tools/startup/ToolboxProcess.ps1')
 $script:stops=0;$time=[DateTime]::UtcNow
-$own=[pscustomobject]@{Id=41;Path=(Join-Path $Repo 'tools/ime-hud-winui/out/ImeHudWinUi.exe');StartTime=$time;HasExited=$false}
+# Match the canonical process path; hosted TEMP may use an 8.3 user directory.
+$own=[pscustomobject]@{Id=41;Path=[IO.Path]::GetFullPath((Join-Path $Repo 'tools/ime-hud-winui/out/ImeHudWinUi.exe'));StartTime=$time;HasExited=$false}
 $foreign=[pscustomobject]@{Id=42;Path='C:\\another-checkout\\ImeHudWinUi.exe';StartTime=$time;HasExited=$false}
 $rejected=$false
 try{Stop-ToolboxOwnedHudProcess $Repo -ProcessProvider {@($own,$foreign)} -IdentityProvider {$own} -Stopper {$script:stops++}}catch{$rejected=$true}

@@ -35,6 +35,14 @@ try {
     $manifest.Components=$components;$manifest.Components[0].OutputPath='..\anchor-locator.exe';Save-Fixture
     $failed=$false;try{Test-ToolboxManagedBuild $repo $path | Out-Null}catch{$failed=$true}
     Assert $failed 'foreign artifact path is rejected'
+    $components[0].OutputPath='anchor-locator.exe'
+    $manifest.Components=@($components[0]);Save-Fixture
+    $failed=$false;try{Test-ToolboxManagedBuild $repo $path | Out-Null}catch{$failed=$true}
+    Assert $failed 'default verification still requires both helpers'
+    Assert ((Test-ToolboxManagedBuild $repo $path -ExpectedComponents anchor-locator).Status -eq 'verified') 'explicit anchor-only manifest verifies'
+    $manifest.Components=@($components[1]);Save-Fixture
+    $failed=$false;try{Test-ToolboxManagedBuild $repo $path -ExpectedComponents anchor-locator | Out-Null}catch{$failed=$true}
+    Assert $failed 'single audio manifest cannot satisfy anchor selection'
     [Console]::Out.WriteLine('PASS: managed build provenance tests')
 } finally {
     $resolved=[IO.Path]::GetFullPath($root)

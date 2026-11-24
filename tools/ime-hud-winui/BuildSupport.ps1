@@ -6,6 +6,8 @@ function Get-ImeHudSourceHash
     [string] $ProjectDir
   )
 
+  $ProjectDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ProjectDir)
+  $ProjectDir = [IO.Path]::GetFullPath($ProjectDir).TrimEnd('\')
   $sourceFiles = @(Get-ChildItem -LiteralPath $ProjectDir -Recurse -File -ErrorAction Stop |
       Where-Object {
         $_.Extension -in @('.cs', '.xaml', '.csproj', '.manifest', '.png') -and

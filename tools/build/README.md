@@ -8,6 +8,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/build/Build-Manage
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/build/Test-ManagedBuild.ps1 -ManifestPath 'C:\path\to\repo\.tmp\managed-builds\build-id\managed-build.json'
 ```
 
+默认构建两个助手；`-Component anchor-locator` 可仅构建锚点。对应来源检查使用 `Test-ManagedBuild.ps1 -ExpectedComponents anchor-locator`，默认检查仍要求两个组件，单组件清单不能悄悄代替完整清单。
+
 默认在 `.tmp/managed-builds/<guid>/` 新建隔离目录。可通过 `-OutputDirectory` 指定一个尚不存在的目录；入口拒绝复用已有目录，避免覆盖生产助手或其他文件。
 
 产物包括 `anchor-locator.exe`、`audio-switcher.exe`、`managed-build.json`。manifest 记录每个源码/产物的 SHA-256、编译器路径/版本/哈希、完整编译参数、显式引用程序集的路径/哈希及 Git HEAD。脏工作区以源码文件哈希为准，不能仅凭 HEAD 认定产物版本。

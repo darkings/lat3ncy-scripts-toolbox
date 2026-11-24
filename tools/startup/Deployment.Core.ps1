@@ -165,11 +165,14 @@ function Install-ToolboxRelease {
 
 function Invoke-ToolboxReleaseTransaction {
     param([string]$ReleaseDirectory,[string]$ExpectedTarget,
-        [scriptblock]$StopRuntime,[scriptblock]$StartRuntime,[scriptblock]$CheckRuntime,[scriptblock]$ValidateInstalled)
+        [scriptblock]$StopRuntime,[scriptblock]$StartRuntime,[scriptblock]$CheckRuntime,[scriptblock]$ValidateInstalled,
+        [scriptblock]$ValidatePrepared)
     Assert-ToolboxReleaseReady $ReleaseDirectory $ExpectedTarget
+    if($ValidatePrepared){& $ValidatePrepared}
     $applied=[Collections.Generic.List[object]]::new()
     try {
         & $StopRuntime
+        if($ValidatePrepared){& $ValidatePrepared}
         Install-ToolboxRelease $ReleaseDirectory $ExpectedTarget $applied
         & $ValidateInstalled
         & $StartRuntime

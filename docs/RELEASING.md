@@ -14,7 +14,7 @@ python --version
 dotnet --list-sdks
 ```
 
-配置文件保留本机设置。翻译无 pip 依赖：选择需要的引擎并按 [翻译配置](../tools/translate/README.md)设置凭证；默认云引擎缺密钥会报 `config`，不会自动联网改用免费引擎。诊断命令仅检查配置语法和引擎名，不验证凭证。
+翻译无需安装 Python 包。在翻译设置中选择引擎、填写密钥；需要 Google 保底时，开启缺密钥和鉴权失败回退。两个开关默认关闭，已有个人配置保持原值；独立 CLI 也按其配置执行。成功保底不发送系统通知。详见[翻译配置](../tools/translate/README.md)。离线诊断不验证云端密钥。
 
 朗读使用独立且按仓库归属的用户目录环境：
 
@@ -34,6 +34,16 @@ python tools/raycast-scripts/ocr/install-deps.py --check
 ```
 
 将 `tools/raycast-scripts/ocr/config.toml` 的 `ocr` 设为 `rapidocr` 后，独立 OCR 启动器优先使用该环境声明的同版基础 `pythonw.exe` 和原依赖目录。`system` 模式使用 Windows 截图文本操作，不需要这些模型依赖；截图翻译单独使用本地 RapidOCR，不改变该配置。OCR 全部依赖已有版本/SHA-256 锁，安装只管理模块 `.venv314`；全局 Python 3.15 不加载 cp314 依赖。`--mobile-models` 仅显式下载原有可选模型，不更改配置。
+
+## 首次启动工具箱
+
+准备好所需环境后，在仓库根目录运行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Rebuild-ToolboxHud.ps1
+```
+
+该入口构建并验证 HUD 与 anchor，部署后启动本仓库 AHK，并检查运行状态。以后的普通启动使用 `tools/startup/Start-Toolbox.ps1`。电源、主题计划、灯光服务按需单独安装，见各模块 README。
 
 ## 构建与验证
 
@@ -60,21 +70,23 @@ if ($LASTEXITCODE -ne 0) { throw 'Clean candidate checks failed' }
 
 ## 更新已有安装
 
-更新前保存当前提交号和本机配置备份，备份放在忽略目录或仓库外，保留相对目录结构；不要把凭证写进发布说明或提交。源码更新后重新构建并验证，再执行：
+先保留本机配置和当前提交号，更新源码后运行相应检查。需要重建界面或锚点时：
 
 ```powershell
-# 预览 HUD 产物差异，不停止实例
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Deploy-Toolbox.ps1 -PlanOnly
-if ($LASTEXITCODE -ne 0) { throw 'Deployment preview failed' }
+# 构建和验证候选，仅预览差异，当前实例继续运行
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Rebuild-ToolboxHud.ps1 -PlanOnly
 
-# 部署 HUD 差异并重载本仓库 AHK；无产物差异时仍读取新 AHK 源码
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Deploy-Toolbox.ps1 -ForceReload
-if ($LASTEXITCODE -ne 0) { throw 'Deployment failed; inspect release evidence' }
+# 重新构建、备份并部署 HUD + anchor，重载后检查运行状态
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Rebuild-ToolboxHud.ps1
 
-python tools/diagnostics/doctor.py --json --output .tmp/diagnostics/after-update.json
+python tools/diagnostics/doctor.py
 ```
 
-保留部署输出的 `Release` 绝对路径及其中的 manifest/backup。发布操作只管理 HUD 产物和当前 checkout 的 AHK/HUD/光标助手；Python OCR、翻译、朗读下次调用读取新源码，不需要另起常驻。TTS 依赖锁变化时先执行安装/检查，再验收新请求。
+Raycast 的 **Reload IME HUD** 使用同一流程。构建失败保留当前运行实例；替换或健康检查失败时尝试恢复本次写入。候选、日志和备份位于 Git 忽略的 `.tmp/`，保留部署输出中的 `Release` 路径。
+
+已有经过完整检查的 `test-out` 时，也可用原 `Deploy-Toolbox.ps1` 仅发布 HUD。只需重新加载 AHK 源码时，可在相同前提下加 `-ForceReload`。两种发布方式的备份范围不同，回滚时按下一节区分。
+
+Python OCR、翻译和朗读在下次调用时读取新源码。TTS 或 OCR 依赖锁变化时，重新执行对应安装入口及 `--check`。
 
 PowerPolicy 源码或配置变化时，单独优雅重载已有任务：
 
@@ -88,24 +100,33 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 
 | 对象 | 恢复方法 | 边界 |
 | --- | --- | --- |
-| HUD 部署产物 | 使用部署输出的 `Release` 路径 | 恢复该发布清单中的字节，并重载当前 AHK 源码 |
+| 单独 HUD 发布 | `Deploy-Toolbox.ps1 -RollbackRelease`，使用其输出的 Release 路径 | 仅接受目标为 HUD out 的原发布记录 |
+| HUD＋anchor 复合发布 | 替换或健康检查失败时自动恢复本次写入；保留复合发布记录供审阅 | 不能传给旧的单目录回滚入口；手动恢复入口见后续计划 |
 | AHK/Python/PowerPolicy 源码 | 审阅具体 Git 差异，应用修复提交或恢复已选定版本，再按模块重载 | HUD 回滚不会恢复源码；保留未提交改动与个人配置 |
 | 个人 TOML/凭证 | 从本机配置备份恢复所需文件，再按模块重新读取 | 不在部署产物备份内 |
-| 翻译/朗读窗口偏好 | 设置窗口点“预览 TOML 设置”后保存，移除旧覆盖；重新加载可放弃预览。需要保留旧偏好时，操作前单独备份本仓库身份对应的 `preferences.json` | 位于 LOCALAPPDATA，不在 HUD 产物备份中；不改 TOML/密钥，旧源码忽略它，仓库移动后身份变化 |
+| 设置和偏好 | 在设置页点击“默认”恢复该页；完整恢复使用本机配置备份 | 偏好在 `.toolbox-state/`，开关/键位在 `.toolbox-controls.json`，模块配置在各 TOML；恢复默认保留厂商密钥 |
 | TTS Python 环境 | 使用所选源码版本的锁文件执行安装/检查 | HUD 回滚不回退包；旧 repo 环境保留但不会自动取代就绪的 profile 环境 |
 | 电源设置/设备恢复记录 | 使用现有 PowerPolicy 恢复/卸载入口 | 不属于 HUD 回滚；设备不可用时保留未成功恢复的记录 |
 
 ```powershell
-# 将示例路径替换为实际部署输出的 Release；不是 test-out 或其他仓库备份
+# 仅用于 Deploy-Toolbox 的单独 HUD 发布记录，不接受 hud-* 复合发布记录
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Deploy-Toolbox.ps1 `
   -RollbackRelease 'C:\path\to\repo\.tmp\releases\release-id'
 python tools/diagnostics/doctor.py
 ```
 
-部署失败会尝试恢复本次写入的产物。遇到其他写入导致的 `Automatic rollback conflict` 时会保留现场；先审阅当前差异与备份，再决定是否显式回滚。显式回滚会恢复所选备份，并额外保存回滚前字节。若原发布只重载、没有产物差异，清单为空，回滚它不能撤销源码更新。
+部署失败会尝试恢复本次写入的产物。遇到其他写入导致的 `Automatic rollback conflict` 时会保留现场；先审阅当前差异与备份，再决定是否显式回滚。原单目录入口的显式回滚会恢复所选备份，并额外保存回滚前字节。若原发布只重载、没有产物差异，清单为空，回滚它不能撤销源码更新。
 
 ## 合并与发布记录
 
 每次候选记录：提交 SHA、相对 `main` 的完整范围、对应 SHA 的 CI、干净 clone 报告、基础使用验收及剩余专项矩阵。草稿 PR 不等于合并或正式发布；本仓库没有自动发布安装包的流程。
 
-本轮候选见 [2026-11-22 文本工作流说明](releases/2026-11-22-text-workflow.md)，前一轮见 [2026-11-21 基础可靠性记录](releases/2026-11-21-reliability.md)。本机配置、偏好文件、运行日志、模型、依赖环境和 `.tmp` 证据不作为发布附件；自动化报告只记录必要元数据。分享诊断使用 `doctor.py --bundle <新 ZIP 路径>`；`--output` 的普通本地报告仍含路径/PID，不应当作脱敏附件。
+当前更新见 [2026-11-24 工具箱更新](releases/2026-11-24-toolbox.md)，后续方向见[更新计划](ROADMAP.md)。[文本工作流](releases/2026-11-22-text-workflow.md)和[基础可靠性](releases/2026-11-21-reliability.md)作为历史记录保留。本机配置、偏好文件、运行日志、模型、依赖环境和 `.tmp` 证据不作为发布附件；自动化报告只记录必要元数据。分享诊断使用 `doctor.py --bundle <新 ZIP 路径>`；`--output` 的普通本地报告仍含路径/PID，不应当作脱敏附件。
+
+## 提交范围
+
+- **保留在仓库**：源码、配置模板、依赖锁、许可证、必要资源、使用指南和整理后的发布记录。
+- **只留本机**：密钥、连接目标、个人配置改动、运行日志、测试截图、诊断包、候选/备份、虚拟环境及会话任务/进度/研究笔记。
+- `findings.md`、`progress.md`、`task_plan.md` 和机器验收笔记不再跟踪，已有本地文件保留。公共后续计划集中在 `docs/ROADMAP.md`。
+- `.gitignore` 只影响未跟踪文件。已有配置模板的个人改动需要逐文件审阅，不能通过添加一条忽略规则隐藏；本机填入的密钥不要暂存。
+- 当前跟踪的三个运行助手 exe 仍由现有启动/测试流程使用，保留兼容基线；重新构建产生的本机字节差异不自动提交。HUD、PyInstaller 和其他构建目录继续忽略。

@@ -1,5 +1,7 @@
 # 2026-11-22 文本工作流候选
 
+> 历史发布记录，保留当时的验证边界。当前功能和更新步骤见[最新更新](2026-11-24-toolbox.md)及[安装指南](../RELEASING.md)。
+
 范围对应草稿 [PR #3](https://github.com/darkings/lat3ncy-scripts-toolbox/pull/3)，基于已合并的 `main`（`9d6ad01`），本批功能提交 `c72452a`。最终提交和对应 CI 以 PR 中精确 SHA 的记录为准；此文档不代表已合并、打 tag 或发布安装包。
 
 ## 变化

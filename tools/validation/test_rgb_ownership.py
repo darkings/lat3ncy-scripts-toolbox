@@ -155,6 +155,20 @@ if(-not $rejected -or ($global:trace -join ',') -ne 'stop'){throw 'orphan writer
         self.assertNotEqual(quit_flag_name(self.rgb), quit_flag_name(self.rgb.parent / 'other'))
         self.assertNotEqual('rgb-quit.flag', value)
 
+    def test_short_path_scope_expands_existing_prefix_with_missing_leaf(self):
+        import ctypes
+        from ctypes import wintypes
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.GetShortPathNameW.argtypes=[wintypes.LPCWSTR,wintypes.LPWSTR,wintypes.DWORD]
+        kernel.GetShortPathNameW.restype=wintypes.DWORD
+        buffer=ctypes.create_unicode_buffer(32768)
+        size=kernel.GetShortPathNameW(os.environ['ProgramFiles'],buffer,len(buffer))
+        self.assertTrue(0<size<len(buffer))
+        short=Path(buffer.value)/'Lat3ncyRgbFixtureMissing'/ 'rgb'
+        value=self.ps("[IO.Path]::GetFileName((Get-RgbQuitFlag '"+str(short).replace("'","''")+"'))")
+        self.assertEqual(quit_flag_name(short),value)
+        self.assertEqual(quit_flag_name(Path(os.environ['ProgramFiles'])/'Lat3ncyRgbFixtureMissing'/'rgb'),value)
+
     def test_powershell_quit_request_is_readable_by_python_and_cleanup_is_conditional(self):
         text=self.ps(r'''
 $s=Get-RgbProcessSnapshot $RgbRoot {$row} $identity

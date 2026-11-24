@@ -19,7 +19,27 @@ class RgbBusy(RuntimeError):
 
 
 def quit_flag_name(rgb_root: Path) -> str:
-    identity = os.path.abspath(rgb_root).replace('/', '\\').rstrip('\\').lower()
+    identity = os.path.abspath(rgb_root)
+    if sys.platform == 'win32':
+        # PS5.1's .NET Framework GetFullPath expands existing 8.3 prefixes.
+        # Match that behavior without resolving junctions or requiring the leaf.
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.GetLongPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        kernel.GetLongPathNameW.restype = wintypes.DWORD
+        current, suffix = Path(identity), []
+        while True:
+            buffer = ctypes.create_unicode_buffer(32768)
+            ctypes.set_last_error(0)
+            size = kernel.GetLongPathNameW(str(current), buffer, len(buffer))
+            if 0 < size < len(buffer):
+                identity = str(Path(buffer.value).joinpath(*reversed(suffix)))
+                break
+            error = ctypes.get_last_error()
+            if size >= len(buffer) or error not in (2, 3) or current.parent == current:
+                raise RgbBusy('rgb-root-unavailable')
+            suffix.append(current.name)
+            current = current.parent
+    identity = identity.replace('/', '\\').rstrip('\\').lower()
     return 'rgb-quit-' + hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24] + '.flag'
 
 

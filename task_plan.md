@@ -5,6 +5,7 @@
 - [x] 复现 Caffeine 显示开关开启却无图标：多行 JSON 在 AHK 解析时被拒绝。修复字段间换行/制表符，新增开关及非法尾逗号回归；真实配置只读探针恢复正常。
 - [x] 干净候选 offline/helpers/full 三阶段通过（297 项 Python）；314 个代码/资产与候选导出匹配。正式重载 AHK 38748，Caffeine show -> OK / active=1；HUD PING 健康，个人配置及 RGB 禁用保持。
 - 证据 .tmp/validation/20261124-rgb-caffeine-final/、.tmp/rgb-caffeine-deploy.log、.tmp/rgb-caffeine-verification.json。Computer Use 未暴露任务栏，展开/折叠位置未作视觉验收。远端精确提交 CI 见本批草稿 PR。
+- [x] 首轮远端 CI 暴露短路径差异：PS5.1 GetFullPath 展开 8.3 前缀，Python abspath 保留短名。统一退出范围并补缺失叶路径回归，11 项归属与 16 项 RGB 回归通过；后续干净候选及远端精确提交结果见草稿 PR #4。
 - 后续优先：HUD 重建入口改用正式构建/验证/部署事务；实际灯光、跨用户会话、Explorer 重启和托盘可见位置仍单列验收。
 
 ## 2026-11-24 Raycast 面板设置与功能检查

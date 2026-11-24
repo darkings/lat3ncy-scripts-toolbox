@@ -1,6 +1,7 @@
 #Requires AutoHotkey v2.0
 #Include ..\..\shared\notify\run-nowindow.ahk
 #Include ..\..\shared\notify\translation-panel.ahk
+#Include ..\..\shared\notify\translation-request-files.ahk
 
 ; 请求序号只负责"谁是最新请求"。旧请求完成时必须被丢弃，
 ; 不能覆盖或关闭新请求已经打开的面板。
@@ -62,6 +63,10 @@ class TranslateSelectedText {
     static PollTimer := ""
     ; 测试注入用；生产保持 0。只影响面板/通知副作用，不影响轮询和状态机。
     static Hooks := 0
+    static Workflow := 0
+    static ExitBound := ""
+    static ShuttingDown := false
+    static ShutdownBudgetMs := 1500
 
     static RepoDir() {
         if (this.CachedRepoDir != "")
@@ -93,6 +98,20 @@ class TranslateSelectedText {
         return this.RepoDir() "\tools\translate\config.toml"
     }
 
+    static RequestRoot() => TranslationRequestFiles.Root(this.RepoDir())
+
+    static ScavengeRequests() {
+        result := TranslationRequestFiles.Scavenge(this.RequestRoot(), this.RepoDir())
+        if (result.removed || result.deferred)
+            this.Log("scavenge removed=" result.removed " deferred=" result.deferred)
+        return result
+    }
+
+    static KeepsResume(owner) {
+        return owner.Holds > 0 || (IsObject(this.Workflow) && this.Workflow.HasOwnProp("ResumeOwner")
+            && this.Workflow.ResumeOwner = owner && this.Workflow.ResumeFile = owner.resumeFile)
+    }
+
     static LogPath() {
         return A_Temp "\lat3ncy-translate.log"
     }
@@ -119,13 +138,16 @@ class TranslateSelectedText {
     }
 
     static ParseField(content, name) {
+        ; text consumes the remainder, including lines that look like headers.
+        hasText := RegExMatch(content, "m)^text=", &body)
+        if (name = "text")
+            return hasText ? SubStr(content, body.Pos + body.Len) : ""
+        header := hasText ? SubStr(content, 1, body.Pos - 1) : content
         needle := "m)^" name "="
-        if !RegExMatch(content, needle, &match)
+        if !RegExMatch(header, needle, &match)
             return ""
         start := match.Pos + match.Len
-        rest := SubStr(content, start)
-        if (name = "text")
-            return rest
+        rest := SubStr(header, start)
         lineEnd := InStr(rest, "`n")
         if !lineEnd
             return Trim(rest, "`r")
@@ -187,11 +209,19 @@ class TranslateSelectedText {
         if (selected = "")
             selected := this.Normalize(A_Clipboard)
 
+        return this.TranslateText(selected, hotkeyX, hotkeyY)
+    }
+
+    ; Shared backend entry; callers supply text directly, never through clipboard.
+    static TranslateText(selected, hotkeyX := 0, hotkeyY := 0, keepSourceOnError := false, options := 0) {
+        if this.ShuttingDown
+            return 0
+        selected := this.Normalize(selected)
         if (selected = "") {
             Notify.Error("!", "未选中文字")
             return
         }
-        if !this.HasTranslatableText(selected) {
+        if (!this.HasTranslatableText(selected) && !keepSourceOnError) {
             Notify.Error("!", "未包含可翻译文字")
             return
         }
@@ -204,35 +234,68 @@ class TranslateSelectedText {
             return
         }
 
+        ; Pin a retry checkpoint across Begin/ClearContext. Each attempt gets
+        ; separate input/result files, even if an old completion is interrupted.
+        retryOwner := 0
+        if (IsObject(options) && options.Has("resumeOwner") && IsObject(options["resumeOwner"])) {
+            try {
+                retryOwner := options["resumeOwner"]
+                if (!(retryOwner is TranslationRequestFiles) || !retryOwner.CanResume(this.RequestRoot(), this.RepoDir()))
+                    throw Error("retry owner expired")
+                retryOwner.Holds += 1
+            } catch {
+                this.ShowError("重试任务已过期，请重新翻译")
+                return 0
+            }
+        }
         ; 连续触发：旧请求立即取消，它完成后的结果会因序号过期被丢弃。
         this.CancelCurrent()
 
         requestId := this.RequestGate.Begin()
-        stamp := A_TickCount "-" requestId "-" Random(1000, 9999)
-        inputFile := A_Temp "\lat3ncy-translate-in-" stamp ".txt"
-        outputFile := A_Temp "\lat3ncy-translate-out-" stamp ".txt"
-        try FileDelete inputFile
-        try FileDelete outputFile
-
-        cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '" --output-file "' outputFile '"'
-        if FileExist(configPath)
-            cmd .= ' --config "' configPath '"'
-
+        if IsObject(this.Workflow)
+            this.Workflow.Begin(requestId)
+        target := IsObject(options) && options.Has("target") ? options["target"] : ""
         job := ""
+        files := 0
         panelOpened := false
         try {
+            this.ScavengeRequests()
+            files := TranslationRequestFiles(this.RequestRoot(), this.RepoDir())
+            resumeOwner := IsObject(retryOwner) ? retryOwner : files
+            inputFile := files.inputFile, outputFile := files.outputFile, resumeFile := resumeOwner.resumeFile
+            if (IsObject(this.Workflow) && HasMethod(this.Workflow, "Context"))
+                this.Workflow.Context(requestId, selected, hotkeyX, hotkeyY, resumeFile, target, resumeOwner)
+            cmd := '"' pythonExe '" "' scriptPath '" --input-file "' inputFile '" --output-file "' outputFile '"'
+            cmd .= ' --request-id ' requestId ' --resume-file "' resumeFile '" --trace-file "' outputFile '.trace"'
+            if RegExMatch(target, "^(auto|zh|en)$")
+                cmd .= ' --target-language ' target
+            if FileExist(configPath)
+                cmd .= ' --config "' configPath '"'
             FileAppend selected, inputFile, "UTF-8"
             ; 翻译一开始就打开 WinUI 面板显示原文。
-            panelOpened := TranslationPanel.OpenText(selected, hotkeyX, hotkeyY)
+            panelOpened := this.OpenPanel(selected, hotkeyX, hotkeyY)
+            if (panelOpened && IsObject(this.Workflow))
+                this.Workflow.Bind(requestId)
             ; 非等待启动：热键线程立刻返回，翻译在子进程里跑，AHK 定时器不受阻。
-            job := ProcessNoWindow.StartAsync(cmd, "", this.ProcessTimeoutMs)
+            job := ProcessNoWindow.StartAsync(cmd, "", this.ProcessTimeoutMs, true)
         } catch as err {
-            try FileDelete inputFile
-            try FileDelete outputFile
-            try TranslationPanel.Close()
+            if IsObject(files) {
+                files.Busy := false
+                files.Cleanup(this.KeepsResume(files))
+            }
+            if !(keepSourceOnError && panelOpened && this.IsPanelOpen())
+                try this.ClosePanel()
             this.Log("start-failed id=" requestId " error=" err.Message)
-            Notify.Error("×", "翻译失败")
+            if (IsObject(this.Workflow) && HasMethod(this.Workflow, "Failed"))
+                this.Workflow.Failed(requestId)
+            this.ShowError("翻译失败")
             return
+        } finally {
+            if IsObject(retryOwner) {
+                retryOwner.Holds -= 1
+                if !this.KeepsResume(retryOwner)
+                    retryOwner.Cleanup(false)
+            }
         }
 
         task := {
@@ -241,12 +304,18 @@ class TranslateSelectedText {
             inputFile: inputFile,
             outputFile: outputFile,
             panelOpened: panelOpened,
-            dismissed: false
+            dismissed: false,
+            started: A_TickCount,
+            keepSourceOnError: keepSourceOnError
         }
+        task.resumeFile := resumeFile
+        task.files := files
+        task.resumeOwner := resumeOwner
         this.Tasks.Push(task)
         this.CurrentTask := task
         this.EnsurePoll()
         this.Log("begin id=" requestId " chars=" StrLen(selected) " pid=" job.Pid " panel=" panelOpened)
+        return requestId
     }
 
     static CancelCurrent() {
@@ -261,6 +330,10 @@ class TranslateSelectedText {
     }
 
     static EnsurePoll() {
+        if (this.ExitBound = "") {
+            this.ExitBound := ObjBindMethod(this, "Shutdown")
+            OnExit this.ExitBound
+        }
         if (this.PollTimer != "")
             return
         this.PollTimer := ObjBindMethod(this, "Poll")
@@ -284,8 +357,78 @@ class TranslateSelectedText {
     }
 
     static CleanupTaskFiles(task) {
+        if task.HasOwnProp("files") {
+            task.files.Busy := false
+            clean := task.files.Cleanup(this.KeepsResume(task.files))
+            if (task.resumeOwner != task.files)
+                clean := task.resumeOwner.Cleanup(this.KeepsResume(task.resumeOwner)) && clean
+            return clean
+        }
+        clean := true
         try FileDelete task.inputFile
         try FileDelete task.outputFile
+        try FileDelete task.outputFile ".trace"
+        clean := !FileExist(task.outputFile ".trace")
+        loop files task.outputFile ".*.tmp", "F" {
+            try FileDelete A_LoopFileFullPath
+            clean := !FileExist(A_LoopFileFullPath) && clean
+        }
+        if task.HasOwnProp("resumeFile") {
+            retained := IsObject(this.Workflow) && this.Workflow.HasOwnProp("ResumeFile") && this.Workflow.ResumeFile = task.resumeFile
+            if !retained {
+                try FileDelete task.resumeFile
+                clean := !FileExist(task.resumeFile) && clean
+            }
+            loop files task.resumeFile ".*.tmp", "F" {
+                try FileDelete A_LoopFileFullPath
+                clean := !FileExist(A_LoopFileFullPath) && clean
+            }
+        }
+        return clean && !FileExist(task.inputFile) && !FileExist(task.outputFile)
+    }
+
+    static Shutdown(*) {
+        if this.ShuttingDown
+            return 0
+        this.ShuttingDown := true
+        this.StopPoll()
+        this.CancelCurrent()
+        retainedOwner := IsObject(this.Workflow) && this.Workflow.HasOwnProp("ResumeOwner") ? this.Workflow.ResumeOwner : 0
+        if (IsObject(this.Workflow) && HasMethod(this.Workflow, "ClearContext"))
+            this.Workflow.ClearContext()
+        tasks := this.Tasks
+        deadline := A_TickCount + this.ShutdownBudgetMs
+        for task in tasks {
+            if !task.job.Done
+                try task.job.Cancel()
+        }
+        loop {
+            pending := false
+            for task in tasks {
+                if !task.job.Done {
+                    try task.job.Poll()
+                    pending := pending || !task.job.Done
+                }
+            }
+            if (!pending || A_TickCount >= deadline)
+                break
+            Sleep 10
+        }
+        for task in tasks
+            try task.job.Dispose()
+        loop {
+            clean := true
+            if IsObject(retainedOwner)
+                clean := retainedOwner.Cleanup(false)
+            for task in tasks
+                clean := this.CleanupTaskFiles(task) && clean
+            if (clean || A_TickCount >= deadline)
+                break
+            Sleep 10
+        }
+        this.Tasks := []
+        this.Log("shutdown tasks=" tasks.Length " cleanup=" (clean ? "complete" : "incomplete"))
+        return 0
     }
 
     static IsPanelOpen() {
@@ -294,12 +437,26 @@ class TranslateSelectedText {
         return TranslationPanel.IsOpen()
     }
 
+    static OpenPanel(text, x, y) {
+        if (IsObject(this.Hooks) && this.Hooks.Has("open"))
+            return this.Hooks["open"].Call(text, x, y)
+        return TranslationPanel.OpenText(text, x, y)
+    }
+
     static ShowError(message) {
         if (IsObject(this.Hooks) && this.Hooks.Has("error")) {
             this.Hooks["error"].Call(message)
             return
         }
         Notify.Error("×", message)
+    }
+
+    static LogFallback(preferred, actual, reason) {
+        engines := Map("tencent", true, "aliyun", true, "google_gtx", true, "mymemory", true)
+        if (!engines.Has(preferred) || !engines.Has(actual) || preferred = actual
+            || !RegExMatch(reason, "^(credentials|auth|network|timeout|too_long)$"))
+            return
+        this.Log("fallback preferred=" preferred " engine=" actual " reason=" reason)
     }
 
     static ShowPopup(text) {
@@ -336,6 +493,8 @@ class TranslateSelectedText {
         remaining := []
         for task in this.Tasks {
             ; Done 只由 Job.Poll() 推进；定时器必须实际轮询子进程。
+            if (this.CurrentTask = task)
+                this.ReadProgress(task)
             task.job.Poll()
             if !task.job.Done {
                 ; 用户关掉面板就取消请求；不要再把结果塞回已关的面板。
@@ -359,24 +518,35 @@ class TranslateSelectedText {
                 this.RequestGate.CancelCurrent()
             }
 
-            switch decision {
-                case "apply", "apply-fallback":
-                    this.ApplyResult(task, decision = "apply-fallback")
-                case "timeout":
-                    this.Fail(task, "翻译超时", "timeout")
-                case "error":
-                    this.Fail(task, "翻译失败", status)
-                case "discard-stale":
-                    this.Log("discard-stale id=" task.id " status=" status)
-                case "discard-dismissed":
-                    this.Log("discard-dismissed id=" task.id)
-                case "discard-cancelled":
-                    this.Log("discard-cancelled id=" task.id)
-                default:
-                    this.Log("discard-unknown id=" task.id " decision=" decision)
+            deliveryFailed := false
+            try {
+                switch decision {
+                    case "apply", "apply-fallback":
+                        this.ApplyResult(task, decision = "apply-fallback")
+                    case "timeout":
+                        this.Fail(task, "翻译超时", "timeout")
+                    case "error":
+                        this.Fail(task, "翻译失败", status)
+                    case "discard-stale":
+                        this.Log("discard-stale id=" task.id " status=" status)
+                    case "discard-dismissed":
+                        this.Log("discard-dismissed id=" task.id)
+                    case "discard-cancelled":
+                        this.Log("discard-cancelled id=" task.id)
+                    default:
+                        this.Log("discard-unknown id=" task.id " decision=" decision)
+                }
+            } catch {
+                ; A failed UI callback must not escape a timer or expose its
+                ; potentially private exception text. Do not retry notifications.
+                this.Log("delivery-failed id=" task.id " diagnostic=internal")
+                deliveryFailed := true
+            } finally {
+                try this.LogEngineRoutes(task)
+                try this.RecordMetric(task, decision, deliveryFailed)
+                ; The protocol must be read first, then removed on every path.
+                this.CleanupTaskFiles(task)
             }
-            ; 结果文件必须先读后删。
-            this.CleanupTaskFiles(task)
         }
 
         this.Tasks := remaining
@@ -387,6 +557,24 @@ class TranslateSelectedText {
     static ApplyResult(task, fallback) {
         content := this.ReadOutput(task.outputFile)
         status := this.ParseField(content, "status")
+        if ((status = "partial" && this.ParseField(content, "version") != "1") || (this.ParseField(content, "version") != "" &&
+            (this.ParseField(content, "version") != "1" || this.ParseField(content, "request_id") != task.id))) {
+            this.Fail(task, "翻译结果归属无效", "internal")
+            return
+        }
+        if (status = "partial") {
+            text := this.ParseField(content, "text")
+            if fallback
+                this.ShowPopup(text)
+            else {
+                this.SetPanelResult(text)
+                this.ShowProgress(task, content)
+            }
+            if (IsObject(this.Workflow) && HasMethod(this.Workflow, "Failed"))
+                this.Workflow.Failed(task.id)
+            this.Log("partial id=" task.id " diagnostic=" this.ParseField(content, "code"))
+            return
+        }
         if (status != "ok") {
             code := this.ParseField(content, "code")
             message := this.ParseField(content, "message")
@@ -407,6 +595,7 @@ class TranslateSelectedText {
 
         engine := this.ParseField(content, "engine")
         cached := this.ParseField(content, "cached")
+        this.LogFallback(this.ParseField(content, "preferred_engine"), engine, this.ParseField(content, "fallback_reason"))
         if fallback {
             ; 面板不可用（HUD 未启动成功）时保留翻译能力，用 AHK popup 兜底。
             try this.ShowPopup(text)
@@ -420,13 +609,97 @@ class TranslateSelectedText {
             return
         }
         this.SetPanelResult(text)
+        if (this.ParseField(content, "version") = "1")
+            this.ShowProgress(task, content)
+        if IsObject(this.Workflow)
+            this.Workflow.Result(task.id, text)
         this.Log("ok id=" task.id " engine=" engine " cached=" cached " chars=" StrLen(text))
     }
 
     static Fail(task, message, diagnostic) {
-        try this.ClosePanel()
+        workflowContext := IsObject(this.Workflow) && HasMethod(this.Workflow, "Failed")
+        if !((workflowContext || (task.HasOwnProp("keepSourceOnError") && task.keepSourceOnError)) && task.panelOpened && this.IsPanelOpen())
+            try this.ClosePanel()
+        if workflowContext
+            this.Workflow.Failed(task.id)
         this.Log("fail id=" task.id " message=" message " diagnostic=" SubStr(diagnostic, 1, 240))
         this.ShowError(message)
+    }
+
+    static RecordMetric(task, decision, deliveryFailed) {
+        content := this.ReadOutput(task.outputFile)
+        status := this.ParseField(content, "status"), code := this.ParseField(content, "code")
+        terminal := deliveryFailed ? "failed" : InStr(decision, "discard-") ? "cancelled" : decision = "timeout" ? "timeout"
+            : status = "ok" ? "ok" : status = "partial" ? "partial" : code = "timeout" ? "timeout" : "failed"
+        engine := this.ParseField(content, "engine")
+        if !RegExMatch(engine, "^(tencent|aliyun|google_gtx|mymemory|identity|mixed)$")
+            engine := "unknown"
+        reason := this.ParseField(content, "fallback_reason")
+        if !RegExMatch(reason, "^(credentials|auth|timeout|network|too_long)$")
+            reason := "none"
+        elapsed := task.HasOwnProp("started") ? Min(7200000, Max(0, A_TickCount - task.started)) : 0
+        counts := Map("total", 1, "completed", terminal = "ok" ? 1 : 0, "failed", terminal = "ok" ? 0 : 1, "resumed", 0)
+        for field, default in counts {
+            value := this.ParseField(content, field)
+            if (RegExMatch(value, "^\d{1,3}$") && Integer(value) <= 200)
+                counts[field] := Integer(value)
+        }
+        this.Log("metric id=" task.id " status=" terminal " elapsed_ms=" elapsed " engine=" engine
+            . " cached=" (this.ParseField(content, "cached") = "1" ? 1 : 0) " fallback=" reason
+            . " total=" counts["total"] " completed=" counts["completed"] " failed=" counts["failed"] " resumed=" counts["resumed"])
+    }
+
+    static LogEngineRoutes(task) {
+        path := task.outputFile ".trace"
+        if !FileExist(path)
+            return
+        if (FileGetSize(path) > 2048)
+            return
+        content := FileRead(path, "UTF-8")
+        if (this.ParseField(content, "version") != "1" || this.ParseField(content, "request_id") != task.id)
+            return
+        for engine in ["tencent", "aliyun", "google_gtx", "mymemory"] {
+            value := this.ParseField(content, "route_" engine)
+            if !RegExMatch(value, "^(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,7}),(none|credentials|cooldown|auth|timeout|tls|http|network|response|too_long|internal)$", &fields)
+                continue
+            if (Integer(fields[1]) > 200 || Integer(fields[2]) > Integer(fields[1])
+                || Integer(fields[3]) > 200 || Integer(fields[4]) > 200 || Integer(fields[5]) > 7200000)
+                continue
+            this.Log("engine-route id=" task.id " engine=" engine " calls=" Integer(fields[1])
+                . " failed=" Integer(fields[2]) " cached=" Integer(fields[3]) " skipped=" Integer(fields[4])
+                . " elapsed_ms=" Integer(fields[5]) " kind=" fields[6])
+        }
+    }
+
+    static ReadProgress(task) {
+        if !FileExist(task.outputFile)
+            return
+        try {
+            if (FileGetSize(task.outputFile) > 4096)
+                return
+            content := this.ReadOutput(task.outputFile)
+            if (this.ParseField(content, "status") = "progress" && this.ParseField(content, "version") = "1"
+                && this.ParseField(content, "request_id") = task.id) {
+                task.job.TimeoutMs := 125000
+                this.ShowProgress(task, content)
+            }
+        }
+    }
+
+    static ShowProgress(task, content) {
+        done := this.ParseField(content, "completed"), total := this.ParseField(content, "total"), failed := this.ParseField(content, "failed")
+        if !(RegExMatch(done, "^\d{1,3}$") && RegExMatch(total, "^\d{1,3}$") && RegExMatch(failed, "^\d{1,3}$"))
+            return
+        if (Integer(total) < 1 || Integer(total) > 200 || Integer(done) + Integer(failed) > Integer(total))
+            return
+        value := done "|" total "|" failed
+        if (task.HasOwnProp("progress") && task.progress = value)
+            return
+        task.progress := value
+        if (IsObject(this.Hooks) && this.Hooks.Has("progress"))
+            this.Hooks["progress"].Call(done, total, failed)
+        else
+            TranslationPanel.SendExisting("PANEL|PROGRESS|" task.id "|" value)
     }
 }
 

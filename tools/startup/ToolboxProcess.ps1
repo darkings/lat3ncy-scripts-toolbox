@@ -345,3 +345,33 @@ function Get-StartupGuardAction {
     default { return 'query-failed' }
   }
 }
+function Stop-ToolboxOwnedHudProcess {
+  param([Parameter(Mandatory=$true)][string]$Repo,
+        [scriptblock]$ProcessProvider,
+        [scriptblock]$IdentityProvider,
+        [scriptblock]$Stopper)
+  $expected=[IO.Path]::GetFullPath((Join-Path $Repo 'tools\ime-hud-winui\out\ImeHudWinUi.exe'))
+  if(-not $ProcessProvider){$ProcessProvider={@(Get-Process -Name ImeHudWinUi -ErrorAction SilentlyContinue)}}
+  if(-not $IdentityProvider){$IdentityProvider={param($Id) Get-Process -Id $Id -ErrorAction Stop}}
+  if(-not $Stopper){$Stopper={param($Process) Stop-Process -InputObject $Process -Force -ErrorAction Stop}}
+  $all=@();$live=$null
+  try{
+    $all=@(& $ProcessProvider)
+    # Complete preflight before stopping anything. A different checkout is never a target.
+    foreach($process in $all){
+      if(-not $process.Path -or $process.Path -ine $expected){throw 'HUD ownership is unavailable or belongs to another checkout'}
+      [void]$process.StartTime
+    }
+    foreach($process in $all){
+      $ticks=$process.StartTime.ToUniversalTime().ToFileTimeUtc()
+      $live=& $IdentityProvider $process.Id
+      if(-not $live -or $live.HasExited -or $live.Path -ine $expected -or $live.StartTime.ToUniversalTime().ToFileTimeUtc() -ne $ticks){throw 'HUD identity changed before restart'}
+      # Holding the verified Process handle prevents a recycled PID becoming the target.
+      & $Stopper $live
+      if($live -is [Diagnostics.Process]){$live.Dispose()};$live=$null
+    }
+  }finally{
+    if($live -is [Diagnostics.Process]){$live.Dispose()}
+    foreach($process in $all){if($process -is [Diagnostics.Process]){$process.Dispose()}}
+  }
+}

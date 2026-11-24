@@ -1,5 +1,26 @@
 # 发现与决策
 
+## 2026-11-22：翻译异常退出后的私有文件归属
+
+- 平铺 TEMP 文件只有 tick/request/random，无法安全区分死宿主、活动任务和其他 checkout。新目录使用规范仓库身份、PID/创建 FILETIME/随机编号、完整仓库标记及独占 lease；旧格式不做批量删除。
+- 持有根/请求目录句柄，使用 OPEN_REPARSE_POINT + BACKUP_SEMANTICS，验证目录属性并拒绝 reparse point；不给目录 write/delete sharing，限制扫描期间路径被替换。依据 [CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew) 与 [目录句柄](https://learn.microsoft.com/en-us/windows/win32/fileio/obtaining-a-handle-to-a-directory)。不启用或修改权限。
+- 只清理有有效标记、原进程确定不再匹配且 lease 可独占打开的已知文件；未知内容/归属不明/链接/外部锁保留，不递归删除。重试共享检查点 lease，但新输入/结果独立，Busy 和短期 Hold 防止清理与重试交错。
+- 已有实际宿主强杀后回收、活 lease 防误删、PID 复用、未知/外仓库标记、陌生文件/子目录、预算和真实 junction 目标保留回归。源码测试移除弱平铺文件名断言，以实际文件生命周期测试验证唯一性。
+
+## 2026-11-22：Google 间歇 TLS 失败的归因缺口
+
+- 不改网络设置的固定样本：短句 4 秒参数成功（1.18 秒），同句 12 秒参数出现 URLError→SSLEOFError（5.03 秒、非超时），1260 字节长段 4 秒参数成功（2.84 秒）。当前存在 http/https 代理配置，但没有证据定位到代理或服务端，也不能凭两次成功宣称长期恢复。
+- 原 fallback_reason 保留首个腾讯 credentials，Google TLS 失败后 MyMemory 成功时无法从终态判断 Google 为什么失败。新增每个引擎的有界元数据摘要，不改原结果协议、严格鉴权或回退顺序。
+- 摘要通过拥有请求号的独立原子文件交付，AHK 校验并清理；诊断/分享包重建固定类别和数字，不保存正文、异常消息或代理地址。显式 probe_google 只发送两个固定样本，普通 doctor 继续离线。
+- 干净候选同时暴露旧设置锁初始化竞争。空锁文件的首字节在取锁前写入/flush，另一进程已锁该字节时会 PermissionError。新增真实子进程、父进程锁住空文件的确定性回归，旧代码复现 flush 失败；删除锁前写入，直接锁范围。微软 [_locking](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/locking?view=msvc-170) 和 [字节范围锁](https://learn.microsoft.com/en-us/windows/win32/fileio/locking-and-unlocking-byte-ranges-in-files) 文档明确允许锁住 EOF 之后的范围；不需要初始化内容。
+
+## 2026-11-22：设置窗口关闭与常驻生命周期
+
+- 原生 HWND HUD 增加普通 XAML 设置窗口后，实际关闭设置导致 PID 17200 结束，AHK 后续恢复新 HUD；这不是设置读取失败。控件树和 settings-loaded 已确认加载成功。
+- 本地 Windows App SDK 1.8 的 Microsoft.WinUI.xml 提供 Application.DispatcherShutdownMode。微软 [1.8 属性说明](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.application.dispatchershutdownmode?view=windows-app-sdk-1.8) 说明 Application.Start 将当前线程设为 OnLastWindowClose；混合原生 HWND 常驻应改 OnExplicitShutdown，正式结束时主动 Application.Exit。
+- HudApp 构造时显式设置该模式。新增 --settings-lifecycle-test，不占用 HUD 全局标识、不保存设置、不注入输入，连续两轮设置加载/关闭后继续 Dispatcher 调度；独立源码构建产物实际返回 0。
+- Computer Use 可枚举新设置窗口并读取全部控件/已加载状态，点击“重新加载”仍 GetCursorPos 0x80070005；没有成功输入，不能据此标为点击/视觉/声音通过。普通 ShellExecute 启动在后台环境挂起，清理精确自有 launcher PID，Raycast 改无 shell 的 ProcessStartInfo/CreateNoWindow，正常原生 CLI 转发已验证。
+
 ## 2026-10-01：中英文切换提示不跟光标（锚点退化）
 
 ### 现象
@@ -138,7 +159,7 @@ powershell -NoProfile -Command "\$e=\$null; [void][Management.Automation.Languag
   3. DWM 美化工具（Mica For Everyone 等）仅作用于底层非客户区，被上层 Qt 白色控件完全遮挡。
   4. 外部透明浮层（Overlay）在 3D 渲染交换链上方会导致高频 Z-fighting 频闪，无法用于生产。
 - **决策**：
-  - 工具箱不保留侵入式浮层；`tools/raycast-scripts/force-dark-titlebar.ps1` 保留参数净化与 `-Silent` 健壮性修复。
+  - 工具箱不保留侵入式浮层；此前的手动窗口标题栏配色功能及脚本已于 2026-11-23 按用户要求移除。
   - 需要单窗口、原生深浅跟随与比例保持的用户推荐使用独立模拟器方案（如 MuMu 12 单应用独立窗口模式）或 Scrcpy 极客封装。
 
 
@@ -677,3 +698,19 @@ notify rc=0 stderr=''  7s later  ← 结果 Toast 成功
 - 任何 `except Exception: return` 都必须先 `_debug(...)`——这次正是"静默吞异常"让 Toast 失败变得完全不可见。
 - ONNX/OpenMP 类推理库默认吃满所有核心，在交互式小工具里**必须主动限线程**：高负载时抢占会让本来 2s 的事变成 20s。
 - 超过 3 秒的操作要有**立即可见的中间反馈**，否则功能正常也会被感知成"坏了"。
+
+## 2026-11-22 设置恢复配置文件
+
+- 窗口偏好覆盖 TOML，但此前恢复需手动找到并改名 JSON，缺少可发现的入口。采用先预览、后保存：不直接删除文件，用户可重新加载或关闭放弃。
+- 重置不能把当前 TOML 全字段再存为覆盖，否则后续编辑 TOML 仍无效。保存重置后仅保留与预览配置不同的手动修改；空覆盖也走原子替换，沿用 OS 写锁与 CAS。
+- 预览携带不含凭证的白名单配置摘要，保存时检查相关配置是否变化；普通偏好修订检查防止其他窗口保存被覆盖。摘要只覆盖非敏感有效字段，密钥变化不进入窗口响应。
+- ui-ux-pro-max 的首次 settings reset undo 查询误匹配 Web stacking context，已弃用；缩小查询命中所有平台的确认/反馈规则。WinUI 查询命中异步 IO 与标准控件指导。本次使用原生按钮、现有 polite 状态区和显式保存，不新增模态确认。
+- 微软命令反馈与按钮指南支持状态反馈和原生操作入口：https://learn.microsoft.com/en-us/windows/apps/design/basics/commanding-basics 、https://learn.microsoft.com/en-us/windows/apps/design/controls/buttons 。
+
+## 2026-11-22 工具箱统一设置中心
+
+- 七份配置跨 Python、PowerShell、C# 与 AHK。沿用各消费者原有文件，统一入口只做固定白名单字段编辑，避免为全部模块再增加一套跨语言覆盖身份与生效机制。基本翻译/TTS 偏好保留原方案，高级页不重复编辑这些覆盖字段。
+- PowerPolicy 配置有字面 Windows 反斜杠，不能直接用完整 TOML 解析器读写；使用匹配原标量读取器的分支，其余六份做标准 TOML 及赋值区间扫描。多行未知值先完整消费，不能把正文中的键/节识别为可编辑目标。
+- 原生全页面探针复现多行列表加载即变更：TextBox 在 AcceptsReturn 开启前设置 Text 会改写换行。已调整初始化次序并统一 CR/LF，再验证音频列表等七页全为零变更，不进行真实配置保存。
+- 原子替换会带来新文件身份，需在临时文件写入完整配置前复制原 DACL；专属受保护 DACL 的真实替换及权限复制失败时临时文件仍空均已回归。只读/EFS 文件拒绝保存，避免丢失其保护属性。未调用 ReplaceFileW，其部分失败状态和临时明文需要额外恢复设计，本轮不采用。
+- API 依据：https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-getfilesecurityw 、https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-setfilesecurityw 。GetFileSecurity/SetFileSecurity 是仍支持的旧 API；不读取 SACL 或申请权限，不更改真实配置权限。

@@ -2,6 +2,8 @@
 
 以下命令均在目标仓库根目录运行。安装依赖、部署产物、注册任务是不同操作，按所需模块执行。日常检查可直接运行 `python tools/diagnostics/doctor.py`。
 
+已有配置可以从 [工具箱设置中心](../tools/settings/README.md) 统一管理：Raycast Toolbox Settings 或翻译面板的工具箱设置。基础翻译/朗读偏好独立保存，其他分类编辑对应 TOML 的白名单字段；原凭证和未修改内容保留。保存各页只更新配置，系统/硬件模块按页面注明的既有入口应用。更新前仍需自行保留本机配置备份，不能用 HUD 产物回滚代替配置恢复。
+
 ## 环境与首次安装
 
 当前发布验证环境为 Windows x64、AutoHotkey v2、Python 3.11+、系统 Windows PowerShell 5.1；WinUI 源码构建使用 .NET 10 SDK，CI 固定为 10.0.404。RapidOCR 单独使用 Python 3.14 环境。新机器需先安装这些所需工具；首次构建会恢复 NuGet 包，Python 安装命令也需要网络。
@@ -24,14 +26,14 @@ python tools/tts/install-deps.py --check
 
 依赖按 `requirements.lock` 的版本和哈希安装，不安装到全局 Python。`auto` 的本地 WinRT/SAPI 路径失败后会在线回退，向语音服务发送待朗读文本；显式 `engine = "winrt"` 保持离线。已有环境检查正常时无需重装。
 
-需要 RapidOCR 时，在已安装 uv 的机器创建专用环境；已存在且正常的环境跳过创建与安装：
+需要 RapidOCR 或截图翻译时，在已安装 uv 的机器使用专用环境安装入口；已存在且版本/导入正常的环境不会重装：
 
 ```powershell
-uv venv --python 3.14 tools/raycast-scripts/ocr/.venv314
-uv pip install --python tools/raycast-scripts/ocr/.venv314/Scripts/python.exe rapidocr-onnxruntime pillow pyperclip
+python tools/raycast-scripts/ocr/install-deps.py
+python tools/raycast-scripts/ocr/install-deps.py --check
 ```
 
-将 `tools/raycast-scripts/ocr/config.toml` 的 `ocr` 设为 `rapidocr` 后，启动器优先使用该环境声明的同版基础 `pythonw.exe` 和原依赖目录。`system` 模式使用 Windows 截图文本操作，不需要这些模型依赖。OCR 包目前未提供完整哈希锁，以上安装不保证不同日期解析出相同版本；本轮实际版本见诊断报告。不要用全局 Python 3.15 替代已验证的 cp314 环境。
+将 `tools/raycast-scripts/ocr/config.toml` 的 `ocr` 设为 `rapidocr` 后，独立 OCR 启动器优先使用该环境声明的同版基础 `pythonw.exe` 和原依赖目录。`system` 模式使用 Windows 截图文本操作，不需要这些模型依赖；截图翻译单独使用本地 RapidOCR，不改变该配置。OCR 全部依赖已有版本/SHA-256 锁，安装只管理模块 `.venv314`；全局 Python 3.15 不加载 cp314 依赖。`--mobile-models` 仅显式下载原有可选模型，不更改配置。
 
 ## 构建与验证
 
@@ -89,6 +91,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 | HUD 部署产物 | 使用部署输出的 `Release` 路径 | 恢复该发布清单中的字节，并重载当前 AHK 源码 |
 | AHK/Python/PowerPolicy 源码 | 审阅具体 Git 差异，应用修复提交或恢复已选定版本，再按模块重载 | HUD 回滚不会恢复源码；保留未提交改动与个人配置 |
 | 个人 TOML/凭证 | 从本机配置备份恢复所需文件，再按模块重新读取 | 不在部署产物备份内 |
+| 翻译/朗读窗口偏好 | 设置窗口点“预览 TOML 设置”后保存，移除旧覆盖；重新加载可放弃预览。需要保留旧偏好时，操作前单独备份本仓库身份对应的 `preferences.json` | 位于 LOCALAPPDATA，不在 HUD 产物备份中；不改 TOML/密钥，旧源码忽略它，仓库移动后身份变化 |
 | TTS Python 环境 | 使用所选源码版本的锁文件执行安装/检查 | HUD 回滚不回退包；旧 repo 环境保留但不会自动取代就绪的 profile 环境 |
 | 电源设置/设备恢复记录 | 使用现有 PowerPolicy 恢复/卸载入口 | 不属于 HUD 回滚；设备不可用时保留未成功恢复的记录 |
 
@@ -105,4 +108,4 @@ python tools/diagnostics/doctor.py
 
 每次候选记录：提交 SHA、相对 `main` 的完整范围、对应 SHA 的 CI、干净 clone 报告、基础使用验收及剩余专项矩阵。草稿 PR 不等于合并或正式发布；本仓库没有自动发布安装包的流程。
 
-本轮候选见 [2026-11-21 发布说明](releases/2026-11-21-reliability.md)。本机配置、运行日志、模型、依赖环境和 `.tmp` 证据不作为发布附件；自动化报告只记录必要元数据。
+本轮候选见 [2026-11-22 文本工作流说明](releases/2026-11-22-text-workflow.md)，前一轮见 [2026-11-21 基础可靠性记录](releases/2026-11-21-reliability.md)。本机配置、偏好文件、运行日志、模型、依赖环境和 `.tmp` 证据不作为发布附件；自动化报告只记录必要元数据。分享诊断使用 `doctor.py --bundle <新 ZIP 路径>`；`--output` 的普通本地报告仍含路径/PID，不应当作脱敏附件。

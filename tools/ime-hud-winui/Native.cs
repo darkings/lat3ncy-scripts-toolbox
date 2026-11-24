@@ -756,6 +756,8 @@ internal static class Native
         return ReadPersonalizeDword("AppsUseLightTheme", fallback: 1) == 0;
     }
 
+    public static bool TaskbarUsesDarkMode() => ReadPersonalizeDword("SystemUsesLightTheme", fallback: 1) == 0;
+
     public static bool TransparencyEnabled()
     {
         return ReadPersonalizeDword("EnableTransparency", fallback: 1) == 1;
@@ -879,6 +881,12 @@ internal static class Native
         catch
         {
         }
+    }
+
+    public static void SyncWindowTitleTheme(IntPtr hwnd)
+    {
+        int dark = AppsUseDarkMode() ? 1 : 0;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
     }
 
     public static void ApplyDwmChrome(IntPtr hwnd, bool? dark = null, int? backdrop = null)

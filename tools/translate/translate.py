@@ -28,6 +28,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import auth_cooldown
+import engine_trace
+import long_translation as long_text
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from toolbox_preferences import apply_overlay, PreferenceError
+
 ZH_CHAR_PATTERN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
 EN_CHAR_PATTERN = re.compile(r"[A-Za-z]")
 
@@ -94,7 +102,7 @@ ENGINE_ALIASES = {
 KNOWN_ENGINES = ("tencent", "aliyun", "google_gtx", "mymemory")
 FALLBACK_ENGINES = ("google_gtx", "mymemory")
 CLOUD_ENGINES = ("tencent", "aliyun")
-# 可回退的失败：网络 / 超时 / 配额 / 服务端与响应格式。AuthError 永远不回退。
+# 可回退的失败：网络 / 超时 / 配额 / 服务端与响应格式。鉴权需显式配置才回退。
 FALLBACK_ERRORS = (
     urllib.error.URLError,
     urllib.error.HTTPError,
@@ -102,7 +110,7 @@ FALLBACK_ERRORS = (
     OSError,
     ValueError,
 )
-# 阿里云鉴权失败：密钥错/签名错。这类错误不回退，交给 AHK 弹系统 Toast。
+# 阿里云鉴权失败：密钥错/签名错，由显式回退策略决定是否使用免费引擎。
 ALIYUN_AUTH_MARKERS = (
     "invalidaccesskeyid",
     "signaturedoesnotmatch",
@@ -114,7 +122,7 @@ ALIYUN_AUTH_MARKERS = (
     "request signature does not conform",
     "未配置 accesskey",
 )
-# 腾讯云 TC3 鉴权失败。同样不回退。
+# 腾讯云 TC3 鉴权失败，使用相同的显式回退策略。
 TENCENT_AUTH_MARKERS = (
     "authfailure",
     "secretidnotfound",
@@ -136,7 +144,7 @@ class ConfigError(Exception):
 
 
 class AuthError(ValueError):
-    """云厂商密钥或签名无效。不回退 Google/MyMemory。"""
+    """云厂商密钥或签名无效；默认报错，显式开启后可回退。"""
 
 
 class FreeEngineLimitError(ValueError):
@@ -175,6 +183,10 @@ class Settings:
     max_size_mb: int
     max_files: int
     fallback_without_credentials: bool
+    source_language: str = "auto"
+    target_language: str = "auto"
+    fallback_on_auth_error: bool = False
+    long_text_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -185,6 +197,8 @@ class TranslationResult:
     engine: str
     cached: bool
     direction: str
+    preferred_engine: str = ""
+    fallback_reason: str = ""
 
 
 def detect_direction(text: str) -> str | None:
@@ -197,9 +211,31 @@ def detect_direction(text: str) -> str | None:
 
 
 def direction_langs(direction: str) -> tuple[str, str]:
-    if direction == "en-zh":
-        return "en", "zh-CN"
-    return "zh-CN", "en"
+    pairs = {"en-zh": ("en", "zh-CN"), "zh-en": ("zh-CN", "en"),
+             "en-en": ("en", "en"), "zh-zh": ("zh-CN", "zh-CN")}
+    if direction not in pairs:
+        raise ConfigError("翻译方向无效")
+    return pairs[direction]
+
+
+def normalize_language(value: object, label: str) -> str:
+    """This release supports Chinese/English only; never guess an unknown code."""
+    if not isinstance(value, str):
+        raise ConfigError(f"配置项 {label} 无效")
+    code = value.strip().lower()
+    code = {"zh-cn": "zh", "zh-hans": "zh"}.get(code, code)
+    if code not in {"auto", "zh", "en"}:
+        raise ConfigError(f"配置项 {label} 无效（支持 auto / zh / en）")
+    return code
+
+
+def resolve_direction(text: str, settings: Settings) -> str | None:
+    detected = detect_direction(text)
+    if detected is None:
+        return None
+    source = detected.split("-", 1)[0] if settings.source_language == "auto" else settings.source_language
+    target = ("en" if source == "zh" else "zh") if settings.target_language == "auto" else settings.target_language
+    return f"{source}-{target}"
 
 
 def _cfg_value(cfg: dict, key: str, default: object) -> object:
@@ -236,7 +272,10 @@ def _section_dict(cfg: dict, name: str) -> dict:
 def load_config(config_path: str | None) -> dict:
     cfg: dict = {
         "engine": DEFAULT_ENGINE,
+        "source_language": "auto",
+        "target_language": "auto",
         "fallback_without_credentials": False,
+        "fallback_on_auth_error": False,
         "timeout_s": int(DEFAULT_TIMEOUT_S),
         "max_chars": DEFAULT_MAX_CHARS,
         "cache": {
@@ -258,7 +297,7 @@ def load_config(config_path: str | None) -> dict:
     }
     path = Path(config_path) if config_path else Path(__file__).with_name("config.toml")
     if not path.is_file():
-        return cfg
+        return _apply_preferences(cfg, path)
     try:
         with path.open("rb") as handle:
             loaded = tomllib.load(handle)
@@ -267,7 +306,7 @@ def load_config(config_path: str | None) -> dict:
         raise ConfigError("配置文件格式无效") from exc
     except OSError:
         # 文件读不了时保持旧行为：忽略并使用默认值。
-        return cfg
+        return _apply_preferences(cfg, path)
     if not isinstance(loaded, dict):
         raise ConfigError("配置文件格式无效")
     defaults = {name: dict(cfg[name]) for name in ("cache", "aliyun", "tencent")}
@@ -279,11 +318,18 @@ def load_config(config_path: str | None) -> dict:
         merged = dict(default)
         merged.update(value)
         cfg[name] = merged
-    return cfg
+    return _apply_preferences(cfg, path)
+
+
+def _apply_preferences(cfg: dict, path: Path) -> dict:
+    try:
+        return apply_overlay("translate", cfg, path)
+    except (PreferenceError, OSError) as exc:
+        raise ConfigError("本地偏好设置无效或无法读取") from exc
 
 
 def load_settings(cfg: dict) -> Settings:
-    """校验并归一化数值配置；非法值直接抛 ConfigError，不静默夹紧。"""
+    """校验并归一化数值及中英语言策略；非法值直接抛 ConfigError。"""
     raw_engine = _cfg_value(cfg, "engine", DEFAULT_ENGINE)
     if not isinstance(raw_engine, str):
         raise ConfigError("配置项 engine 无效")
@@ -310,6 +356,12 @@ def load_settings(cfg: dict) -> Settings:
     fallback_raw = _cfg_value(cfg, "fallback_without_credentials", False)
     if not isinstance(fallback_raw, bool):
         raise ConfigError("配置项 fallback_without_credentials 无效")
+    auth_fallback = _cfg_value(cfg, "fallback_on_auth_error", False)
+    if not isinstance(auth_fallback, bool):
+        raise ConfigError("配置项 fallback_on_auth_error 无效")
+    long_enabled = _cfg_value(cfg, "long_text_enabled", False)
+    if not isinstance(long_enabled, bool):
+        raise ConfigError("配置项 long_text_enabled 无效")
     tencent_section = _section_dict(cfg, "tencent")
     _require_int(
         _cfg_value(tencent_section, "project_id", DEFAULT_TENCENT_PROJECT_ID),
@@ -324,6 +376,10 @@ def load_settings(cfg: dict) -> Settings:
         max_size_mb=max_size_mb,
         max_files=max_files,
         fallback_without_credentials=fallback_raw,
+        source_language=normalize_language(_cfg_value(cfg, "source_language", "auto"), "source_language"),
+        target_language=normalize_language(_cfg_value(cfg, "target_language", "auto"), "target_language"),
+        fallback_on_auth_error=auth_fallback,
+        long_text_enabled=long_enabled,
     )
 
 
@@ -807,6 +863,8 @@ def env_lookup(name: str) -> str:
 def resolve_aliyun_keys(cfg: dict) -> tuple[str, str]:
     """环境变量优先，未设置时才读配置文件。不把密钥写进日志。"""
     section = cfg.get("aliyun", {}) if isinstance(cfg.get("aliyun"), dict) else {}
+    if section.get('prefer_config_credentials') is True:
+        return _first_nonempty(section.get('access_key_id')), _first_nonempty(section.get('access_key_secret'))
     # 官方 SDK 名优先，再兼容 ALIYUN_* / ALIBABA_*；最后才用 config.toml。
     key_id = _first_nonempty(
         env_lookup("ALIBABA_CLOUD_ACCESS_KEY_ID"),
@@ -826,6 +884,8 @@ def resolve_aliyun_keys(cfg: dict) -> tuple[str, str]:
 def resolve_tencent_keys(cfg: dict) -> tuple[str, str]:
     """腾讯云密钥：进程环境 → 用户环境 → config.toml。"""
     section = cfg.get("tencent", {}) if isinstance(cfg.get("tencent"), dict) else {}
+    if section.get('prefer_config_credentials') is True:
+        return _first_nonempty(section.get('secret_id')), _first_nonempty(section.get('secret_key'))
     secret_id = _first_nonempty(
         env_lookup("TENCENTCLOUD_SECRET_ID"),
         env_lookup("TENCENT_SECRET_ID"),
@@ -873,7 +933,7 @@ def _fallback_allowed(cfg: dict) -> bool:
 def engine_order(preferred: str, cfg: dict) -> list[str]:
     """首选在前；云引擎缺密钥时默认报配置错误，只有显式 opt-in 才回退。
 
-    鉴权失败（AuthError）由 translate_with_cache 直接抛出，绝不回退；
+    鉴权失败（AuthError）由 translate_with_cache 按显式开关处理；
     网络 / 超时 / 配额错误才继续走 google_gtx -> mymemory。
     """
     name = normalize_engine(preferred)
@@ -1029,6 +1089,32 @@ def call_engine(
     raise ValueError(f"未知翻译引擎：{name}")
 
 
+def _request_engine(name: str, text: str, source: str, target: str, timeout: float, cfg: dict) -> str:
+    if "_long_deadline" not in cfg:
+        return call_engine(name, text, source, target, timeout, cfg)
+    limit = free_engine_limit(name)
+    pieces = long_text.split_segments(text, max_chars=len(text) or 1, max_bytes=limit) if limit and len(text.encode("utf-8")) > limit else [text]
+    results = []
+    for piece in pieces:
+        remaining = cfg["_long_deadline"] - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("translation_budget_exhausted")
+        if not piece.strip():
+            value = piece
+        else:
+            value = call_engine(name, piece, source, target, min(timeout, remaining), cfg)
+            if not value.strip():
+                raise ValueError("empty_translation")
+        results.append({"text": value})
+    return long_text.join_results(pieces, results, hard_separator=" " if target == "en" and source != target else "")
+
+
+def _record_engine(cfg: dict, name: str, outcome: str, *, elapsed_ms: int = 0, kind: str = 'none') -> None:
+    trace = cfg.get('_engine_trace')
+    if isinstance(trace, engine_trace.EngineTrace):
+        trace.record(name, outcome, elapsed_ms=elapsed_ms, kind=kind)
+
+
 def translate_with_cache(
     engine: str,
     text: str,
@@ -1042,36 +1128,80 @@ def translate_with_cache(
     真的失败后才查自己的缓存，避免免费引擎的旧缓存遮住可用的付费引擎。
     """
     settings = cfg if cfg is not None else {}
-    engines = engine_order(engine, settings)
     source, target = direction_langs(direction)
+    # A fixed target can already match the input. Do not contact a provider or
+    # read credentials/cache merely to return the same text.
+    if source == target:
+        return TranslationResult(text=text, engine="identity", cached=False, direction=direction)
+    engines = engine_order(engine, settings)
+    preferred = normalize_engine(engine)
+    reason = "credentials" if engines[0] != preferred else ""
+    if reason:
+        _record_engine(settings, preferred, 'skipped', kind='credentials')
+
+    cooldown_path = None
+    cooldown_identity = ""
+    if preferred == "tencent" and settings.get("fallback_on_auth_error") is True and preferred in engines:
+        cooldown_identity = auth_cooldown.identity(resolve_tencent_keys(settings), _section_dict(settings, "tencent"))
+        try:
+            cooldown_path = auth_cooldown.state_path(cache_dir())
+        except OSError:
+            pass
 
     last_error: Exception | None = None
     for name in engines:
         cached = cache_get(name, direction, text, settings)
         if cached is not None:
+            _record_engine(settings, name, 'cached')
             return TranslationResult(
                 text=cached,
                 engine=name,
                 cached=True,
                 direction=direction,
+                preferred_engine=preferred,
+                fallback_reason=reason,
             )
+        started = time.monotonic()
         try:
-            translated = call_engine(name, text, source, target, timeout, settings)
-        except AuthError:
-            # 密钥错了再回退，只会把配置问题藏起来。交给上层报 auth。
-            raise
-        except FALLBACK_ERRORS as exc:
+            if name == "tencent" and cooldown_path is not None and auth_cooldown.active(cooldown_path, cooldown_identity):
+                reason = "auth"
+                _record_engine(settings, name, 'skipped', kind='cooldown')
+                continue
+            translated = _request_engine(name, text, source, target, timeout, settings)
+        except AuthError as exc:
+            _record_engine(settings, name, 'failed', elapsed_ms=round((time.monotonic() - started) * 1000), kind='auth')
+            if settings.get("fallback_on_auth_error", False) is not True:
+                raise
             last_error = exc
+            if name == "tencent" and cooldown_path is not None:
+                auth_cooldown.record_failure(cooldown_path, cooldown_identity)
+            reason = reason or "auth"
             continue
+        except FALLBACK_ERRORS as exc:
+            kind = 'timeout' if _is_timeout(exc) else 'too_long' if isinstance(exc, FreeEngineLimitError) else engine_trace.failure_kind(exc)
+            _record_engine(settings, name, 'failed', elapsed_ms=round((time.monotonic() - started) * 1000), kind=kind)
+            last_error = exc
+            reason = reason or ("timeout" if _is_timeout(exc) else "too_long" if isinstance(exc, FreeEngineLimitError) else "network")
+            continue
+        except Exception:
+            _record_engine(settings, name, 'failed', elapsed_ms=round((time.monotonic() - started) * 1000), kind='internal')
+            raise
         if not translated.strip():
+            _record_engine(settings, name, 'failed', elapsed_ms=round((time.monotonic() - started) * 1000), kind='response')
             last_error = ValueError(f"{name} 返回空译文")
+            reason = reason or "network"
             continue
+        _record_engine(settings, name, 'ok', elapsed_ms=round((time.monotonic() - started) * 1000))
         cache_put(name, direction, text, translated, settings)
+        if name == "tencent" and cooldown_path is not None:
+            auth_cooldown.clear(cooldown_path, cooldown_identity)
         return TranslationResult(
             text=translated,
             engine=name,
             cached=False,
             direction=direction,
+            preferred_engine=preferred,
+            fallback_reason=reason,
         )
     if last_error is not None:
         raise last_error
@@ -1486,6 +1616,100 @@ def _state_source_text(state: dict[str, object]) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _atomic_long_output(output: str, status: str, **fields: str) -> None:
+    target = Path(output)
+    temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        write_output(str(temporary), status, **fields)
+        for attempt in range(4):
+            try:
+                os.replace(temporary, target)
+                break
+            except OSError as error:
+                # Windows readers/scanners can briefly deny replacement even
+                # when both files are writable. Keep retries short and bounded.
+                if getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 3:
+                    raise
+                time.sleep(0.015 * (attempt + 1))
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _run_long_translation(args, output: str, settings: Settings, cfg: dict, text: str, direction: str) -> int:
+    if len(text) > long_text.MAX_TOTAL_CHARS:
+        return write_error(output, "too_long", "长文超过总上限", settings.engine,
+                           length=str(len(text)), max_chars=str(long_text.MAX_TOTAL_CHARS))
+    segments = long_text.split_segments(text, max_chars=settings.max_chars, max_bytes=4000)
+    if len(segments) > long_text.MAX_SEGMENTS:
+        return write_error(output, "too_long", "长文分段数量超过上限", settings.engine)
+    key = long_text.checkpoint_key(text, direction, settings.engine, cache_scope(settings.engine, cfg), segments)
+    results = long_text.load_checkpoint(args.resume_file, key, len(segments))
+    initial_completed = sum(result is not None for result in results)
+    request = args.request_id or uuid.uuid4().hex
+    base = {"version": "1", "request_id": request, "total": str(len(segments))}
+    runtime = {**cfg, "_long_deadline": time.monotonic() + long_text.TASK_BUDGET_SECONDS}
+    failures = 0
+    last_code = "network"
+
+    def progress():
+        _atomic_long_output(output, "progress", **base,
+                            completed=str(sum(result is not None for result in results)), failed=str(failures))
+
+    progress()
+    for index, segment in enumerate(segments):
+        if results[index] is not None:
+            continue
+        if time.monotonic() >= runtime["_long_deadline"]:
+            last_code = "timeout"
+            break
+        fatal = False
+        try:
+            result = (translate_with_cache(settings.engine, segment, direction, settings.timeout_s, runtime)
+                      if segment.strip() else TranslationResult(segment, "identity", False, direction))
+            if len(result.text) > 100000 or len(result.text) + sum(len(value["text"]) for value in results if value is not None) > long_text.MAX_OUTPUT_CHARS:
+                raise ValueError("translation_output_limit")
+            results[index] = {"text": result.text, "engine": result.engine, "cached": result.cached,
+                              "fallback_reason": result.fallback_reason}
+            long_text.save_checkpoint(args.resume_file, key, results)
+        except AuthError:
+            last_code, fatal = "auth", True
+        except ConfigError:
+            last_code, fatal = "config", True
+        except Exception as exc:
+            last_code = "timeout" if _is_timeout(exc) else "network" if isinstance(exc, FALLBACK_ERRORS) else "internal"
+        if results[index] is None:
+            failures += 1
+        progress()
+        if fatal:
+            break
+    completed = sum(result is not None for result in results)
+    failed = len(segments) - completed
+    successful = [result for result in results if result is not None]
+    engines = {result["engine"] for result in successful if result["engine"] != "identity"}
+    if not engines and successful:
+        engines = {"identity"}
+    engine = next(iter(engines)) if len(engines) == 1 else "mixed" if engines else settings.engine
+    fields = {**base, "completed": str(completed), "failed": str(failed), "resumed": str(initial_completed),
+              "direction": direction, "engine": engine,
+              "cached": "1" if successful and all(result["cached"] for result in successful) else "0"}
+    reasons = [result["fallback_reason"] for result in successful if result["fallback_reason"]]
+    if reasons:
+        fields.update(preferred_engine=settings.engine, fallback_reason=reasons[0])
+    source_language, target_language = direction_langs(direction)
+    body = long_text.join_results(segments, results, hard_separator=" " if target_language == "en" and source_language != target_language else "")
+    if failed:
+        fields.update(code=last_code, message=f"翻译未完成（{completed}/{len(segments)} 段）；可重试失败段")
+        body = fields["message"] + "\n\n" + body
+    fields["text"] = body
+    _atomic_long_output(output, "partial" if failed else "ok", **fields)
+    if not failed:
+        try:
+            prune_cache(max_size_mb=settings.max_size_mb, max_files=settings.max_files)
+        except OSError:
+            pass
+    return 0
+
+
 def _run_translation(
     args: argparse.Namespace,
     output: str,
@@ -1519,7 +1743,7 @@ def _run_translation(
     if not text:
         return write_error(output, "empty", "未包含可翻译文字", engine_label)
     # 3) 超长直接报错，不再静默截断；AHK 面板仍显示完整原文。
-    if text_is_too_long(text, settings.max_chars):
+    if not settings.long_text_enabled and text_is_too_long(text, settings.max_chars):
         return write_error(
             output,
             "too_long",
@@ -1529,11 +1753,13 @@ def _run_translation(
             length=str(len(text)),
             max_chars=str(settings.max_chars),
         )
-    direction = detect_direction(text)
+    direction = resolve_direction(text, settings)
     if direction is None:
         return write_error(output, "detect", "未包含可翻译文字", engine_label)
+    if settings.long_text_enabled:
+        return _run_long_translation(args, output, settings, cfg, text, direction)
 
-    # 4) 翻译：鉴权失败绝不回退；网络/超时/配额可回退并报告实际引擎。
+    # 4) 翻译：鉴权回退必须显式开启；成功回退保留固定原因和实际引擎。
     try:
         result = translate_with_cache(
             settings.engine,
@@ -1577,20 +1803,18 @@ def _run_translation(
             sanitize_detail(exc, source_text=text, cfg=cfg),
         )
 
+    if result.engine != "identity":
+        try:
+            prune_cache(max_size_mb=settings.max_size_mb, max_files=settings.max_files)
+        except Exception:
+            # 清缓存失败不该让已经成功的翻译失败。
+            pass
     try:
-        prune_cache(max_size_mb=settings.max_size_mb, max_files=settings.max_files)
-    except Exception:
-        # 清缓存失败不该让已经成功的翻译失败。
-        pass
-    try:
-        write_output(
-            output,
-            "ok",
-            direction=direction,
-            engine=result.engine,
-            cached="1" if result.cached else "0",
-            text=result.text,
-        )
+        fields = {"direction": direction, "engine": result.engine, "cached": "1" if result.cached else "0"}
+        if result.fallback_reason:
+            fields.update(preferred_engine=result.preferred_engine, fallback_reason=result.fallback_reason)
+        fields["text"] = result.text
+        write_output(output, "ok", **fields)
     except OSError:
         return 1
     return 0
@@ -1602,6 +1826,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-file", default="", help="包含待译文本的 UTF-8 文件")
     parser.add_argument("--output-file", default="", help="结果文件路径")
     parser.add_argument("--config", default=None, help="config.toml 路径")
+    parser.add_argument("--source-language", default=None, help="覆盖本次源语言：auto / zh / en")
+    parser.add_argument("--target-language", default=None, help="覆盖本次目标语言：auto / zh / en")
+    parser.add_argument("--long-text", action=argparse.BooleanOptionalAction, default=None, help="分段翻译，最大 20000 字符、120 秒")
+    parser.add_argument("--request-id", default="", help="长文进度归属，不包含文本")
+    parser.add_argument("--resume-file", default="", help="仅此面板拥有的临时重试文件")
+    parser.add_argument("--trace-file", default="", help="本次请求的脱敏引擎摘要；需同时提供 --request-id")
     parser.add_argument("--self-test", action="store_true", help="只跑判定/配置/缓存单测，不联网")
     args = parser.parse_args(argv)
 
@@ -1612,6 +1842,10 @@ def main(argv: list[str] | None = None) -> int:
     if not output:
         print("missing --output-file", file=sys.stderr)
         return 1
+
+    from toolbox_controls import module_enabled
+    if not module_enabled('translate', args.config):
+        return write_error(output, 'disabled', '翻译功能已关闭', DEFAULT_ENGINE)
 
     # 1) 配置：TOML 语法、非法数值都归 config，不能混进 network。
     try:
@@ -1632,6 +1866,12 @@ def main(argv: list[str] | None = None) -> int:
             DEFAULT_ENGINE,
             sanitize_detail(exc),
         )
+    if args.source_language is not None:
+        cfg["source_language"] = args.source_language
+    if args.target_language is not None:
+        cfg["target_language"] = args.target_language
+    if args.long_text is not None:
+        cfg["long_text_enabled"] = args.long_text
     engine_label = _engine_label(cfg)
     try:
         settings = load_settings(cfg)
@@ -1652,6 +1892,14 @@ def main(argv: list[str] | None = None) -> int:
             sanitize_detail(exc, cfg=cfg),
         )
     engine_label = settings.engine
+    if args.trace_file:
+        try:
+            reserved = [output, args.input_file, args.resume_file, args.config or str(Path(__file__).with_name('config.toml'))]
+            if Path(args.trace_file).resolve() in {Path(path).resolve() for path in reserved if path}:
+                return write_error(output, 'config', '诊断文件不能与任务文件或配置重合', engine_label)
+            cfg['_engine_trace'] = engine_trace.EngineTrace(args.trace_file, args.request_id)
+        except (ValueError, OSError):
+            return write_error(output, 'config', '诊断请求编号或路径无效', engine_label)
 
     # 兜底：正常路径都在 _run_translation 内分类；这里只接住真正未预期的异常。
     state: dict[str, object] = {"text": ""}

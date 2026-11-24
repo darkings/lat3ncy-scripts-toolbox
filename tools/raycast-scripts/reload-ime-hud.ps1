@@ -21,6 +21,8 @@ tools/ime-hud-winui/*.cs 之后必须跑这个：
 #>
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\settings.ps1')
+if(-not(Test-ToolboxRaycastCommandEnabled -Command 'reload-ime-hud')){exit 0}
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 trap {
@@ -57,24 +59,14 @@ Invoke-Step 'build anchor-locator.exe' {
 # --- 2. 结束常驻 HUD ---
 # 必须在 publish 之前：正在运行的 exe 会让 publish 的覆盖复制失败。
 # 停止 + 重载 AHK 都由 restart-autohotkey.ps1 负责，这里不重复实现。
-$hudProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -ieq 'ImeHudWinUi.exe' })
-foreach ($process in $hudProcesses)
-{
-  # No stdout: Raycast shows its own result HUD for any script output.
-  Stop-Process -Id $process.ProcessId -Force
-}
-if ($hudProcesses.Count -gt 0)
-{
-  Start-Sleep -Milliseconds 400
-}
-
-$stillRunning = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -ieq 'ImeHudWinUi.exe' })
-if ($stillRunning.Count -gt 0)
-{
-  throw ("ImeHudWinUi.exe 仍在运行，无法重发布：{0}。请用管理员权限重跑。" -f (($stillRunning.ProcessId) -join ', '))
-}
+# Reuse the same complete ownership/start-identity preflight as the restart entry.
+# A foreign or unreadable HUD aborts before any process is stopped.
+. (Join-Path $repositoryRoot 'tools\startup\ToolboxProcess.ps1')
+Stop-ToolboxOwnedHudProcess -Repo $repositoryRoot
+Start-Sleep -Milliseconds 400
+$expectedHud = [IO.Path]::GetFullPath((Join-Path $winUiOut 'ImeHudWinUi.exe'))
+$stillRunning = @(Get-Process -Name ImeHudWinUi -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq $expectedHud })
+if ($stillRunning.Count -gt 0) { throw 'The owned HUD has not exited; publication was cancelled.' }
 
 # --- 3. WinUI HUD ---
 Invoke-Step 'publish ImeHudWinUi.exe' {
@@ -89,7 +81,7 @@ Invoke-Step 'reload ahk/main.ahk' {
 
 # main.ahk 启动时会 Warm() 预热 WinUI，给它一点时间建 HWND。
 Start-Sleep -Milliseconds 1200
-$warm = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'ImeHudWinUi.exe' })
+$warm = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'ImeHudWinUi.exe' -and $_.ExecutablePath -ieq $expectedHud })
 $warmIds = if ($warm.Count -gt 0) { ($warm.ProcessId | Sort-Object -Unique) -join ', ' } else { '未预热（首次 CapsLock 时冷启动）' }
 
 Show-SystemToast -Title '✓ IME HUD 已重载' -Message ("anchor-locator + WinUI 已重建，AHK 已重载；HUD PID: {0}" -f $warmIds) | Out-Null

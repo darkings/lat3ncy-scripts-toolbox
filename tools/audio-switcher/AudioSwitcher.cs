@@ -1430,10 +1430,68 @@ namespace Lat3ncyToolbox
             return FinishHeadsetConnect(ConnectPreferredHeadset(), active.Count);
         }
 
+        static bool ReadAudioEnabled(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return true;
+            string rest=text.Trim().Trim('\uFEFF').Trim();
+            if (!rest.StartsWith("{") || !rest.EndsWith("}")) return false;
+            rest=rest.Substring(1,rest.Length-2).Trim();
+            var values=new Dictionary<string,string>(StringComparer.Ordinal);
+            string literal="(?:\"(?:[^\"\\\\\\x00-\\x1F]|\\\\[\"\\\\/bfnrt]|\\\\u[0-9a-fA-F]{4})*\"|true|false|null|-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)";
+            while(rest.Length>0) {
+                var match=System.Text.RegularExpressions.Regex.Match(rest,"^\"([A-Za-z_][A-Za-z0-9_]*)\"\\s*:\\s*("+literal+")\\s*(,|$)");
+                if(!match.Success || values.ContainsKey(match.Groups[1].Value)) return false;
+                values.Add(match.Groups[1].Value,match.Groups[2].Value);
+                rest=rest.Substring(match.Length).TrimStart();
+                if(match.Groups[3].Value=="," && rest.Length==0) return false;
+            }
+            if(!values.ContainsKey("version") || values["version"]!="1") return false;
+            foreach(var pair in values) {
+                if(pair.Key=="version") continue;
+                if(pair.Key=="tray_visible" || pair.Key.StartsWith("module_") || pair.Key.StartsWith("feature_") || pair.Key.StartsWith("hotkey_")) {
+                    if(pair.Value!="true" && pair.Value!="false") return false;
+                } else if(pair.Key.StartsWith("binding_")) {
+                    if(pair.Value.Length>82 || !pair.Value.StartsWith("\"") || !pair.Value.EndsWith("\"")) return false;
+                } else return false;
+            }
+            return !values.ContainsKey("module_audio_enabled") || values["module_audio_enabled"]=="true";
+        }
+
+        static bool AudioModuleEnabled()
+        {
+            try {
+                string directory=System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                for(int i=0;i<8 && !string.IsNullOrEmpty(directory);i++,directory=System.IO.Path.GetDirectoryName(directory)) {
+                    if(!System.IO.Directory.Exists(System.IO.Path.Combine(directory,"ahk")) || !System.IO.File.Exists(System.IO.Path.Combine(directory,"tools","audio-switcher","config.toml"))) continue;
+                    string path=System.IO.Path.Combine(directory,".toolbox-controls.json");
+                    if(!System.IO.File.Exists(path)) return true;
+                    using(var stream=new System.IO.FileStream(path,System.IO.FileMode.Open,System.IO.FileAccess.Read,System.IO.FileShare.ReadWrite|System.IO.FileShare.Delete)) {
+                        if(stream.Length>16384) return false;
+                        using(var reader=new System.IO.StreamReader(stream,System.Text.Encoding.UTF8,true)) {
+                            char[] buffer=new char[16385];int count=reader.ReadBlock(buffer,0,buffer.Length);
+                            return count<=16384 && ReadAudioEnabled(new string(buffer,0,count));
+                        }
+                    }
+                }
+                return true;
+            } catch { return false; }
+        }
+
+        static int ControlsSelfTest()
+        {
+            return ReadAudioEnabled("") && ReadAudioEnabled("{\"version\":1,\"module_audio_enabled\":true}")
+                && !ReadAudioEnabled("{\"version\":1,\"module_audio_enabled\":false}")
+                && !ReadAudioEnabled("{\"version\":1,\"module_audio_enabled\":\"true\"}")
+                && !ReadAudioEnabled("{\"version\":1,\"module_audio_enabled\":true,\"module_audio_enabled\":false}")
+                && !ReadAudioEnabled("broken") ? 0 : 1;
+        }
+
         public static int Main(string[] args)
         {
             try {
                 try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch {}
+                if(args.Length==1 && args[0]=="--controls-self-test") return ControlsSelfTest();
+                if(args.Length==1 && args[0]=="--controls-check") { Console.WriteLine(AudioModuleEnabled() ? "ENABLED" : "DISABLED"); return 0; }
                 try {
                     LogDebug("run args=" + string.Join(" ", args) + " user=" + Environment.UserName
                         + " temp=" + System.IO.Path.GetTempPath() + " log=" + DebugLog
@@ -1448,6 +1506,8 @@ namespace Lat3ncyToolbox
                     try { System.IO.File.WriteAllText(DebugLog, "=== " + DateTime.Now + " args=" + string.Join(" ", args) + " ===" + Environment.NewLine, System.Text.Encoding.UTF8); } catch {}
                     LogDebug("ConnectWaitMs=" + ConnectWaitMs + " headsetKeywords=" + string.Join(",", HeadsetKeywords));
                 }
+                bool readOnly=args.Length>0 && (args[0]=="--list" || args[0]=="-l" || args[0]=="--get" || args[0]=="-g" || args[0]=="--dump" || args[0]=="--debug-dump");
+                if(!readOnly && !AudioModuleEnabled()) { Console.WriteLine("ERROR|音频切换功能已关闭");return 1; }
                 string defId;
                 var list = GetDevices(out defId);
 

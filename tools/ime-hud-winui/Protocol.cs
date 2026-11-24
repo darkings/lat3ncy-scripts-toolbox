@@ -34,6 +34,8 @@ internal static class Protocol
         Move,
         Hide,
         Ping,
+        Settings,
+        SettingsClose,
         Quit
     }
 
@@ -97,6 +99,10 @@ internal static class Protocol
 
         string[] parts = trimmed.Split('|');
         string head = parts[0].Trim().ToUpperInvariant();
+        if (head == "SETTINGS" && parts.Length == 1)
+            return new Message { Kind = Kind.Settings, State = "" };
+        if (head == "SETTINGS" && parts.Length == 2 && parts[1] == "CLOSE")
+            return new Message { Kind = Kind.SettingsClose, State = "" };
         if (head == "HIDE")
             return new Message { Kind = Kind.Hide, State = "" };
         if (head == "PING")
@@ -193,6 +199,8 @@ internal static class Protocol
     /// </summary>
     public static int SelfTest()
     {
+        if (!Match("SETTINGS", Kind.Settings) || Parse("SETTINGS|unexpected").Kind != Kind.None)
+            return 90;
         if (!Match("STATE|CN", Kind.State, "CN"))
             return 1;
         if (!Match("STATE|中", Kind.State, "CN"))
@@ -280,6 +288,11 @@ internal static class Protocol
         int dismiss = TranslationPanelDismiss.SelfTest();
         if (dismiss != 0)
             return dismiss;
+        int diagnostics = SettingsDiagnosticReport.SelfTest();
+        if (diagnostics != 0)
+            return 600 + diagnostics;
+        int search = SettingsSearch.SelfTest();
+        if (search != 0) return 610 + search;
         return 0;
     }
 

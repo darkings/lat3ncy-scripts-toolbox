@@ -328,9 +328,14 @@ class ImeHud {
 
     static EnsureCaretServer() {
         if this._caretServerPid {
-            if ProcessExist(this._caretServerPid)
+            if this._caretServerCreated <= 0 && ProcessExist(this._caretServerPid) {
+                this._caretServerCreated := this.ProcessCreationTicks(this._caretServerPid)
+                return true ; unreadable identity cannot prove that the child exited
+            }
+            if this.CaretIdentityMatches(this._caretServerPid, this._caretServerCreated)
                 return true
             this._caretServerPid := 0
+            this._caretServerCreated := 0
         }
         helper := this.CaretHelperPath()
         if (helper = "" || !FileExist(helper))
@@ -363,9 +368,30 @@ class ImeHud {
             return false
 
         this._caretServerPid := pid
+        this._caretServerCreated := this.ProcessCreationTicks(pid)
         this._caretServerFile := outputFile
         this.Log(Format("caret-server-start pid={1} out={2}", pid, outputFile))
         return true
+    }
+
+    static ProcessCreationTicks(pid) {
+        if !pid || !ProcessExist(pid)
+            return 0
+        handle := DllCall("OpenProcess", "UInt", 0x1000, "Int", false, "UInt", pid, "Ptr")
+        if !handle
+            return 0
+        try {
+            created := Buffer(8), exited := Buffer(8), kernel := Buffer(8), user := Buffer(8)
+            if !DllCall("GetProcessTimes", "Ptr", handle, "Ptr", created, "Ptr", exited, "Ptr", kernel, "Ptr", user)
+                return 0
+            return NumGet(created, 0, "Int64")
+        } finally DllCall("CloseHandle", "Ptr", handle)
+    }
+
+    static CaretIdentityMatches(pid, created, probe := unset) {
+        if pid <= 0 || created <= 0
+            return false
+        return (IsSet(probe) ? probe.Call(pid) : this.ProcessCreationTicks(pid)) = created
     }
 
     ; 读常驻助手写的文件。返回 {Ok, X, Y, Source, AgeMs}。
@@ -848,6 +874,7 @@ class ImeHud {
     ; 常驻光标助手（Chromium 系唯一可用的真插入点来源）
     static CaretServerIntervalMs := 180
     static _caretServerPid := 0
+    static _caretServerCreated := 0
     static _caretServerFile := ""
     ; HUD 健康巡检
     static _healthTimer := false

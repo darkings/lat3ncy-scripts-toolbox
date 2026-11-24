@@ -22,6 +22,8 @@ try {
 }
 
 $root = $PSScriptRoot
+. (Join-Path $PSScriptRoot '..\ToolboxControls.ps1')
+if(-not(Test-ToolboxModuleEnabled -Module rgb -RepoRoot (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent))){return}
 $ambientPy = Join-Path $root "ambient.py"
 $logDir = Join-Path $root "logs"
 $outLog = Join-Path $logDir "ambient.out.log"

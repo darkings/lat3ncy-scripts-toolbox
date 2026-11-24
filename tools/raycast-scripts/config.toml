@@ -1,0 +1,18 @@
+# Raycast entry availability only. Feature options remain in their existing files.
+# toolbox-settings.ps1 always remains available.
+[general]
+enabled = true
+
+[commands]
+screenshot = true
+record_screen = true
+screenshot_ocr = true
+screenshot_translate = true
+next_wallpaper = true
+toggle_rgb = true
+
+[maintenance]
+restart_autohotkey = true
+reload_ime_hud = true
+diagnose_ime_hud_anchor = true
+fix_rdp_clipboard_prompt = true

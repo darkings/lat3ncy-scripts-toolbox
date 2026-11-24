@@ -1,0 +1,13 @@
+# Shared by native settings and the Raycast capture entries.
+# An extra directory receives a copy; Windows keeps its original save location.
+[screenshot]
+enabled = true
+copy_to_clipboard = true
+wait_timeout_s = 180
+extra_directory = ""
+
+[record]
+enabled = true
+copy_to_clipboard = true
+wait_timeout_s = 1800
+extra_directory = ""

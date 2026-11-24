@@ -30,6 +30,8 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+. (Join-Path $PSScriptRoot '_lib\settings.ps1')
+if(-not(Test-ToolboxRaycastCommandEnabled -Command 'diagnose-ime-hud-anchor')){exit 0}
 
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $hudExe = Join-Path $repo 'tools\ime-hud-winui\out\ImeHudWinUi.exe'
@@ -65,7 +67,7 @@ if ($hud.Count -eq 0) {
   }
   if ($staleCount -gt 0) {
     Write-Host '>> STALE HUD: the exe on disk is newer than the running process.'
-    Write-Host '   Run: Stop-Process -Name ImeHudWinUi -Force'
+    Write-Host '   Run this checkout-scoped restart-autohotkey.ps1 command to restart safely.'
   }
 }
 
@@ -130,7 +132,7 @@ if (-not (Test-Path -LiteralPath $hudLog)) {
       Write-Host '>> No resident HUD saw a new-protocol message yet. Reload AHK first, then'
       Write-Host '   press CapsLock once so the new client cold-starts the new HUD:'
     }
-    Write-Host '   Stop-Process -Name ImeHudWinUi -Force -ErrorAction SilentlyContinue'
+    Write-Host '   Use the checkout-scoped restart command below; do not stop HUDs by name.'
     Write-Host '   powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\raycast-scripts\restart-autohotkey.ps1'
     Write-Host '   Then press CapsLock once and run this script again.'
   } elseif ($lastPlace -and ($lastPlace.Line -match 'real=0')) {
@@ -147,10 +149,15 @@ if (-not (Test-Path -LiteralPath $hudLog)) {
 }
 
 if ($Restart) {
+  if(-not(Test-ToolboxRaycastCommandEnabled -Command 'restart-autohotkey')){
+    Write-Host 'Restart entry is disabled; no restart was attempted.'
+    return
+  }
   Write-Host ''
   Write-Host '=== -Restart: delegate to restart-autohotkey.ps1 ==='
   #  ImeHudWinUi.exe  main.ahk  restart-autohotkey.ps1 
   # 
   & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $restartAhk
+  if($LASTEXITCODE -ne 0){Write-Host 'Restart failed; the command did not complete.';exit 1}
   Write-Host 'Restart done. Press CapsLock once, then run this script again without -Restart.'
 }

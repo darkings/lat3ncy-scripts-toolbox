@@ -2,7 +2,19 @@
 
 唯一 IME HUD 实现。芯片视觉已定稿。
 
+`ImeHudWinUi.exe --settings` 打开原生 WinUI 设置窗口，采用内置 TitleBar、左侧 NavigationView 和右侧原生编辑控件。十个分类中翻译和朗读各自合并基础、高级选项；翻译页提供不回显的本机厂商密钥入口。修改自动保存，标题旁“默认”恢复当前页且保留凭证；需要重新应用的模块在左栏底部显示“重载”。详见 [设置中心](../settings/README.md)。
+
+保存串行执行、带修订检查，保留输入和跨页草稿；关闭前提交待保存内容。所有窗口与主托盘沿用现有 WinUI Dispatcher，彩色 Logo 用于标题栏/任务栏，主托盘按任务栏主题切换黑白。
+
+显式 `--settings-lifecycle-test` 只读巡检十页、编辑器、三宽度布局与两轮窗口关闭；`--settings-write-test` 检查 apphost 的隔离写权限；`--settings-autosave-test` 在独立仓库内用固定假凭证验证自动保存、跨页默认恢复和系统关闭前保存。测试不调用真实云服务/硬件，不占用常驻 HUD 互斥体。DispatcherShutdownMode 为 OnExplicitShutdown，关闭设置不结束 HUD。
+
+面板更多菜单提供原文朗读、重试、单次中英目标切换。`ACTIONS` 可追加第七段 busy 0/1，旧六段保持兼容；`PANEL|PROGRESS|requestId|completed|total|failed` 只更新匹配上下文，最多 200 段。回传动作 1=译文朗读/停止、2=关闭、3=重试、4=原文朗读/停止、5/6/7=中文/英文/自动目标；文本继续只由 AHK 持有，消息没有选中文字。
+
 AHK CapsLock IME 状态芯片和 Caps+F 翻译链都打本进程主窗口 `Lat3ncyImeHudWinUi`。
+
+截图翻译也使用现有面板。标题栏新增“朗读译文 / 停止朗读”按钮（Alt+R），等待译文时禁用，沿用原有尺寸/ThemeResource 与键盘焦点样式。按钮只回传请求编号，不读取选区或剪贴板；实际 TTS 任务由 AHK 管理。
+
+新增协议 `PANEL|ACTIONS|<ownerHwnd>|<requestId>|<ready 0/1>|<speaking 0/1>` 绑定操作上下文；`PANEL|SPEAK|result` 与按钮共用处理入口。仅可见且有译文时请求朗读，以 `WM_APP+76` 异步通知 owner，wParam 为请求号，lParam=1 为播放/停止、2 为关闭。换原文/关闭会清除旧操作上下文；AHK 再核验当前请求号与语音 generation，防止过期事件影响新任务。
 
 ```text
 Win32 HWND  32×32 DIP
@@ -310,6 +322,14 @@ ahk/features/translate-selected-text.ahk
 * payload 含 `|` / 换行时走 `WM_COPYDATA`，不要把完整协议塞进命令行
 * 冷启动只拉起 `ImeHudWinUi.exe`，等主 HWND 出现后再发第一条 `OPEN`
 * `CLOSE` 找不到窗口就当作已经关上，不再冷启动
+
+## 工具箱设置与主托盘（2026-11-22）
+
+设置中心采用 WinUI `NavigationView` 左栏菜单，右侧显示常规、功能与快捷键及八个模块配置。透明 Logo 随 publish 复制到 `Assets`，参与源码戳。主托盘复用 HUD HWND 和现有 UI Dispatcher，设置中可隐藏；读取任务栏主题以显示白色/黑色图标。`TaskbarCreated` 后重新注册，退出先删 Shell 图标再释放 HICON。完整使用和生效时机见 [设置中心](../settings/README.md)。
+
+窗口使用 WinUI 内置 `TitleBar`（系统标题按钮保留），通过 `AppWindow.SetIcon` 绑定彩色 Logo，保留任务切换器入口。页面标题与正文同一边界，功能开关在标题右侧；中文折叠分组和类型专用控件取代原来的原始字段布局。非敏感偏好及写锁使用仓库 `.toolbox-state/`，兼容旧用户目录偏好，避免低完整性 apphost 保存锁时被拒。
+
+`--self-test` 包含托盘结构布局、透明度与真实图标句柄创建/回收；`--settings-lifecycle-test` 包含两轮全部页面、Logo、三种导航宽度以及模拟 Shell 的托盘生命周期，不改实际控制偏好。探测不是物理点击或真实 Explorer 重启测试。
 
 ## 明确不做
 

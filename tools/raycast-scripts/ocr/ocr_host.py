@@ -40,12 +40,22 @@ def main() -> int:
     try:
         metadata = activate_environment()
         if '--check' in sys.argv:
-            import PIL
-            import pyperclip
-            import rapidocr_onnxruntime
-            print(json.dumps({**metadata, 'status': 'ready'}))
-            return 0
-        import ocr
+            from ocr_runtime import installed_status
+            status = installed_status()
+            if status['status'] == 'ready':
+                import PIL
+                import pyperclip
+                import rapidocr_onnxruntime
+            print(json.dumps({**metadata, **status}))
+            return 0 if status['status'] == 'ready' else 2
+        if '--workflow' in sys.argv:
+            from ocr_runtime import installed_status
+            if sys.version_info[:2] != (3, 14) or installed_status()['status'] != 'ready':
+                raise RuntimeError('Screenshot translation requires the locked Python 3.14 environment')
+            sys.argv.remove('--workflow')
+            import ocr_workflow as entry
+        else:
+            import ocr as entry
     except (OSError, ValueError, RuntimeError, ImportError) as error:
         message = 'OCR host initialization failed: ' + type(error).__name__
         if '--result-file' in sys.argv:
@@ -58,7 +68,7 @@ def main() -> int:
         if sys.stderr is not None:
             print(message, file=sys.stderr)
         return 1
-    return ocr.main()
+    return entry.main()
 
 
 if __name__ == '__main__':

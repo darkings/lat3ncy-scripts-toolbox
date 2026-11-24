@@ -9,9 +9,12 @@
 # @raycast.icon 📷
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\settings.ps1')
+if(-not(Test-ToolboxRaycastCommandEnabled -Command 'screenshot')){exit 0}
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 trap {
+  if($session -and $repositoryRoot){try{Set-ToolboxCaptureResult $repositoryRoot Screenshot $session.id failed launch_failed}catch{}}
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
   Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
   exit 1
@@ -55,36 +58,18 @@ public static class SystemHotkeySim {
   [SystemHotkeySim]::keybd_event($VK_LWIN, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
 }
 
-# 后台监视系统是否把 png 写进截图目录；OCR 入口禁止调用。
-function Start-CaptureSaveWatcher {
-  param(
-    [Parameter(Mandatory = $true)]
-    [string] $StartedAt
-  )
-
-  $watcher = Join-Path $PSScriptRoot 'capture\watch-save.ps1'
-  if (-not (Test-Path -LiteralPath $watcher -PathType Leaf)) {
-    return
-  }
-
-  # 隐藏启动、不等待：不能让 Raycast silent 卡住。
-  # -STA：落盘后写剪贴板必须在单线程单元，否则 SetDataObject 会失败。
-  Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(
-    '-NoProfile',
-    '-STA',
-    '-ExecutionPolicy', 'Bypass',
-    '-File', $watcher,
-    '-Mode', 'Screenshot',
-    '-StartedAt', $StartedAt
-  ) | Out-Null
-}
+. (Join-Path $PSScriptRoot 'capture\CaptureSupport.ps1')
+$repositoryRoot=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$options=Get-ToolboxCaptureOptions -Mode Screenshot -Repo $repositoryRoot
+if(-not $options.Enabled){exit 0}
+$session=New-ToolboxCaptureSession -Mode Screenshot -Options $options -Repo $repositoryRoot
 
 # 先记下本地时间，再出框，后台用它排除旧文件。
-$startedAt = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffffff')
+
 
 if (-not (Invoke-ScreenClip)) {
   Invoke-WinShiftS
 }
 
-Start-CaptureSaveWatcher -StartedAt $startedAt
+if($options.CopyToClipboard -or $options.ExtraDirectory){Start-ToolboxCaptureWatcher -Repo $repositoryRoot -Mode Screenshot -SessionId $session.id}
 exit 0

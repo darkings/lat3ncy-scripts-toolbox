@@ -38,7 +38,10 @@ internal static class TranslationPanelProtocol
         Copy,
         Close,
         Pin,
-        Ping
+        Ping,
+        Actions,
+        Speak,
+        Progress
     }
 
     public readonly struct Message
@@ -53,6 +56,14 @@ internal static class TranslationPanelProtocol
         public string CopyTarget { get; init; }
         public string Payload { get; init; }
         public bool Pin { get; init; }
+        public long ActionOwner { get; init; }
+        public int RequestId { get; init; }
+        public bool ActionReady { get; init; }
+        public bool Speaking { get; init; }
+        public bool Busy { get; init; }
+        public int Completed { get; init; }
+        public int Total { get; init; }
+        public int Failed { get; init; }
         public bool HasPoint => X != 0 || Y != 0;
     }
 
@@ -82,6 +93,9 @@ internal static class TranslationPanelProtocol
             "TEXT" => ReadText(parts),
             "RESULT" => ReadResult(parts),
             "COPY" => ReadCopy(parts),
+            "ACTIONS" => ReadActions(parts),
+            "PROGRESS" => ReadProgress(parts),
+            "SPEAK" => parts.Length == 3 && parts[2] == "result" ? Empty(Kind.Speak) : default,
             "CLOSE" => Empty(Kind.Close),
             "PIN" => new Message
             {
@@ -101,6 +115,16 @@ internal static class TranslationPanelProtocol
 
     public static int SelfTest()
     {
+        Message progress = Parse("PANEL|PROGRESS|7|2|3|1");
+        if (progress.Kind != Kind.Progress || progress.RequestId != 7 || progress.Completed != 2 || progress.Failed != 1)
+            return 129;
+        if (Parse("PANEL|PROGRESS|7|3|3|1").Kind != Kind.None
+            || Parse("PANEL|PROGRESS|0|0|3|0").Kind != Kind.None
+            || Parse("PANEL|PROGRESS|7|0|201|0").Kind != Kind.None
+            || Parse("PANEL|ACTIONS|123|7|0|1|1").Kind != Kind.Actions
+            || !Parse("PANEL|ACTIONS|123|7|0|1|1").Busy
+            || Parse("PANEL|ACTIONS|123|7|0|1|x").Kind != Kind.None)
+            return 130;
         if (!Match("PANEL|OPEN", Kind.Open))
             return 101;
         if (!Match("PANEL|OPEN|120|240|96|explicit", Kind.Open, 120, 240, 96, "explicit"))
@@ -161,7 +185,42 @@ internal static class TranslationPanelProtocol
             return 124;
         if (Parse("PANEL|COPY").Kind != Kind.Copy || Parse("PANEL|COPY").CopyTarget.Length != 0)
             return 125;
+        Message actions = Parse("PANEL|ACTIONS|123|7|1|1");
+        if (actions.Kind != Kind.Actions || actions.ActionOwner != 123 || actions.RequestId != 7 || !actions.ActionReady || !actions.Speaking)
+            return 126;
+        if (Parse("PANEL|ACTIONS|123|7|0|1").Kind != Kind.None
+            || Parse("PANEL|ACTIONS|-1|7|1|0").Kind != Kind.None
+            || Parse("PANEL|ACTIONS|123|0|1|0").Kind != Kind.None
+            || Parse("PANEL|ACTIONS|123|7|x|0").Kind != Kind.None)
+            return 127;
+        if (Parse("PANEL|SPEAK|result").Kind != Kind.Speak
+            || Parse("PANEL|SPEAK|source").Kind != Kind.None)
+            return 128;
         return 0;
+    }
+
+    static Message ReadActions(string[] parts)
+    {
+        if (parts.Length is not (6 or 7) || !long.TryParse(parts[2], out long owner) || owner <= 0
+            || !int.TryParse(parts[3], out int request) || request <= 0
+            || parts[4] is not ("0" or "1") || parts[5] is not ("0" or "1")
+            || (parts.Length == 6 && parts[5] == "1" && parts[4] != "1")
+            || (parts.Length == 7 && parts[6] is not ("0" or "1")))
+            return default;
+        return new Message { Kind = Kind.Actions, ActionOwner = owner, RequestId = request,
+            ActionReady = parts[4] == "1", Speaking = parts[5] == "1",
+            Busy = parts.Length == 7 && parts[6] == "1",
+            Source = "", TextSource = "", ResultSource = "", CopyTarget = "", Payload = "" };
+    }
+
+    static Message ReadProgress(string[] parts)
+    {
+        if (parts.Length != 6 || !int.TryParse(parts[2], out int request) || request <= 0
+            || !int.TryParse(parts[3], out int completed) || !int.TryParse(parts[4], out int total)
+            || !int.TryParse(parts[5], out int failed) || total < 1 || total > 200
+            || completed < 0 || failed < 0 || completed + failed > total)
+            return default;
+        return new Message { Kind = Kind.Progress, RequestId = request, Completed = completed, Total = total, Failed = failed };
     }
 
     static Message Empty(Kind kind)

@@ -246,12 +246,8 @@ def write_result(result_file: str, text: str) -> None:
         result.write(text)
 
 
-def recognize(
-    engine: Any,
-    image: Image.Image,
-    result_file: str | None = None,
-    notify_on_done: bool = False,
-) -> int:
+def extract_text(engine: Any, image: Image.Image) -> str:
+    """Pure recognition boundary: no clipboard writes, notifications or files."""
     import numpy as np
 
     # 大图先降采样：RapidOCR 的耗时随像素数近似线性增长。
@@ -278,6 +274,17 @@ def recognize(
     text = ""
     if result:
         text = "\n".join(line[1] for line in result).strip()
+
+    return text
+
+
+def recognize(
+    engine: Any,
+    image: Image.Image,
+    result_file: str | None = None,
+    notify_on_done: bool = False,
+) -> int:
+    text = extract_text(engine, image)
 
     if result_file is not None:
         # Raycast detached 流程：先交付用户可见的结果（剪贴板 + Toast），
@@ -384,6 +391,13 @@ def main() -> int:
     # Raycast detached 流程：通知由本脚本的 --notify-on-done 负责，
     # 其余 stderr/stdout 保持静默（Raycast 会把任何 stdout 当 HUD 弹出）。
     _SILENT_MODE = result_file is not None and not notify_on_done
+
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    from toolbox_controls import module_enabled
+    if not module_enabled('ocr'):
+        if result_file is not None:
+            write_result(result_file, 'ERROR: OCR 已在工具箱设置中关闭')
+        return 0
 
     try:
         exit_code = run_ocr_from_clipboard(

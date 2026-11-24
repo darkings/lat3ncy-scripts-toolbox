@@ -8,7 +8,7 @@ function Get-ImeHudSourceHash
 
   $sourceFiles = @(Get-ChildItem -LiteralPath $ProjectDir -Recurse -File -ErrorAction Stop |
       Where-Object {
-        $_.Extension -in @('.cs', '.xaml', '.csproj', '.manifest') -and
+        $_.Extension -in @('.cs', '.xaml', '.csproj', '.manifest', '.png') -and
         $_.FullName -notmatch '\\(bin|obj|out|test-out)\\'
       } | Sort-Object FullName)
   if ($sourceFiles.Count -eq 0)

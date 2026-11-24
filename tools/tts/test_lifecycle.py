@@ -86,9 +86,13 @@ class LifecycleTests(unittest.TestCase):
     def test_real_cli_missing_input_reports_failure_without_touching_repo_log(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            module = root/'tools/tts'
+            module.mkdir(parents=True)
             for name in ('tts_player.py', 'task_protocol.py'):
-                shutil.copyfile(Path(tts.__file__).parent/name, root/name)
-            run = subprocess.run([sys.executable, str(root/'tts_player.py'), '--input-file', str(root/'missing.txt'),
+                shutil.copyfile(Path(tts.__file__).parent/name, module/name)
+            for name in ('toolbox_controls.py', 'toolbox_preferences.py'):
+                shutil.copyfile(Path(tts.__file__).parent.parent/name, root/'tools'/name)
+            run = subprocess.run([sys.executable, str(module/'tts_player.py'), '--input-file', str(root/'missing.txt'),
                 '--request-id', 'missing-input', '--result-file', str(root/'result.txt')], capture_output=True, timeout=10)
             self.assertEqual(1, run.returncode)
             result = (root/'result.txt').read_text('utf-8')

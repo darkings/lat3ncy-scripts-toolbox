@@ -28,6 +28,14 @@ internal sealed class TranslationPanel
     readonly ToggleButton _pinButton;
     readonly Button _copyResultButton;
     readonly Button _closeButton;
+    readonly Button _speechButton;
+    readonly MenuFlyoutItem _retry = new() { Text = "重试失败段 / 重新翻译", IsEnabled = false };
+    readonly MenuFlyoutItem _sourceSpeech = new() { Text = "朗读原文", IsEnabled = false };
+    readonly MenuFlyoutSubItem _targetLanguage = new() { Text = "切换目标语言", IsEnabled = false };
+    readonly MenuFlyout _menu = new();
+    readonly TextBlock _progress = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12, 0, 12, 4), Visibility = Visibility.Collapsed };
+    bool _speechReady;
+    bool _speechPlaying;
     readonly FrameworkElement _iconPinOutline;
     readonly FrameworkElement _iconPinFilled;
     readonly TextBlock _sourceText;
@@ -42,6 +50,10 @@ internal sealed class TranslationPanel
     public event EventHandler? CloseRequested;
     public event EventHandler<string>? CopyRequested;
     public event EventHandler? DragRequested;
+    public event EventHandler? SpeechRequested;
+    public event EventHandler? SettingsRequested;
+    public event EventHandler<int>? WorkflowActionRequested;
+    public event EventHandler<bool>? MenuStateChanged;
 
     public bool IsPinned => _pinButton.IsChecked == true;
     public TranslationSource.Result CurrentSource => _source;
@@ -53,6 +65,7 @@ internal sealed class TranslationPanel
         {
             Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent)
         };
+        _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -124,18 +137,52 @@ internal sealed class TranslationPanel
         _copyResultButton = MakeCopyButton("result", "复制译文");
         _copyResultButton.Margin = new Thickness(0, 0, 2, 0);
 
+        _speechButton = MakeChromeButton<Button>(SpeechGlyph(false));
+        _speechButton.Margin = new Thickness(0, 0, 2, 0);
+        _speechButton.Click += (_, _) => SpeechRequested?.Invoke(this, EventArgs.Empty);
+        _speechButton.AccessKey = "R";
+        SetSpeechState(false, false);
+
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center
         };
+        buttons.Children.Add(_speechButton);
+        var more = MakeChromeButton<Button>(new FontIcon { Glyph = "\uE712", FontSize = IconDip });
+        AutomationProperties.SetName(more, "更多翻译操作");
+        ToolTipService.SetToolTip(more, "更多操作");
+        var menu = _menu;
+        menu.Opened += (_, _) => MenuStateChanged?.Invoke(this, true);
+        menu.Closed += (_, _) => MenuStateChanged?.Invoke(this, false);
+        _retry.Click += (_, _) => WorkflowActionRequested?.Invoke(this, 3);
+        _sourceSpeech.Click += (_, _) => WorkflowActionRequested?.Invoke(this, 4);
+        menu.Items.Add(_retry);
+        menu.Items.Add(_sourceSpeech);
+        foreach (var option in new[] { ("译成中文", 5), ("译成英文", 6), ("中英自动互译", 7) })
+        {
+            var item = new MenuFlyoutItem { Text = option.Item1 };
+            int action = option.Item2;
+            item.Click += (_, _) => WorkflowActionRequested?.Invoke(this, action);
+            _targetLanguage.Items.Add(item);
+        }
+        menu.Items.Add(_targetLanguage);
+        menu.Items.Add(new MenuFlyoutSeparator());
+        var settings = new MenuFlyoutItem { Text = "工具箱设置" };
+        settings.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+        menu.Items.Add(settings);
+        more.Flyout = menu;
+        buttons.Children.Add(more);
         buttons.Children.Add(_copyResultButton);
         buttons.Children.Add(_pinButton);
         buttons.Children.Add(_closeButton);
         caption.Children.Add(buttons);
         Grid.SetRow(caption, 0);
         _root.Children.Add(caption);
+        AutomationProperties.SetLiveSetting(_progress, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+        Grid.SetRow(_progress, 1);
+        _root.Children.Add(_progress);
         SyncPinVisual();
 
         _sourceText = BuildBody(TranslationSource.Empty().DisplayText);
@@ -144,12 +191,12 @@ internal sealed class TranslationPanel
             Padding = new Thickness(12, 8, 12, 8),
             Content = _sourceText
         };
-        Grid.SetRow(sourceView, 1);
+        Grid.SetRow(sourceView, 2);
         _root.Children.Add(sourceView);
 
         // 分隔线走 ThemeResource，不要写死 Gray。资源挂不上才退回半透明灰。
         FrameworkElement divider = BuildDivider();
-        Grid.SetRow(divider, 2);
+        Grid.SetRow(divider, 3);
         _root.Children.Add(divider);
 
         _resultText = BuildBody(TranslationResult.Empty().DisplayText);
@@ -158,7 +205,7 @@ internal sealed class TranslationPanel
             Padding = new Thickness(12, 8, 12, 12),
             Content = _resultText
         };
-        Grid.SetRow(resultView, 3);
+        Grid.SetRow(resultView, 4);
         _root.Children.Add(resultView);
 
         // Esc 关面板。不抢 IME 芯片热键，不接线 AHK。定位 / 原文 / 译文来源只写日志，不画在面板上。
@@ -195,12 +242,31 @@ internal sealed class TranslationPanel
     /// </summary>
     public void SetSource(TranslationSource.Result source, bool keepResult = false)
     {
+        CloseMenu();
+        _progress.Visibility = Visibility.Collapsed;
         _source = source;
         ApplyBody(_sourceText, source.Ok, source.DisplayText);
         if (!keepResult)
             SetResult(TranslationResult.Empty());
         else
             SyncCopyButtons();
+    }
+
+    public void CloseMenu() => _menu.Hide();
+
+    public void SetWorkflowState(bool bound, bool busy, bool speaking = false)
+    {
+        _sourceSpeech.Text = speaking ? "停止朗读" : "朗读原文";
+        _retry.IsEnabled = bound && !busy && _source.Ok;
+        _sourceSpeech.IsEnabled = bound && _source.Ok;
+        _targetLanguage.IsEnabled = bound && _source.Ok;
+    }
+
+    public void SetProgress(int completed, int total, int failed)
+    {
+        _progress.Text = failed > 0 ? $"已完成 {completed}/{total} 段 · {failed} 段失败，可重试"
+            : completed == total ? $"翻译完成 · {total} 段" : $"翻译进度 {completed}/{total} 段";
+        _progress.Visibility = Visibility.Visible;
     }
 
     /// <summary>
@@ -223,10 +289,34 @@ internal sealed class TranslationPanel
         AutomationProperties.SetName(_pinButton, label);
     }
 
+    public void SetSpeechState(bool ready, bool playing)
+    {
+        _speechReady = ready;
+        if (_speechPlaying != playing)
+            _speechButton.Content = SpeechGlyph(playing);
+        _speechPlaying = playing;
+        _speechButton.IsEnabled = ready && _result.Ok;
+        string label = playing ? "停止朗读" : "朗读译文";
+        if (!_speechButton.IsEnabled)
+            label += "（等待译文）";
+        ToolTipService.SetToolTip(_speechButton, label);
+        AutomationProperties.SetName(_speechButton, label);
+        AutomationProperties.SetHelpText(_speechButton, "朗读当前译文；再次按下停止。快捷键 Alt+R。");
+        AutomationProperties.SetItemStatus(_speechButton, playing ? "正在朗读" : ready ? "可朗读" : "等待译文");
+    }
+
+    static FrameworkElement SpeechGlyph(bool playing)
+    {
+        string data = playing ? "M4,4 H12 V12 H4 Z" : "M5,3.5 L12.5,8 L5,12.5 Z";
+        return BuildIcon("<Path Data=\"" + data + "\" Fill=\"Transparent\" Stroke=\"{ThemeResource TextFillColorPrimaryBrush}\" StrokeThickness=\"1.32\" StrokeLineJoin=\"Round\"/>",
+            fallback: new TextBlock { Text = playing ? "■" : "▷", FontSize = IconDip });
+    }
+
     void OnDragPressed(object sender, PointerRoutedEventArgs e)
     {
         if (e.OriginalSource is DependencyObject origin
-            && (IsInside(_copyResultButton, origin)
+            && (IsInside(_speechButton, origin)
+                || IsInside(_copyResultButton, origin)
                 || IsInside(_pinButton, origin)
                 || IsInside(_closeButton, origin)))
         {
@@ -242,6 +332,7 @@ internal sealed class TranslationPanel
     {
         TranslationCopy.Outcome resultCopy = TranslationCopy.Resolve("result", _source, _result);
         ApplyCopyButton(_copyResultButton, resultCopy.Ok, "复制译文");
+        SetSpeechState(_speechReady, _speechPlaying);
     }
 
     static void ApplyCopyButton(Button button, bool enabled, string label)

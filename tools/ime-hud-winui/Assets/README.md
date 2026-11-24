@@ -1,0 +1,7 @@
+# Toolbox Logo
+
+`toolbox-logo.png` is an original transparent RGBA logo generated with the built-in `image_gen` tool in generation mode on 2026-11-22. It is embedded in the settings NavigationView header and supplies the alpha silhouette for the monochrome tray icons. SHA-256: `e80c6319b5b826f6ebbe2c178d71823d1ac9083ff4f2269c8bf9128f82878642`.
+
+Prompt:
+
+> Use case: logo-brand. Create one polished, original app logo for lat3ncy toolbox, a personal Windows productivity toolbox containing hotkeys, translation, OCR, audio and system utilities. This is an actual bitmap asset to embed in the left brand header of a WinUI 3 settings window. A single compact L-shaped monogram made from 3 or 4 precise interlocking rounded geometric modules, conveying a coherent toolbox and quick actions. Fluent-inspired dimensional restraint, crisp silhouette, smooth clean edges, restrained Windows-style blue accent with subtle tonal depth. Strong recognizable form at 24–48 pixels, generous negative space, centered and occupying about 76 percent of a square canvas. The mark itself may have a tiny integrated modular offset suggesting speed; no delicate details. Actual transparent background and preserved alpha, not a checkerboard. No text, lettering beyond the abstract L shape, tagline, watermark, shadow outside the mark, illustration scene, background tile, borders, or multiple concepts. Do not reproduce the Windows/Microsoft logo. Output only the standalone finished logo.

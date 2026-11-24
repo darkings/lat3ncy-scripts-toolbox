@@ -1,4 +1,274 @@
+## 2026-11-24 Raycast 面板设置与功能检查
+
+- [x] 用户澄清后撤回按分类调用设置的 CLI/协议改动，在原设置面板加入 Raycast 脚本分类；总开关与十条入口独立启停，设置入口始终保留，复用相关功能原配置。
+- [x] 新配置只存布尔值，不改 AHK/Raycast 客户端键位；维护入口保存不执行命令。六项隔离回归覆盖复合维护依赖、每条入口、总开关、缺失/错误/重复/超限配置及正文前拦截。
+- [x] 原生十一页、搜索、自动保存、总开关 TOML 持久化及默认恢复通过；修复排队恢复默认丢失后续编辑及连续重置请求被旧回包清除。
+- [x] HUD 重建入口复用仓库/创建时间停止校验；诊断不再建议按名全局停止。其他功能离线检查及实际验收边界记录于 tools/settings/FUNCTION-REVIEW.md。
+- [x] 最终干净候选 offline/helpers/full 三阶段通过（277 项 Python、308 个源码/资产一致）；原生四类探测通过。Computer Use 验证总开关、单入口、默认恢复、维护分组及共享参数导航，测试改动已还原。
+- 已部署源戳 44fb94185c8d4ddef14e4b65b21cc824c51fd203c5040a2d075c3b8ab2c658c8。证据 .tmp/validation/20261124-raycast-complete/、.tmp/raycast-settings-native-tests.log、.tmp/raycast-settings-final-tests.log、.tmp/raycast-settings-deploy.log、.tmp/raycast-final-provenance.json。精确提交 CI 以草稿 PR #3 最终记录为准，不合并。
+
+## 2026-11-23 保存期间编辑与关闭等待
+
+- [x] 隔离原生测试复现旧代码在关闭保存期间漏掉后续输入（native_close_dropped_late_edit），未改动个人配置。
+- [x] 关闭与重载提交前等待保存队列清空；等待期间暂时停用编辑，失败恢复，多个并发等待者共同保持禁用状态。
+- [x] 保存反馈区分正在保存与仍待自动保存，后续草稿存在时不提前显示成功。
+- [x] 原生四类探测及五类并发编辑、关闭追加输入、保存失败恢复编辑/保留重载恢复入口通过。干净候选 offline/helpers/full 全通过（271 项 Python）；Computer Use 复核翻译/朗读切换与系统关闭。
+- 源戳 dc208b9765b7a5f3d32906183c818ab1e665b8be68dbbb1b4dac61f5763f37b8 已部署；个人配置及捕获默认值不变。证据 .tmp/validation/20261123-save-drain/、.tmp/settings-flight-repro.log、.tmp/settings-flight-native-tests.log、.tmp/settings-flight-deploy.log、.tmp/settings-flight-config-protection.json。精确提交 CI 以草稿 PR #3 最终记录为准，不合并。
+
+## 2026-11-23 跨页保存失败恢复
+
+- [x] 保存错误按分类保留，其他页的恢复入口只导航；到达失败页后才明确提供丢弃该页输入并重读。
+- [x] 模块开关分开保留修订，单页重读不重置其他页草稿或绕过外部冲突；重读前检查配置可读性。
+- [x] 原生四类探测通过；隔离自动保存回归制造两页真实 CAS 冲突，覆盖导航不丢输入、损坏配置重读失败保留、单页恢复保护另一页及恢复后保存。
+- [x] 干净候选 offline/helpers/full 三阶段通过（271 项 Python）；Computer Use 复核部署窗口、跨分类导航与系统关闭，七份个人配置及捕获默认值未变。
+- 已部署源戳 55924f2676d68580b6103256129ff7cf4bf7fae7191b083dc9c0cd6104d2b116；证据 .tmp/validation/20261123-save-recovery/、.tmp/settings-recovery-native-tests.log、.tmp/settings-recovery-deploy.log、.tmp/recovery-config-protection.json。精确提交 CI 以草稿 PR #3 最终记录为准，不合并。
+
+## 2026-11-23 设置搜索与定位
+
+- [x] 左栏原生 AutoSuggestBox，名称/说明/英文模块关键词联合匹配；上下方向键、Enter、Ctrl+F、一次 Escape 清空，无结果不跳转。长名称与分类分行换行。
+- [x] 固定公开元数据目录，覆盖模块字段、12 项基础项、AHK 功能/键位、厂商密钥入口与诊断分组；不读取配置值、凭证或日志，不保存查询、不联网，移除功能不入目录。
+- [x] 选择后复用原导航和草稿缓存，展开对应分组，布局稳定后纠正滚动，目标控件完整可见；不执行开关或维护动作。
+- [x] 5 项 Python 元数据/隐私回归及原生匹配自检；四类原生探测通过，覆盖 8 类定位与搜索跳转保留跨页草稿。Computer Use 实测 Ctrl+F、中文检索、跨分类方向键选择、tts 缓存完整定位、无结果 Enter 与单次 Escape。
+- [x] 最终干净候选三阶段通过（271 项 Python、305 个源码/资产一致），个人七份配置及捕获默认值哈希不变。
+- 已部署源戳 8357135ea041db6ebe77536606b2d5e42e31745183a74de4344b297d40a842b8。证据：.tmp/validation/20261123-search-final-release/、.tmp/settings-search-tests.log、.tmp/settings-search-scroll-deploy.log、.tmp/search-config-protection.json。精确提交 CI 见草稿 PR #3 最终记录，不合并。
+
+## 2026-11-23 移除手动标题栏配色
+
+- [x] 按用户要求移除整个手动窗口标题栏功能：设置项、应用控件、计划桥、PowerShell 执行器及原 Raycast 脚本。
+- [x] 回收关联重载动作、配置白名单和专用测试；保留 WinUI 内置标题栏与工具箱自己的主题适配。当前 Raycast 顶层入口 11 个，模块可编辑字段恢复 114 项。
+- [x] 从源码构建并重载，原生四类探测、干净候选三阶段通过（266 项 Python，302 个源码/资产一致）。Computer Use 确认主题页不含该功能。
+- 源戳 502502baa589edbf153b5bec56b7d210fce10594bcbd5970a7ab96cbdaf6d8d9；个人配置哈希不变。证据 .tmp/validation/20261123-remove-titlebar/、.tmp/remove-titlebar-deploy.log；精确 SHA CI 以草稿 PR #3 最终记录为准，不合并。
+
+## 2026-11-23 诊断恢复指引与长文结果交付
+
+- [x] 固定字段重建诊断卡片与可复制摘要，显示检查时间、处理建议和三个模块的设置跳转；不输出路径、正文、凭证和原始日志。
+- [x] 检查中/失败时不复制旧摘要，返回维护区重新核对模块开关。Computer Use 实点复制成功、朗读设置跳转正确、返回保留结果与禁用状态。
+- [x] 真实文件句柄复现长文结果原子替换被临时占用后失败；Windows 5/32/33 做最多四次、总等待 90ms 的有界重试。四项回归覆盖实际句柄、持续失败、其他 I/O 与临时文件清理。上次偶发用例是否同因仍未确证。
+- [x] 干净候选 offline/helpers/full、原生 self-test/lifecycle/write/autosave 全通过，266 项 Python 测试；303 个源码/资产散列一致，七份原个人配置及捕获默认值不变。
+- 已部署源戳：972c79ebbbe03a7748715bd8a81fca14aec48b4645dc7fd81dc2d21d18b12496。证据：.tmp/validation/20261123-guidance/、.tmp/output-commit-tests.log、.tmp/guidance-deploy.log。精确提交 CI 以草稿 PR #3 最终记录为准，不合并。
+
+## 2026-11-23 维护操作阶段
+
+- [x] 常规页新增单模块后台重载与完整离线环境检查，结果仅在窗口显示。
+- [x] 提交/执行双重录屏保护，按仓库串行重载，固定错误类别。
+- [x] 旧 Raycast HUD 停止入口核对仓库路径与创建时间，拒绝外部实例或 PID 复用。
+- [x] 原生三类探测、部署及 Computer Use 验收：强调色、禁用灯光、单项电源重载成功、无待应用时侧栏收起。
+- [x] 翻译生命周期夹具原子发布就绪文件；延迟写入复现旧空字符串异常，修正后 10 轮共 30 个退出路径通过。
+- [x] 最终干净候选 offline/helpers/full 三阶段通过，262 项 Python 测试及原生断言；301 个源码/资产散列一致。
+- 当前源戳：2df9216a2557f36550ba6fe0aa13a0be9d921fcdba53788a232534ea2d4a9020。远端精确提交 CI 见草稿 PR #3 最终记录；不合并。
+- 证据：.tmp/validation/20261123-maintenance-atomic-ready/、.tmp/translation-lifecycle-stress.log、.tmp/maintenance-release-deploy.log；个人配置不纳入提交。
+
+## 2026-11-23 捕获处理反馈与光标助手归属
+
+1. [x] 记录同模式最新会话的等待/处理中/完成/部分失败/失败/超时/停止，不记录文件名、路径或正文。剪贴板与额外目录分开报告，旧会话不能覆盖新会话；超时仍可写终态。
+2. [x] 新增只读捕获记录桥及设置页“最近捕获处理”，展开/手动刷新，区分无记录、不可读与等待已结束；取消/未保存/超时无法单独确定时明确说明，不冒充截图成功。
+3. [x] AHK 原有定时循环发布光标助手 PID/创建时间/拥有者归属，每五秒更新；诊断校验双进程身份、仓库哈希与新鲜度。启动时记录助手创建时间，防止复用 PID 被当成原助手。
+4. [x] 新增 7 项 Python 回归，含真实隔离监视器→额外复制→完成记录、部分失败、过期、旧会话与隐私；AHK 增加身份原生读取和 PID 复用/未知断言。本机完整回归通过（253 项 Python），个人原配置未由本轮改写。
+5. [x] 最终干净候选三阶段、原生 autosave/lifecycle/write 探测通过；受控发布源戳 67f9e89b0ac1d947104888b2ef177ffb98aaa5bc7c146a7029a47b4b5ff55533，HUD 34012 / AHK 32572 / caret 30504。Computer Use 实点浅色主题结果卡片与刷新诊断：光标助手已显示运行中，捕获结果只显示脱敏状态及北京时间。提交后精确 SHA 的 CI 以草稿 PR 最终记录为准，不合并。
+
+证据：.tmp/capture-receipts-tests.log、.tmp/capture-receipts-full-final.log、.tmp/validation/20261123-capture-receipts-final/。真实桌面内容未捕获，处理链使用固定隔离文件，不重放/复制用户历史捕获。
+
+## 2026-11-22 截图与录屏配置及集中诊断
+
+1. [x] 新增截图与录屏模块与八项配置：各自启用、完成后复制、等待上限、额外目录；原默认行为保留。共用自动保存/当前页默认/原生目录浏览和顶部总开关，Raycast 入口与 watcher 读取同一配置，OCR 独立。
+2. [x] 每模式会话最新请求替换旧监视器，排除开始前文件；文件稳定且写入句柄释放后处理。等待长录屏沿用总上限；额外复制唯一命名/原子发布，不覆盖系统原件，目录失败不阻止剪贴板。会话登记与最终发布/剪贴板短锁串行，消除提交交错，不把大文件复制放进锁。
+3. [x] 常规页新增手动刷新运行状态与版本，返回固定状态和构建/提交散列，不输出 PID/路径/原始日志/正文/密钥。实机 Low 查询发现误报电源未运行，修复为新鲜心跳+进程创建身份验证；查询受限不能证明退出，UI 的宿主状态用实际宿主 PID/路径验证。
+4. [x] 新增 12 项隔离捕获/诊断回归，覆盖 Unicode、错误配置、关闭入口、取消/超时、会话替换、写入未释放、额外目录冲突/失败、清理事件订阅、受限查询与过期/PID 复用心跳。表单可编辑字段增至 114，总 Python 246 项；原生十页与 capture 保存/默认往返已通过。
+5. [x] 共享控制协议扩展 capture，新 PowerPolicy 按原安全流程重载，PID 5636→14872，保持原配置和唤醒 hold。新增默认 TOML 单独入库，以便安全候选导出继续只使用 HEAD 配置，不扩大个人配置读取范围。
+6. [x] 最终干净候选 offline/helpers/full 三阶段通过，296 个源码/资产散列一致；原生 autosave/lifecycle/write 探测全过。Computer Use 实际检查捕获两组及 Low 诊断刷新：HUD/Power 正确运行中、光标受限显示无法确认。生产源戳 ce278d71d1b708472174e673a53d3c16361321a549f8978eb505e7f63a1a452d，HUD 29520 / AHK 34596；doctor 四个常驻健康，七份原配置不变。提交后精确 SHA CI 以草稿 PR 最终记录为准，不合并；已有音频 exe 发布限制保留。
+
+证据：.tmp/capture-behavior-tests.log，.tmp/capture-power-upgrade.json，.tmp/capture-deploy-final.json，.tmp/validation/20261122-capture-status-verified/。实际桌面截图/录屏内容未捕获，文件处理使用固定隔离数据验证；系统自身保存和复制行为保持由 Windows 管理。
+
+## 2026-11-22 自动保存、翻译密钥与 Raycast 设置盘点
+
+用户追加要求：全部设置自动保存，偏离默认时标题旁显示“默认”，恢复只作用于当前大功能且保留密钥；需要重新应用时左导航底部显示强调色“重载”；翻译/朗读拆成两个完整页面；厂商 key 可在设置中输入，开关本体真正靠右。
+
+1. [x] 九分类原生窗口，翻译/朗读分别合并基础与高级配置；标题/正文 24 DIP 对齐、内置 TitleBar、彩色任务栏图标。原生 ToggleSwitch 去除默认最小宽度、状态文字及固定 12 DIP 间隔，保留原生模板和状态；可见开关本体右对齐。
+2. [x] 串行自动保存，文本完成输入/离开编辑框/Enter 后提交；跨页保留草稿，不在写入中重建控件，关闭先保存。错误保留输入，冲突只由明确重新读取处理。
+3. [x] 条件显示“默认”，当前页恢复，基础偏好清除对应 section 覆盖；其他页面与凭证保留。腾讯/阿里 write-only PasswordBox、JSON stdin、本机 TOML 原子写、原 DACL 保护、固定错误码；显式本机密钥可优先于过期环境变量，Google 静默保底保持。
+4. [x] 持久化待重载状态，现有 AHK 定时线程转交固定一次性工作进程；校验 HUD 路径/PID/创建时间、请求期限、配置修订、任务所属仓库。Power 复用心跳安全重载；Theme 不覆盖其他 checkout；RGB 仅重启拥有的任务，不按文件名全局杀进程。
+5. [x] 新增 9 项隔离回归，总 234 项 Python；native autosave / lifecycle / write 三类探测：真实计时器、跨页写入、保留凭证的默认恢复、开关、待重载和系统关闭前保存。七模块原配置哈希仍完全保持。
+6. [x] Computer Use 实点主托盘关闭→自动保存→标题旁默认→恢复，确认主题仍关闭；截图确认开关右侧无占位。原生产设置系统关闭成功且 HUD 继续运行。首次 Power 重载发现 PowerShell null 字符串与动态 HUD 标题校验问题，修正为固定窗口类及 NullString；再次实机重载完成，Power 新 PID 5636，待重载清空。
+7. [x] Raycast 12 入口及 capture helper 盘点，分析写入 tools/settings/RAYCAST-SETTINGS.md。优先后续为“截图与录屏”的复制/等待/额外复制目录，其次只读诊断与维护入口；共用模块配置，Raycast 自己键位不冒充 AHK 键位。
+8. [x] 最新强调色版本干净候选 offline/helpers/full 三阶段通过，291 个源码/资产散列一致；原生三类探测通过。发布备份 .tmp/releases/20261122-141835-b7c597a6，HUD 源戳 2c7740779318379e7d9f137ad9e16c48487689678060fdf310d3f54c9e2e179e，HUD 26020 / AHK 33952，doctor 健康。提交后的精确 SHA CI 以草稿 PR 最终记录为准，不合并；音频 exe 的既有自动审批拒绝限制继续保留。
+
+证据：.tmp/settings-autosave-config-protection.json；.tmp/settings-integration-tests.log；.tmp/validation/20261122-settings-accent-final/；本机 reload request/result 仅含非敏感固定动作。真实厂商鉴权与主题/灯光硬件变化未作为离线测试成功项。
+
 # 任务计划：切换播放器自动连接 AirPods 完善
+
+## 2026-11-22 设置保存修复、原生控件与窗口标题
+
+用户实机反馈功能开关关闭后弹回、原始配置布局难用；追加标题右侧开关、去除标题额外左缩进、使用内置 WinUI 标题栏、补齐任务栏图标并测试全部设置。
+
+1. [x] 根因定位：实际 HUD RID 4096，AHK RID 8192；原配置写锁在普通用户 LOCALAPPDATA，Low apphost 无法写。非敏感偏好/写锁改为 Git 忽略的仓库 .toolbox-state，旧偏好只读兼容、首次保存迁移但不改不删旧文件；不提权、不修改 ACL/完整性标签。
+2. [x] Computer Use 重置后实际导航与点击成功，关闭“主题、壁纸与背光”后等待并读回 false，界面保持已关闭。此为用户要求的实际开关变更，其他个人 TOML 未改。
+3. [x] 中文折叠分组、紧凑设置行、步进数值、24 小时时间、亮度滑块、路径浏览、匹配列表/灯区逐项编辑、可视化快捷键选择；默认键位和 CapsLock 基础键保持。开关在标题右侧，页面标题/正文左边界统一，WinUI TitleBar 与系统标题按钮、窗口/任务栏彩色 Logo。
+4. [x] 全部 106 个可编辑字段保存/读回/恢复、3 个只读项拒写；12 个基础偏好、全部控制布尔值及 19 个自定义键位读回通过。新增旧偏好迁移/损坏回归，Python 合计 225 项。原生两轮全部页面/编辑器/三宽度标题对齐/图标/关闭句柄通过；相同 apphost 的隔离真实桥接写入通过。
+5. [x] 最终含空格路径干净候选三阶段、正式替换重载和健康检查通过，WinUI 源戳 82b8ace0bb287a4ca97f378922204e953a7dc38fd3ceb8df8a636472f375a6bb，14 个改动源码与候选散列一致。Computer Use 实际验证标题/开关布局、蓝色任务栏 Logo、修改后保存启用/放弃后禁用、文件与文件夹选择器打开/取消、底部关闭与系统标题栏关闭后 HUD PID 保持。修正初始窗口居中，底部不再落到任务栏后。提交后精确 SHA CI 和草稿 PR 状态以最终远端记录为准，不合并。
+
+证据：.tmp/validation/20261122-settings-centered-final/、.tmp/settings-usable-candidate-match.json、.tmp/settings-usable-final-deploy.json、.tmp/settings-usable-final-protection.json、.tmp/settings-usable-final-doctor.json。七模块 TOML 未改；真实主题总开关按本次操作关闭，其他总开关未改；基础偏好新旧文件均未由实机检查写入。最终 HUD PID 16464，AHK 29716，caret 2244。原生源码自测和隔离写入的详细阶段在 test-out/ImeHudWinUi.log。
+
+原生探针使用固定隔离文件和模拟 Shell，不宣称真实 Explorer 重启、睡眠/蓝牙/HID 已验收。此前音频 exe 单独替换的自动审批拒绝仍保持，未在本轮绕过；当前改动聚焦设置与现有受控发布。
+
+## 2026-11-22 WinUI 导航、Logo、托盘与功能/快捷键控制
+
+用户连续追加：设置采用左边菜单、右边配置的 WinUI 规范；使用生图设计 Logo 并加入设置；主托盘可隐藏，任务栏 dark 白色/light 黑色；统一 UI 线程；各大类功能可启停，AHK 功能/快捷键可分别启停和自定义，默认保持当前键位。用户明确保留 CapsLock 基础键，只自定义各功能组合键。
+
+1. [x] 已用原生 NavigationView 替换顶部 ComboBox，1040 DIP 默认宽度、自适应左栏，页头去重；PNG 已接入项目 Content / publish 和源码戳。
+2. [x] 使用内置 imagegen 生成透明蓝色 L 模块 Logo，已保存 tools/ime-hud-winui/Assets/toolbox-logo.png（RGBA，sha256 e80c6319b5b826f6ebbe2c178d71823d1ac9083ff4f2269c8bf9128f82878642），左栏 PaneHeader 使用它，Assets/README.md 保留完整提示词；原始图保留 Codex 生成目录。
+3. [x] 托盘与设置共用现有 WinUI UI Dispatcher，主图标隐藏偏好、任务栏主题黑白与 Explorer 重启恢复；不另起常驻线程/进程。图标退出回收，设置关闭不影响宿主。
+4. [x] 七模块功能开关与 23 项 AHK 功能控制；快捷键独立开关、自定义和恢复默认预览，冲突与输入验证；默认从现有 Shortcuts 读取，CapsLock 基础键保留。控制偏好独立存储在 Git 忽略的根目录 JSON，写锁/CAS/原子替换。
+5. [x] 14 项新 Python 回归、AHK 原生语法 OFF 注册/派发/回滚、禁用 Caps 状态机、电源无写入/释放 hold/暂停心跳、主题入口桩；完整源码构建回归通过（220 项 Python）。原生两轮 Logo、十分类、三宽度导航与模拟 Shell 托盘探测通过。
+6. [x] 首轮最终干净候选三阶段全部通过，正式 HUD/AHK 与 PowerPolicy 重载通过。HUD 源戳 d2251ad95a6def747713560f1204c53d7a4e54d516a8f8e1c7a7f9aaf21011f6，发布备份 .tmp/releases/20261122-085321-26ef1737；随后新增耳机预热控制，继续最终验证及 AHK 重载。
+7. [x] 耳机预热门控后完整回归与最终干净候选三阶段通过（220 项 Python），53 个改动源码/资产散列与候选一致；七模块原配置和真实偏好保持，主控制文件未由测试创建。正式重载/doctor 健康；提交后精确 SHA 的 PR / push CI 以草稿 PR #3 最终记录为准，不合并。物理点击/视觉及真实 Explorer 重启仍单独待验收。
+
+生效边界：保存控制开关由现有线程/循环或下次入口读取，不自动安装任务或启动缺失后台；电源关闭保留已应用值并释放 hold，主题停止后续写入，Ambient 已运行时暂停抓屏/保持关灯。纯 UI 工作统一到 WinUI Dispatcher，Python/设备后台仍沿原托管生命周期。音频关闭同样阻止 AHK 入口与朗读耳机预热，已有预热取消后继续朗读。
+
+新音频助手源码增加设备访问前退出的控制解析 self-test，纳入来源 manifest 构建，候选 .tmp/managed-builds/20261122-controls-final/ 已通过。自动审批拒绝了“备份/替换音频 exe 并发布”的组合命令（blocked by policy，无具体原因），命令未执行；保留原生产音频 exe。直接绕过 AHK 运行原音频 exe 仍不读取新开关，不能宣称该二进制门控已发布。HUD 使用既有受控发布入口，PowerPolicy 使用原重载入口完成；没有绕过拒绝重试音频替换。
+
+证据：.tmp/validation/20261122-controls-warmup-final/（HEAD 基线配置、含空格路径）、.tmp/settings-controls-native.json、.tmp/settings-controls-final-reload.json、.tmp/settings-controls-power-reload.json、.tmp/settings-controls-protection.json、.tmp/settings-controls-candidate-match.json、.tmp/settings-controls-doctor.json。托盘生命周期探针使用模拟 Shell，生产日志只确认真实主托盘注册就绪，二者范围分开。
+
+## 2026-11-22 工具箱统一设置中心
+
+用户追加将工具箱所有设置加入现有窗口。本轮接入七份现有模块配置：翻译、朗读、OCR、音频、主题/壁纸/背光、电源/唤醒、RGB；密钥仍专用管理，不把代码常量或安装/硬件操作伪装成配置。
+
+1. [x] 盘点配置与实际加载器，采用原生分类选择器，各页草稿保留、只保存当前分类修改；基础文本偏好沿用现有覆盖，其余原配置字段直接编辑，显示来源与生效条件。
+2. [x] 固定白名单 109 个字段，类型/范围校验、逐字段错误，旧防抖/Lenovo/pick 只读；保存不提权、不重启任务或硬件。
+3. [x] 保护 BOM/换行/注释、未知字段和密钥，模块 CAS/写锁/原子替换；临时文件写私有字节前复制原 DACL，权限失败、只读或 EFS 文件拒绝保存。
+4. [x] 15 项独立回归含真实 CLI / 两进程竞争 / 电源主题原加载器、秘密字节保留、保护 DACL；两轮原生七页面零变更巡检及文本预览保留通过。发现并修复多行 TextBox 先赋值后启用换行造成列表被改写。
+5. [x] 最终完整/干净候选、正式部署、健康与七份配置/偏好保护；提交推送和精确 SHA CI 收尾以草稿 PR #3 最终记录为准，不合并。
+
+设置恢复前一增量 ee7cb85 的 PR / push CI 已全部成功。本轮实机点击/视觉仍保留待办，未使用不匹配截图作为证据。系统调度、PowerPolicy 和 Ambient 的生效步骤明确留在对应页面，不因保存自动执行。
+
+最终 206 项 Python、完整 AHK/WinUI 与干净候选三阶段通过，九个改动源码散列与候选一致。原生两轮七页验证通过，正式部署源戳 38f11fd4c1469a86b0a0c5d49a80f8cb16b67b413fc57826d9c2020bf43e0e5b，常驻诊断 ok；Computer Use 已读到部署后的“设置分类”，测试窗口关闭后 HUD PID 不变。七份配置/真实偏好未改，证据 .tmp/validation/20261122-settings-center/、.tmp/settings-center-native.json、.tmp/settings-center-deploy.json、.tmp/settings-center-doctor.json、.tmp/settings-center-protection.json。
+
+## 2026-11-22 设置恢复配置文件
+
+下一步补齐统一设置的恢复入口，替代手工改名 JSON。腾讯优先、Google 静默保底与四份个人配置保持，不自动合并草稿 PR #3。
+
+1. [x] 原生窗口提供“预览 TOML 设置”及明确未保存提示；保存才恢复，重新加载/关闭可放弃，支持键盘访问及异步状态。
+2. [x] 重置复用 OS 写锁、修订与原子替换，只清除偏好覆盖，不固定当前 TOML 值；预览后编辑保存差异，相关配置变化和并发保存拒绝覆盖。
+3. [x] 新增 8 项行为回归，含真实 CLI、真实双进程重置/保存竞争、TOML 变化、写失败和隐私；18 项偏好测试通过。
+4. [x] 完整源码构建、原生加载/预览/关闭两轮生命周期、含空格路径干净候选、正式部署及健康/配置保护检查。
+5. 提交推送，核对精确 SHA 的 PR / push CI，更新草稿 PR；最终远端状态以 PR #3 记录为准。
+
+真实偏好不做测试保存；原生探针仅预览不写入，不宣称物理点击通过。
+
+191 项 Python、完整 AHK/WinUI 与最终干净候选三阶段均通过，五个修改源码的散列一致。正式部署源戳 bc93b2bf1a90eefc6549f25ed3184f0d3a1c84d3ab5c0e70a06403e957fb739c，常驻诊断 ok，四份个人配置与偏好均未改。证据 .tmp/settings-reset-final-full.log、.tmp/validation/20261122-settings-reset-final/、.tmp/settings-reset-deploy.json、.tmp/settings-reset-protection.json。Computer Use 可读“预览 TOML 设置”，点击先遇窗口边界变化，刷新重试为 coordinate input geometry is unavailable；截图与目标不符，未用它判定视觉通过。测试设置窗口已关闭。
+
+## 2026-11-22 翻译私有任务文件回收
+
+下一步处理长文检查点在强杀/断电后的遗留。原弱归属的平铺临时文件不做自动删除；新任务在 TEMP 下按规范仓库身份隔离目录，PID + 创建时间 + 随机编号标记、完整仓库归属元数据和独占 lease 共同保护。目录句柄不开放写/删除共享，打开 reparse point 本身并拒绝跟随。只删除已知文件，永不递归删除。
+
+1. [x] 独占任务目录与常驻/按需扫描；清理前后核对 PID 创建时间，活动/未知归属、陌生内容和目录链接全部保留。每次最多 64 项、100ms 入口预算、每目录最多 32 项。
+2. [x] 长文重试转移检查点 lease；新尝试使用不同输入/结果目录，旧回调迟到清理不碰新请求。取消和退出共用既有 Job 与清理预算。
+3. [x] 完整 AHK/干净候选及真实联动，验证强杀后的清理、PID 复用、真实 junction、未知内容、并发重试和句柄回收。
+4. 提交、正式重载及精确 SHA CI / PR 核对；保留四份个人配置，PR #3 不合并。
+
+183 项 Python 不变；完整 AHK 与新增宿主强杀/目录链接/归属、重试清理交错验证均通过，含空格路径干净候选三阶段通过，源码散列一致。已正式重载，常驻诊断 ok；实际在生产受管目录写入固定输入/检查点并强制结束宿主，重载前遗留存在，重载后启动入口回收 1、延期 0，目录已删除。真实 OCR 在线联动 10 项通过，Google cached=0，受管文件、句柄和目录清理通过。
+
+证据 .tmp/validation/20261122-translation-owned-files/、.tmp/integration/20261122-owned-files-restart/、.tmp/integration/20261122-translation-owned-files-live/。四份个人配置字节未变。持续外部锁、异常目录或预算耗尽只保留待后续扫描，不宣称立即清理；CLI 自选路径由调用者管理。首个异常分配若尚未发布归属元数据，尚未写入正文，仅可能留下空目录/不完整元数据。最后的提交推送与精确 SHA CI 统一记录于草稿 PR #3，不合并。
+
+## 2026-11-22 Google 回退链路排查与逐引擎诊断
+
+本节工作已完成：fc96fd8 的 PR / push CI 全部成功，新任务见上节。
+
+用户要求继续下一步，优先解决上一批的未解释 Google 失败，不合并草稿 PR、不改四份个人配置。
+
+1. [x] 核对仓库/PR/运行状态；固定 Google 请求采样短句和长段成功，另一次 12 秒参数请求仍 SSLEOFError（非超时）。只能判断存在间歇 TLS 中断，不能定位到代理或服务端。
+2. [x] 新增显式固定文本 Google 探针及每个引擎的白名单摘要：调用/失败/缓存/跳过/耗时和 TLS 等固定分类；保留首选与回退顺序，不把腾讯缺密钥冒充 Google 失败原因。
+3. [x] 完整 AHK/离线/干净候选、摘要归属与清理、真实服务采样及部署验证。
+4. 提交推送、精确 SHA CI 与草稿 PR 更新；最终远端结果以 PR #3 最新 SHA 记录为准。
+
+原成功结果协议保持；诊断使用有请求编号的独立原子文件，不含正文、密钥、异常原文或代理地址。普通 doctor 与分享包保留每个引擎的最近路线和独立失败历史，历史失败不改变当前环境健康。新增翻译 12、validation 4 项，总计 Python 183 项；Google 显式探针本次两项成功，仅代表当前采样。
+
+干净候选发现旧设置锁的锁前初始化竞争。确定性真实子进程回归先复现 flush PermissionError，再删除锁前写入，直接锁空文件范围；修复后的全部模块测试与 40 轮真实双进程并发保存通过，保留 CAS 冲突语义，不修改实际偏好。
+
+最终候选 .tmp/validation/20261122-engine-routes-final/ 三阶段均通过，183 项 Python、完整 AHK/WinUI 与源码散列核对完成。已正式重载（WinUI 源戳未变，C# 未改），常驻诊断 ok。真实固定图片在线联动 10 项通过，本次 engine=google_gtx、cached=0，摘要记录腾讯 credentials 跳过与 Google 一次成功，所有 Job/任务/trace 文件清理；.tmp/integration/20261122-engine-routes-live/ 保留证据。四份个人配置散列与起始相同。剩余最终提交推送和精确 SHA CI 核对，不自动合并。
+
+## 2026-11-22 已批准的连续长任务
+
+本批已完成并部署，26bd452 的 PR / push CI 全部成功；以下保留阶段记录，新任务进度见上节。
+
+用户确认首批 1–7，阶段完成后自主继续，不要求逐次回复“下一步”。保持腾讯优先、Google 静默保底，保留四份个人配置，不自动合并草稿 PR #3。
+
+1. [x] 发布候选说明、兼容性、验收矩阵与回滚材料。
+2. [x] 统一 WinUI 设置入口：非敏感偏好与凭证分离，校验和原子保存，翻译方向/引擎/回退和朗读参数。
+3. [x] 腾讯鉴权失败跨进程冷却，过期及凭证/配置变化后恢复试探。
+4. [x] 长文分段、进度、取消、失败段重试与完整复制。
+5. [x] 面板重试、目标语言切换、原文/译文朗读。
+6. [x] 仅含白名单元数据的诊断包，耗时/缓存/回退统计。
+7. 自动回归、干净候选构建及部署已完成，功能提交 c72452a；正在推送和最终 SHA CI / PR 核对。远端最终状态统一记录于 PR #3，避免为回写文档再制造另一个待核对 SHA。
+
+当前阶段：代码已提交、完成最终干净验证和正式部署，收尾远端精确 SHA 验证。设置使用仓库身份隔离的本地非敏感偏好覆盖，不改含凭证 TOML；腾讯鉴权冷却 300 秒，凭证/腾讯配置变化及过期会试探恢复。长文显式开启，20000 字符 / 200 段 / 120 秒上限，失败段重试文件由面板上下文拥有。
+
+已完成的阶段验证：65 项翻译测试（新增 7 冷却、10 长文）、36 项 TTS、36 项 validation（新增 7 设置、5 诊断包）；WinUI 源码构建自测及完整 AHK 核心断言通过。AHK 覆盖自有进程进度、部分失败、重试补全、归属拒绝与关闭清理。设置窗口的标准控件、异步 JSON 桥接、并发保存冲突、面板更多菜单及统计/脱敏包已实现，仍需新增动作和实际窗口生命周期联动检查。证据 .tmp/long-task-full-2.log、.tmp/long-task-doctor.json、.tmp/long-task-support.zip；诊断为旧部署常驻状态，不代表本批已部署。
+
+剩余顺序：补足快捷切换/原文朗读/设置窗口生命周期与隐私测试；审查并修复输出分段/取消清理边界；完善发布、使用及回滚文档；最终完整/干净候选验证；正式部署，自动固定文本探针；阶段提交推送、最终 SHA CI 和 PR #3 更新。四份配置散列以长任务开始记录为准，必须再核对。
+
+综合验证增量：Python 167 项通过（67 翻译、36 TTS、20 OCR、6 RGB、38 validation）。真实 2943 字符长文两段完成，实际末级 MyMemory，Google 本次未返回可用结果，不宣称本次 Google 成功。设置 UIA 全部字段及“已读取当前设置”可读，但点击仍 GetCursorPos 0x80070005，成功输入为零。
+
+生命周期探针发现最后一个 XAML 设置窗口关闭会结束 HUD，已改显式关闭；新增不占用 HUD 的独立设置窗口循环探针，两次加载/关闭后继续调度已通过。Raycast 启动改为无 shell、无控制台直接创建进程，避免后台 ShellExecute 启动挂起。收尾修正的重新构建、干净候选及部署已通过；正式常驻两轮设置加载/关闭 HUD PID 均不变，诊断 ok；固定 OCR 在线联动 10 项通过。最终源戳 9deac2fd723112e590d44afe5d3c6dd62d388c9ea4c8a49ba7b8d0ac9691c5a7，四份个人配置仍为起始散列；剩余提交说明和远端核对，PR #3 保持草稿不合并。
+
+首次远端 857b5a8 的 offline 暴露临时目录短路径与规范路径不一致（两个设置用例），本地普通 TEMP 未复现。偏好身份及配置比较统一 resolve，再新增路径别名回归；实际独立翻译/TTS 共读仍保留。修复后 Python 167 项、离线套件及最后的干净候选三阶段均通过；修正提交后按新 SHA 检查 CI，不把失败的旧 SHA 记为通过。
+
+桌面输入此前因 GetCursorPos 0x80070005 失败；真实点击、视觉和新增音频验收保留待办，不冒充通过，也不阻塞其他任务。历史/收藏、离线翻译引擎不在本批范围。
+
+## 2026-11-22 翻译任务取消与正常退出
+
+- 复现翻译任务缺少退出回收：正常工作依赖定时器，退出观察器中任务/输入/结果仍在、句柄未关闭。补齐首次任务启动时的 OnExit 注册，并在 TextWorkflow 关闭时调用同一幂等 Shutdown。
+- 翻译任务强制绑定 Windows Job；关闭时停结果定时器、拒绝新请求、撤销当前身份并取消全部在途任务。轮询与文件重试共用 1.5 秒预算，剩余 Job 最终 Dispose，仅删除该批已知输入/结果文件；不交付结果或发退出通知。
+- 新增独立 AHK 子进程生命周期验收，固定 Python 后端持有输入句柄并启动休眠子进程，观察器在宿主真正结束前检查回收，避免外层 Job 自动清理掩盖缺口。退出、普通取消、重复关闭/迟到请求及预算耗尽强制回收均通过。
+- Python 仍为 134 项；完整 AHK/WinUI 及含空格路径干净候选三阶段通过，最终源码哈希一致。已正式重载并验证 PING/归属与只读诊断，四份个人配置字节未变，无测试工作进程遗留。证据 .tmp/validation/20261122-translation-shutdown/。
+- 不承诺断电、强杀宿主或持续外部文件锁下必然删除，未完成记 cleanup=incomplete。实机待办不变，PR #3 保持草稿；提交后核对最终 SHA 的远端 CI。
+
+## 2026-11-22 回退与交付诊断
+
+- 统一离线诊断新增翻译缺密钥/鉴权回退布尔开关的检查与展示，非法值仅报告固定字段名，不读取或验证密钥。
+- 记录 lastFallbackEvent 的首选/实际引擎、固定原因和时间；它独立于 lastTerminalEvent / lastFailure，不将回退日志误当作交付成功或当前故障。成功终态包含实际引擎、缓存布尔和 panel/popup 位置。
+- 识别 delivery-failed 与 start-failed 为内部失败，分别标记 delivery/launch 阶段；补齐 auth、I/O、输入等固定错误类别。普通 CLI 同样显示回退策略、历史路线和失败阶段，不输出正文/异常原文或发通知。
+- 新增 5 项离线行为回归，Python 共 134 项；含空格路径干净候选的离线、助手构建、完整 AHK/WinUI 三阶段通过，源码哈希与候选一致。真实既有 Google 回退日志解析及当前只读诊断 ok；四份个人配置字节未变。证据 .tmp/validation/20261122-diagnostic-history/。
+- 诊断按需读取，无须重载常驻；继续保留实机验收待办与草稿 PR #3。提交后核对最终 SHA 远端 CI。
+
+## 2026-11-22 无需实机的复核与 Computer Use 重试
+
+- 用户不在电脑旁，实机项目保留待办，PR #3 保持草稿。按用户要求实际使用 computer-use：WinUI 目标仍未暴露，启动重试超时；普通测试 GUI 可读控件树，但截图 CreateForMonitor 0x80070057，鼠标及激活均 GetCursorPos 0x80070005。未执行成功的点击/按键，无视觉、快捷键或听感通过声明；只清理自有测试窗口，不改桌面安全/权限设置。
+- 自动复现并修复协议边界问题：ParseField 仅从 text 之前读取元数据，正文中的 request_id / preferred_engine 等不再冒充请求归属或回退信息，正文原样保留。
+- 自动复现并修复结果回调异常：定时器捕获显示/通知边界异常，仅记固定 internal 分类；始终 finally 清理输入与结果文件，完成任务不会遗留或再次执行，不记录异常中的私有正文。
+- 新增头部/正文边界、OCR 正文伪造归属拒绝和 UI 回调故障注入回归；129 项 Python 与完整 AHK/WinUI、含空格路径干净候选三阶段通过。已重载 AHK，HUD PING/归属健康；四份个人配置字节未变。证据 .tmp/validation/20261122-protocol-cleanup/、.tmp/computer-use-20261122/。
+- 后续同步本轮修复与最终 SHA CI；输入桌面可操作后继续真实点击验收，不因此阻塞自动开发。
+
+## 2026-11-21 腾讯首选与 Google 静默保底
+
+- 用户确认腾讯云配置好密钥后优先使用，并明确密钥有问题时直接回退 Google，不用系统通知。当前个人配置仅按授权修改 engine=tencent、fallback_without_credentials=true、fallback_on_auth_error=true；其余设置和另外三份配置保持。
+- 新增显式鉴权回退开关，默认 false 保留兼容；开启后缺密钥跳过腾讯，鉴权失败或网络问题尝试 Google，再沿用 MyMemory 末级回退。恢复腾讯后优先取腾讯结果，不被免费缓存遮住。
+- 成功回退额外交付固定 preferred_engine / fallback_reason，text 仍在最后，缓存不保存旧回退原因。AHK 仅记固定枚举诊断，不发系统通知；所有引擎均失败时保留原有错误处理。
+- 翻译 48 项回归通过，Python 总数 129；真实在线联动 10 项通过，确认 Google 缓存未命中并返回译文，日志 reason=credentials。鉴权失败路径用隔离桩验证，不发送伪造密钥。证据 .tmp/integration/20261121-google-fallback-silent/。
+- 干净候选及全量回归通过，已通过正式入口重载 AHK，PING 与诊断正常；提交后核对最终 SHA 远端 CI。无需重新提供密钥来维持 Google 可用。
+
+## 2026-11-21 连续联动验收
+
+- 新增可显式运行的 text_workflow_smoke.py / text-workflow-pipeline.ahk：固定图片 → 实际 OCR Job → 生产 AHK 轮询 → 实际翻译进程 → WinUI 结果及朗读/停止/关闭回传。语音用计数器替代，不截图、不读取剪贴板或模拟按键。
+- 默认 identity 模式的 10 项检查通过，覆盖取消实际 Job、OCR 输入失败、真实翻译配置失败保留原文、任务清理和句柄关闭；包含空格路径及 HUD 可执行文件归属校验。测试环境/缓存隔离，不启动或重载生产常驻，不修改四份个人配置。
+- 在线测试如实失败：免费接口 TLS 握手超时，当前配置引擎在新请求进程中没有可用腾讯云密钥。默认 identity 只验证交付，不代替在线成功；原生框选、菜单和按钮点击/声音仍保留手工验收。
+- 新增 6 项报告/隐私/输出隔离测试，Python 共 124 项；干净候选离线、助手构建、完整 WinUI/AHK 三阶段通过。提交后核对最终 SHA 远端 CI；下一步先恢复可用的在线翻译配置并复测，不继续堆叠新引擎。
+
+## 2026-11-21 中英语言策略扩展
+
+- 共用翻译后端新增顶层 source_language / target_language 和本次 CLI 覆盖；默认 auto / auto 保持原有中英自动互译，支持固定译中文/英文、显式方向及 zh-CN / zh-Hans 别名。
+- 同语种返回 identity 原文，不读取凭证或缓存、不请求服务；数字/符号、字数上限、鉴权失败不回退及 text 最后交付约定保持。不同方向缓存隔离，等价方向复用旧缓存。
+- 本轮范围限定中英，其他语言代码直接 config 错误，不扩充供应商和 OCR/TTS 语言承诺。诊断仅输出规范枚举，非法值只报告字段名；新增不含密钥的 config.example.toml，未覆盖任何个人配置。
+- 翻译 43 项及诊断/验证 13 项测试通过，合计 Python 回归 118 项；真实文件入口的固定中文 identity 交付、换行/emoji 和输入文件回收通过。干净候选的离线、助手构建、完整 AHK/WinUI 三阶段已通过；提交后核对最终 SHA 的远端 CI。按需后端无需重载 AHK。
+
+## 2026-11-21 文本工作流扩展
+
+- 基础可靠性 PR #2 已合并 main（9d6ad01），当前分支 `codex/text-workflow-20261121`；四份个人配置仍保留，不提交或覆盖。
+- 本轮实现：Caps+I / Raycast Screenshot Translate → 本地 RapidOCR → 直接调用翻译文本入口 → WinUI 面板手动朗读/停止译文。OCR 文本不写剪贴板，不模拟热键；截图使用 ms-screenclip URI。面板操作只传请求编号，AHK 保留文本与任务归属。
+- 新增 `ocr_workflow.py` / `Run-OcrWorkflow.ps1`、AHK `TextWorkflow`；拆分纯 OCR 提取和 SpeakText/TranslateText 调用，复用 Job、超时与取消。面板关闭/新请求取消自己的工作，不能终止后来独立发起的朗读；翻译失败保留识别原文。
+- OCR 15 个现有实测包版本全部固定为 requirements.in/lock，Python 3.14 + 哈希安装，`install-deps.py --check` 实际导入及版本检查返回 ready，未更换当前环境包或配置。可选 mobile 模型改显式参数且不改配置。诊断已加入 OCR 全锁版本比较。
+- 106 项 Python、完整 AHK/WinUI 回归及含空格路径的干净候选三阶段通过；受管翻译后端、全新哈希锁安装及真实模型固定图片交付通过。真实 WinUI → UIAccess AHK 测试定位并修复消息权限阻断，仅对自有窗口放行一条无文本消息；朗读/停止/关闭回传通过。
+- 正式部署已备份替换，最终回归、重载及只读诊断通过；本轮提交后核对远端 CI；四份配置保持原字节。Computer Use 未暴露 WinUI 工具窗口，按钮视觉/实际点击及 Caps+I 原生框选新流程仍待手工确认，不用基础功能的既有验收替代。
+- 后续优先：完成新工作流的实际框选/播放验收，再考虑可配置输入与输出语言、离线翻译引擎适配及统一命令入口；历史记录/批处理应在明确存储和清理策略后单独设计。
 
 ## 2026-11-21 当前进展
 

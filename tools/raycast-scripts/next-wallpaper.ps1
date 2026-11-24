@@ -9,6 +9,8 @@
 # @raycast.icon 🖼️
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\settings.ps1')
+if(-not(Test-ToolboxRaycastCommandEnabled -Command 'next-wallpaper')){exit 0}
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 trap {
@@ -24,6 +26,7 @@ if (-not (Test-Path -LiteralPath $themeUtils -PathType Leaf)) {
   throw "Theme utils not found: $themeUtils"
 }
 . $themeUtils
+if(-not(Test-ThemeFeatureEnabled)){return}
 
 $mutex = [System.Threading.Mutex]::new($false, 'Local\lat3ncy-next-wallpaper')
 $mutexOwned = $false

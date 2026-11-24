@@ -29,6 +29,8 @@ class CaffeineIndicator {
 
     ; ---------------- 生命周期 ----------------
     static Start() {
+        if IsSet(ToolboxControls) && !ToolboxControls.FeatureEnabled("CaffeineIndicator")
+            return
         if this.Started
             return
         this.Started := true

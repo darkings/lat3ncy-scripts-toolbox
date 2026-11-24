@@ -43,6 +43,8 @@ internal sealed class HudHost : IDisposable
     readonly HashSet<long> _islandSiteLogged = [];
 
     TranslationPanelHost? _panel;
+    ToolboxSettingsWindow? _settings;
+    ToolboxTray? _tray;
     IslandSystemBackdrop? _islandBackdrop;
     Storyboard? _showStoryboard;
     Storyboard? _hideStoryboard;
@@ -75,7 +77,7 @@ internal sealed class HudHost : IDisposable
             ? Native.DWMSBT_NONE
             : Native.DWMSBT_TRANSIENTWINDOW;
 
-    public HudHost()
+    public HudHost(bool enableTray = true)
     {
         _dispatcher = DispatcherQueue.GetForCurrentThread()
             ?? throw new InvalidOperationException("当前线程没有 DispatcherQueue");
@@ -127,6 +129,11 @@ internal sealed class HudHost : IDisposable
 
         // 不要在 Initialize / Content 赋值附近同步设 SystemBackdrop。
         _content.Root.Loaded += OnContentLoadedForBackdrop;
+        if (enableTray)
+        {
+            try { _tray = new ToolboxTray(_hwnd, ShowSettings, _dispatcher); }
+            catch (Exception error) { HudLog.Line("toolbox-tray=init-failed kind=" + error.GetType().Name); }
+        }
     }
 
     /// <summary>
@@ -139,6 +146,7 @@ internal sealed class HudHost : IDisposable
             if (_panel == null)
             {
                 _panel = new TranslationPanelHost();
+                _panel.SettingsRequested += (_, _) => ShowSettings();
                 HudLog.Line("translation-host-ok hwnd=" + _panel.Handle.ToInt64());
             }
             return _panel;
@@ -248,6 +256,12 @@ internal sealed class HudHost : IDisposable
         Protocol.Message message = Protocol.Parse(text);
         switch (message.Kind)
         {
+            case Protocol.Kind.Settings:
+                ShowSettings();
+                break;
+            case Protocol.Kind.SettingsClose:
+                _settings?.CloseForShutdown();
+                break;
             case Protocol.Kind.Hide:
                 HideNoActivate(animate: true);
                 break;
@@ -275,6 +289,18 @@ internal sealed class HudHost : IDisposable
         }
     }
 
+    void ShowSettings()
+    {
+        if (_closing) return;
+        if (_settings == null)
+        {
+            _settings = new ToolboxSettingsWindow(() => { if (_tray != null) _ = _tray.RefreshPreferencesAsync(force: true); });
+            _settings.Closed += (_, _) => _settings = null;
+        }
+        _settings.Activate();
+        HudLog.Line("settings-open");
+    }
+
     /// <summary>
     /// 跟随光标：只搬窗口位置，不改状态、不改时长、不动淡入淡出。
     /// 没有淡入淡出，所以不会闪。
@@ -295,6 +321,7 @@ internal sealed class HudHost : IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        try { _tray?.Dispose(); } catch { }
         try { _uiSettings.ColorValuesChanged -= OnColorValuesChanged; } catch { }
         try { _cycleTimer.Tick -= OnCycleTick; } catch { }
         // CloseHud 已经 DetachIsland。这里只 unpin，避免二次 Dispose Island。
@@ -452,6 +479,8 @@ internal sealed class HudHost : IDisposable
         ApplyHostChrome(dark);
         ResizeIsland();
         _panel?.SyncThemeFromSystem(reason);
+        _tray?.SyncTheme();
+        _settings?.SyncTitleTheme();
     }
 
     void ApplyHostChrome(bool? dark = null)
@@ -762,6 +791,7 @@ internal sealed class HudHost : IDisposable
 
     IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        if (_tray?.HandleMessage(msg, wParam, lParam) == true) return IntPtr.Zero;
         switch (msg)
         {
             case Native.WM_MOUSEACTIVATE:
@@ -872,6 +902,10 @@ internal sealed class HudHost : IDisposable
         // SystemBackdrop 必须在 HWND 还活着时拆掉。Destroy 后再 Dispose Island 会 native AV。
         try { _panel?.Dispose(); } catch { }
         _panel = null;
+        try { _settings?.CloseForShutdown(); } catch { }
+        _settings = null;
+        try { _tray?.Dispose(); } catch { }
+        _tray = null;
         DetachIsland("close");
         if (Native.IsWindow(_hwnd))
             Native.DestroyWindow(_hwnd);

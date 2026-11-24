@@ -17,6 +17,11 @@ internal sealed class TranslationPanelHost : IDisposable
 {
     public const string ClassName = "Lat3ncyImeHudWinUiPanel";
     public const string WindowTitle = "Lat3ncyImeHudWinUiPanel";
+    const uint WorkflowMessage = 0x8000 + 76;
+    IntPtr _actionOwner;
+    int _actionRequest;
+    [DllImport("user32.dll", EntryPoint = "PostMessageW", SetLastError = true)]
+    static extern bool PostWorkflowMessage(IntPtr hwnd, uint message, IntPtr request, IntPtr action);
 
     readonly Native.WndProc _wndProc;
     readonly GCHandle _wndProcPin;
@@ -38,6 +43,7 @@ internal sealed class TranslationPanelHost : IDisposable
     IntPtr _mouseHook;
     IntPtr _openForeground;
     int _dismissEpoch;
+    int _menuOpen;
     bool _visible;
     bool _pinned;
     Native.RECT _pinnedRect;
@@ -49,6 +55,7 @@ internal sealed class TranslationPanelHost : IDisposable
     public IntPtr Handle => _hwnd;
     public bool IsVisible => _visible;
     public bool IsPinned => _pinned;
+    public event EventHandler? SettingsRequested;
 
     bool ShouldApplyIslandBackdrop =>
         Native.TransparencyEnabled() && !Native.HighContrastEnabled();
@@ -94,6 +101,10 @@ internal sealed class TranslationPanelHost : IDisposable
         _content.PinChanged += OnPinChanged;
         _content.CloseRequested += (_, _) => Hide();
         _content.CopyRequested += (_, target) => Copy(target);
+        _content.SpeechRequested += (_, _) => RequestSpeech();
+        _content.SettingsRequested += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+        _content.WorkflowActionRequested += (_, action) => NotifyAction(action);
+        _content.MenuStateChanged += (_, open) => Volatile.Write(ref _menuOpen, open ? 1 : 0);
         _content.DragRequested += (_, _) => BeginCaptionDrag();
         _xamlSource.Content = _content.Root;
         ResizeIsland();
@@ -126,6 +137,24 @@ internal sealed class TranslationPanelHost : IDisposable
                 break;
             case TranslationPanelProtocol.Kind.Copy:
                 Copy(message.CopyTarget);
+                break;
+            case TranslationPanelProtocol.Kind.Actions:
+                if (_visible && Native.IsWindow(new IntPtr(message.ActionOwner)))
+                {
+                    _actionOwner = new IntPtr(message.ActionOwner);
+                    _actionRequest = message.RequestId;
+                    _content.SetSpeechState(message.ActionReady && _result.Ok, message.Speaking);
+                    _content.SetWorkflowState(true, message.Busy, message.Speaking);
+                    HudLog.Line("translation-actions request=" + _actionRequest
+                        + " ready=" + message.ActionReady + " speaking=" + message.Speaking);
+                }
+                break;
+            case TranslationPanelProtocol.Kind.Progress:
+                if (_visible && message.RequestId == _actionRequest)
+                    _content.SetProgress(message.Completed, message.Total, message.Failed);
+                break;
+            case TranslationPanelProtocol.Kind.Speak:
+                RequestSpeech();
                 break;
             case TranslationPanelProtocol.Kind.Close:
                 Hide();
@@ -212,6 +241,8 @@ internal sealed class TranslationPanelHost : IDisposable
 
     void ApplySource(string textSource, string payload)
     {
+        NotifyAction(2);
+        ResetActions();
         TranslationSource.Result source = TranslationSource.Resolve(textSource, payload, _hwnd);
         // 换原文时默认打回 Empty 译文，不能沿用上一次 RESULT。
         _source = source;
@@ -276,6 +307,11 @@ internal sealed class TranslationPanelHost : IDisposable
 
     void Hide()
     {
+        _content.CloseMenu();
+        Volatile.Write(ref _menuOpen, 0);
+        if (_visible)
+            NotifyAction(2);
+        ResetActions();
         // 隐藏后旧的前台回调全部作废，避免 ShowNoActivate 的编辑器快照把新一轮面板关掉。
         Interlocked.Increment(ref _dismissEpoch);
         _openForeground = IntPtr.Zero;
@@ -286,6 +322,30 @@ internal sealed class TranslationPanelHost : IDisposable
         HudLog.Line("translation-hide pinned=" + _pinned
             + " remembered=" + _hasPinnedRect
             + " rect=" + DescribePinnedRect());
+    }
+
+    void NotifyAction(int action)
+    {
+        if (_actionOwner != IntPtr.Zero && _actionRequest > 0)
+        {
+            bool posted = PostWorkflowMessage(_actionOwner, WorkflowMessage, new IntPtr(_actionRequest), new IntPtr(action));
+            HudLog.Line("translation-action request=" + _actionRequest + " action=" + action + " posted=" + posted
+                + " error=" + (posted ? 0 : Marshal.GetLastWin32Error()));
+        }
+    }
+
+    void RequestSpeech()
+    {
+        if (_visible && _result.Ok)
+            NotifyAction(1);
+    }
+
+    void ResetActions()
+    {
+        _actionOwner = IntPtr.Zero;
+        _actionRequest = 0;
+        _content.SetSpeechState(false, false);
+        _content.SetWorkflowState(false, false);
     }
 
     void SetPinned(bool pinned)
@@ -636,6 +696,7 @@ internal sealed class TranslationPanelHost : IDisposable
             && !_pinned
             && !_closing
             && !_disposed
+            && Volatile.Read(ref _menuOpen) == 0
             && Native.TryReadLowLevelMousePoint(lParam, out Native.POINT pt))
         {
             int epoch = Volatile.Read(ref _dismissEpoch);
@@ -651,7 +712,7 @@ internal sealed class TranslationPanelHost : IDisposable
             return;
         if (epoch != Volatile.Read(ref _dismissEpoch))
             return;
-        if (!_visible)
+        if (!_visible || Volatile.Read(ref _menuOpen) != 0)
             return;
 
         bool hits = Native.PointHitsWindow(_hwnd, pt);
@@ -682,6 +743,9 @@ internal sealed class TranslationPanelHost : IDisposable
         if (idObject != 0)
             return;
         if (_closing || _disposed)
+            return;
+
+        if (Volatile.Read(ref _menuOpen) != 0)
             return;
 
         int epoch = Volatile.Read(ref _dismissEpoch);
@@ -716,7 +780,7 @@ internal sealed class TranslationPanelHost : IDisposable
         if (belongs || (known && !IsOpenForeground(hwnd)))
             _openForeground = IntPtr.Zero;
 
-        if (!TranslationPanelDismiss.ShouldHide(_visible, _pinned, known, belongs))
+        if (!TranslationPanelDismiss.ShouldHide(_visible, _pinned, known, belongs, Volatile.Read(ref _menuOpen) != 0))
             return;
 
         HudLog.Line("translation-dismiss reason=" + reason

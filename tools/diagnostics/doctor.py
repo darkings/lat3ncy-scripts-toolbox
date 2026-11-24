@@ -28,12 +28,24 @@ def load_file(name: str, path: Path):
     return module
 
 
+support = load_file('toolbox_support_bundle', Path(__file__).with_name('support_bundle.py'))
+preferences = load_file('toolbox_diagnostic_preferences', ROOT/'tools/toolbox_preferences.py')
+
+
 def config_summary(path: Path, component: str) -> dict:
     """Only export allowlisted enums, never the config or arbitrary values."""
     try:
-        if path.stat().st_size > 1024 * 1024:
-            return {'status': 'invalid', 'reason': 'config-too-large'}
-        value = tomllib.loads(path.read_text('utf-8-sig'))
+        default = False
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                return {'status': 'invalid', 'reason': 'config-too-large'}
+            value = tomllib.loads(path.read_text('utf-8-sig'))
+        except FileNotFoundError:
+            value, default = {}, True
+        original = value
+        if component in {'translate', 'tts'}:
+            value = preferences.apply_overlay(component, value, path)
+        extra = {'preferencesApplied': True} if value != original else {}
         engine = value.get('ocr' if component == 'ocr' else 'engine',
                            {'ocr': 'system', 'translate': 'tencent', 'tts': 'auto'}[component])
         if component == 'translate' and isinstance(engine, str):
@@ -41,9 +53,23 @@ def config_summary(path: Path, component: str) -> dict:
             engine = TRANSLATE_ALIASES.get(engine, engine)
         if not isinstance(engine, str) or engine not in ENGINES[component]:
             return {'status': 'invalid', 'reason': 'unsupported-engine'}
-        return {'status': 'ok', 'engine': engine}
-    except FileNotFoundError:
-        return {'status': 'default', 'engine': {'ocr': 'system', 'translate': 'tencent', 'tts': 'auto'}[component]}
+        if component == 'translate':
+            languages = {}
+            for field in ('source_language', 'target_language'):
+                raw = value.get(field, 'auto')
+                code = raw.strip().lower() if isinstance(raw, str) else ''
+                code = {'zh-cn': 'zh', 'zh-hans': 'zh'}.get(code, code)
+                if code not in {'auto', 'zh', 'en'}:
+                    return {'status': 'invalid', 'reason': 'unsupported-language', 'field': field}
+                languages[field] = code
+            policy = {}
+            for field in ('fallback_without_credentials', 'fallback_on_auth_error', 'long_text_enabled'):
+                enabled = value.get(field, False)
+                if not isinstance(enabled, bool):
+                    return {'status': 'invalid', 'reason': 'invalid-fallback-policy', 'field': field}
+                policy[field] = enabled
+            return {'status': 'default' if default else 'ok', 'engine': engine, **languages, **policy, **extra}
+        return {'status': 'default' if default else 'ok', 'engine': engine, **extra}
     except (OSError, ValueError) as error:
         return {'status': 'invalid', 'errorType': type(error).__name__}
 
@@ -58,11 +84,26 @@ def log_summary(path: Path, component: str) -> dict:
                           modifiedUtc=datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat())
             stream.seek(max(0, stat.st_size - 65536))
             tail = stream.read(65536).decode('utf-8-sig', errors='replace')
+        if component == 'translate':
+            result['statistics'] = support.translation_statistics(tail)
+            result.update(support.engine_routes(tail))
         # Anchored to production AHK records. A detail= field cannot inject one.
         tts = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[AHK\] 朗读结束 request=[A-Za-z0-9_-]+ status=(success|failed|timeout|cancelled) kind=(none|input|synthesis|playback|timeout|internal|cancelled|protocol) exit=(-?\d{1,3})$')
-        translate = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] (ok|fail) id=\d+(?: .*)?$')
+        stamp = r'\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] '
+        engines = r'(tencent|aliyun|google_gtx|mymemory)'
+        translate = re.compile('^'+stamp+r'(ok|ok-popup|fail|delivery-failed|start-failed|partial) id=\d+(?: .*)?$')
+        fallback = re.compile('^'+stamp+r'fallback preferred='+engines+r' engine=(google_gtx|mymemory) reason=(credentials|auth|network|timeout|too_long)$')
+        success = re.compile('^'+stamp+r'(ok|ok-popup) id=\d+ engine=(tencent|aliyun|google_gtx|mymemory|identity|mixed) cached=([01])(?: chars=\d+)?$')
         ocr = re.compile(r'^(\d\d:\d\d:\d\d) py (done exit=(0|1)|error exit=1(?: .*)?)$')
         for line in tail.splitlines():
+            if component == 'translate':
+                route = fallback.fullmatch(line)
+                if route:
+                    if route[2] != route[3]:
+                        result['lastFallbackEvent'] = {'atLocal': route[1], 'preferredEngine': route[2],
+                                                       'engine': route[3], 'reason': route[4]}
+                    # A fallback record alone is neither delivery nor failure.
+                    continue
             match = tts.fullmatch(line) if component == 'tts' else translate.fullmatch(line) if component == 'translate' else ocr.fullmatch(line) if component == 'ocr' else None
             if not match:
                 continue
@@ -70,14 +111,34 @@ def log_summary(path: Path, component: str) -> dict:
             if component == 'tts':
                 event.update(kind=match[3], exitCode=int(match[4]))
             elif component == 'translate':
-                category = re.search(r' diagnostic=(config|timeout|network|http|parse|internal)(?= |$)', line)
-                if category:
-                    event['kind'] = category[1]
+                if match[2] in {'ok', 'ok-popup'}:
+                    delivered = success.fullmatch(line)
+                    if not delivered:
+                        continue
+                    event.update(status='ok', engine=delivered[3], cached=delivered[4] == '1',
+                                 presentation='popup' if match[2] == 'ok-popup' else 'panel')
+                elif match[2] == 'delivery-failed':
+                    if not re.fullmatch(stamp+r'delivery-failed id=\d+ diagnostic=internal', line):
+                        continue
+                    event.update(status='fail', kind='internal', stage='delivery')
+                elif match[2] == 'start-failed':
+                    if not re.fullmatch(stamp+r'start-failed id=\d+ error=.*', line):
+                        continue
+                    event.update(status='fail', kind='internal', stage='launch')
+                elif match[2] == 'partial':
+                    category = re.fullmatch(stamp+r'partial id=\d+ diagnostic=(auth|config|timeout|network|internal)', line)
+                    if not category:
+                        continue
+                    event.update(status='partial', kind=category[2])
+                else:
+                    category = re.search(r' diagnostic=(auth|config|timeout|network|http|parse|internal|too_long|io|empty|detect|protocol|error)(?= |$)', line)
+                    if category:
+                        event['kind'] = category[1]
             else:
                 # OCR exit=0 also includes no-text/cancel; do not infer delivery.
                 event['status'] = 'completed' if match[3] == '0' else 'failed'
             result['lastTerminalEvent'] = event
-            if event['status'] in {'fail', 'failed', 'timeout'}:
+            if event['status'] in {'fail', 'failed', 'timeout', 'partial'}:
                 result['lastFailure'] = event
         return result
     except FileNotFoundError:
@@ -109,9 +170,9 @@ def probe(component: str, kind: str) -> dict:
         load_file('ocr_host', ROOT/MODULES['ocr']/'ocr_host.py').activate_environment()
     packages = {'ocr': ['rapidocr-onnxruntime', 'onnxruntime', 'Pillow', 'pyperclip'], 'translate': [], 'tts': []}[component]
     expected = {}
-    if component == 'tts':
-        expected = dict(re.findall(r'^([\w.-]+)==([^\s\\]+)', (ROOT/MODULES['tts']/'requirements.lock').read_text('utf-8'), re.MULTILINE))
-        if 'edge-tts' not in expected:
+    if component in {'tts', 'ocr'}:
+        expected = dict(re.findall(r'^([\w.-]+)==([^\s\\]+)', (ROOT/MODULES[component]/'requirements.lock').read_text('utf-8'), re.MULTILINE))
+        if ('edge-tts' if component == 'tts' else 'rapidocr-onnxruntime') not in expected:
             return {'status': 'invalid', 'reason': 'invalid-lock'}
         packages = list(expected)
     actual = {}
@@ -155,7 +216,7 @@ def select_tts_spec(module: Path, local_data: str | None, global_spec: dict) -> 
     return global_spec
 
 
-def collect() -> dict:
+def collect(*, include_logs: bool = True) -> dict:
     powershell = Path(os.environ.get('SystemRoot', 'C:/Windows'))/'System32/WindowsPowerShell/v1.0/powershell.exe'
     environment = os.environ.copy()
     environment['PSModulePath'] = str(powershell.parent/'Modules')
@@ -173,7 +234,7 @@ def collect() -> dict:
     logs = {name: log_summary(path, name) for name, path in {
         'translate': Path(os.environ.get('TEMP', '.'))/'lat3ncy-translate.log',
         'tts': ROOT/MODULES['tts']/'tts.log', 'ocr': ROOT/MODULES['ocr']/'.debug.log',
-        'startup': Path(os.environ.get('LOCALAPPDATA', Path.home()/'AppData/Local'))/'lat3ncy-toolbox/startup.log'}.items()}
+        'startup': Path(os.environ.get('LOCALAPPDATA', Path.home()/'AppData/Local'))/'lat3ncy-toolbox/startup.log'}.items()} if include_logs else {}
     attention = (any(item['status'] == 'invalid' for item in configs.values())
                  or any(item['status'] not in {'ok', 'not-applicable'} for item in modules.values())
                  or not runtime.get('residents')
@@ -189,6 +250,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true', help='Print structured metadata instead of the summary')
     parser.add_argument('--output', type=Path, help='Also save JSON to this path (contains local paths)')
+    parser.add_argument('--bundle', type=Path, help='Create a new shareable ZIP of allowlisted metadata; excludes paths and raw logs')
     parser.add_argument('--probe', choices=list(MODULES), help=argparse.SUPPRESS)
     parser.add_argument('--kind', default='global', help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -202,6 +264,12 @@ def main() -> int:
     except (OSError, ValueError, RuntimeError, ImportError) as error:
         report = {'status': 'query-failed', 'errorType': type(error).__name__}
     encoded = json.dumps(report, ensure_ascii=True, indent=2)
+    if args.bundle:
+        try:
+            support.write_bundle(args.bundle, report)
+        except (OSError, ValueError):
+            print('Support bundle could not be created (existing destination or unavailable output).', file=sys.stderr)
+            return 1
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(encoded+'\n', encoding='utf-8')
@@ -219,15 +287,27 @@ def main() -> int:
             if item.get('mismatches'):
                 print('    Dependency mismatches: '+', '.join(item['mismatches']))
             if report['configs'][name]['status'] == 'invalid':
-                print('    Check config.toml syntax and engine; values are omitted from this report.')
+                print('    Check config.toml syntax, engine, language and fallback policy; invalid values are omitted.')
+            elif name == 'translate':
+                policy = report['configs'][name]
+                print(f"    Fallback policy: missing credentials={policy.get('fallback_without_credentials', False)}; auth error={policy.get('fallback_on_auth_error', False)}")
         for name, item in report['logs'].items():
             print(f"  {name} log: {item['path']} ({item['status']})")
             if 'lastTerminalEvent' in item:
                 event = item['lastTerminalEvent']
-                print(f"    Latest recorded event: {event['atLocal']} {event['status']}")
+                details = ''.join(f' {key}={event[key]}' for key in ('engine', 'cached', 'stage') if key in event)
+                print(f"    Latest recorded event: {event['atLocal']} {event['status']}{details}")
+            if 'lastFallbackEvent' in item:
+                event = item['lastFallbackEvent']
+                print(f"    Latest recorded fallback: {event['atLocal']} {event['preferredEngine']} -> {event['engine']} ({event['reason']})")
             if 'lastFailure' in item:
                 event = item['lastFailure']
                 print(f"    Historical failure: {event['atLocal']} {event.get('kind', event['status'])}")
+            if 'statistics' in item:
+                stats = item['statistics']
+                print(f"    Retained requests: {stats['samples']}; cache hits: {stats['cacheHits']}; fallback requests: {stats['fallbackRequests']}; p95 ms: {stats['elapsedMs']['p95']}")
+            for engine, event in item.get('lastEngineFailures', {}).items():
+                print(f"    Historical engine failure: {engine} {event['kind']}; calls={event['calls']}; failed={event['failed']}; elapsed ms={event['elapsedMs']}")
         print('Offline metadata only. Use --json for details; historical failures do not indicate a current outage.')
     # A probe successfully delivered an observation even when it found a problem.
     # The outer command owns the health exit code; keep probe findings intact.

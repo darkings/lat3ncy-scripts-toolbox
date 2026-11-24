@@ -10,6 +10,9 @@ __pycache__/
 **/*.md
 !/README.md
 !/tools/*/README.md
+!/tools/ime-hud-winui/Assets/README.md
+!/tools/settings/RAYCAST-SETTINGS.md
+!/tools/settings/FUNCTION-REVIEW.md
 !/resources/cursors/README.md
 !/resources/icons/README.md
 !/findings.md
@@ -23,6 +26,7 @@ __pycache__/
 !/docs/releases/
 /docs/releases/*
 !/docs/releases/2026-11-21-reliability.md
+!/docs/releases/2026-11-22-text-workflow.md
 
 # 运行日志
 **/*.log
@@ -39,6 +43,10 @@ __pycache__/
 .pip_manual/
 .tmp_caps/
 .lat3ncy-tools-tmp/
+**/.toolbox-config-*.tmp
+.toolbox-controls.json
+.toolbox-state/
+.toolbox-controls-*.tmp
 /test_*.ahk
 /test.txt
 /*.png
@@ -76,3 +84,4 @@ __pycache__/
 tools/raycast-scripts/ocr/.debug.log
 tools/raycast-scripts/ocr/.toast-*.ps1
 tools/raycast-scripts/ocr/.venv314/
+tools/raycast-scripts/ocr/.cache/

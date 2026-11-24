@@ -1,9 +1,13 @@
 ﻿#Requires AutoHotkey v2.0
+#Warn VarUnset, StdOut
 #Include ..\main.ahk
 
 ; Task 1 contract harness. Run via run-tests.ps1 so stale results are removed and
 ; AutoHotkey parse/include failures cannot be mistaken for a passing test run.
 resultFile := A_Args.Length >= 2 ? A_Args[2] : A_Temp "\lat3ncy-toolbox-test-result.txt"
+ToolboxControls.TestPath := resultFile ".controls.json"
+ToolboxControls.Active := Map()
+ToolboxControls.Loaded := true
 if FileExist(resultFile)
     FileDelete resultFile
 
@@ -1436,7 +1440,6 @@ AssertEqual(true, HasMethod(TranslateSelectedText, "CancelCurrent"), "translate 
 AssertContains(translateSource, 'case "auth":', "translate maps cloud auth to a dedicated failure")
 AssertContains(translateSource, "翻译密钥无效", "translate auth failure has a stable toast fallback")
 AssertContains(translateSource, 'Notify.Error("×", message)', "translate failures use system toast, not HUD")
-AssertContains(translateSource, "lat3ncy-translate-in-", "translate uses unique input files")
 AssertContains(translateSource, "ProcessNoWindow.StartAsync(", "translate starts the helper without a console or blocking wait")
 AssertContains(translateSource, "14000", "translate parent timeout covers tencent plus fallbacks")
 panelOpenProbe := TranslationPanel.IsOpen()
@@ -1939,6 +1942,10 @@ AssertNotContains(smartPasteHelperSource, 'Remove-Item -LiteralPath $outputPath'
 #Include review-regressions.ahk
 #Include tts-lifecycle.ahk
 TtsLifecycleTests()
+#Include text-workflow.ahk
+#Include translation-lifecycle.ahk
+#Include translation-request-files.ahk
+#Include toolbox-controls.ahk
 
 FileAppend "PASS: core assertions`n", resultFile
 ExitApp 0

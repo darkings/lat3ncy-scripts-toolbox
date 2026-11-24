@@ -341,6 +341,8 @@ class SpeakSelectedText {
     }
 
     static IsAutoSwitchEnabled() {
+        if IsSet(ToolboxControls) && !ToolboxControls.ModuleEnabled("audio")
+            return false
         SplitPath A_LineFile, , &featuresDir
         SplitPath featuresDir, , &ahkDir
         SplitPath ahkDir, , &repoDir
@@ -361,6 +363,10 @@ class SpeakSelectedText {
     ; 异步预热耳机：先让 Caps+S 线程返回，连上（或失败/超时）后再启动 TTS。
     static StartHeadsetWarmup(raw) {
         gen := this.Generation
+        if IsSet(ToolboxControls) && !ToolboxControls.ModuleEnabled("audio") {
+            this.LaunchTts(raw, gen)
+            return
+        }
         this.PendingText := raw
         exe := this.AudioSwitcherExe()
         if !FileExist(exe) {
@@ -396,6 +402,12 @@ class SpeakSelectedText {
         try {
             if !IsObject(this.WarmupJob) {
                 this.StopWarmup()
+                return
+            }
+            if IsSet(ToolboxControls) && !ToolboxControls.ModuleEnabled("audio") {
+                raw := this.PendingText, gen := this.WarmupJob.generation
+                this.StopWarmup()
+                this.LaunchTts(raw, gen)
                 return
             }
             job := this.WarmupJob.job
@@ -514,17 +526,24 @@ class SpeakSelectedText {
                 return
             }
 
-            this.StopCurrent()
-            gen := this.Generation
-            if (this.IsAutoSwitchEnabled()) {
-                this.Log("检测到 tts.auto_switch_before_play=true，异步预热 AirPods")
-                this.StartHeadsetWarmup(raw)
-                return
-            }
-            this.LaunchTts(raw, gen)
+            this.SpeakText(raw)
         } finally {
             A_Clipboard := savedClipboard
         }
+    }
+
+    ; Direct text entry: workflows never synthesize Ctrl+C or change clipboard.
+    static SpeakText(raw) {
+        raw := this.Normalize(raw)
+        if !this.HasSpeakableText(raw)
+            return 0
+        this.StopCurrent()
+        gen := this.Generation
+        if this.IsAutoSwitchEnabled()
+            this.StartHeadsetWarmup(raw)
+        else
+            this.LaunchTts(raw, gen)
+        return gen
     }
 
     static ShortText(text, maxLength := 36) {

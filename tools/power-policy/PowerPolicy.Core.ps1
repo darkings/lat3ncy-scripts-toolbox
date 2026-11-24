@@ -1,6 +1,15 @@
 ﻿# Native callbacks contain no PowerShell scriptblocks (callbacks run on foreign threads).
 . (Join-Path $PSScriptRoot 'PowerPolicy.Identity.ps1')
 
+function Test-PowerPolicyFeatureEnabled {
+    $repo=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+    if(-not(Test-Path -LiteralPath (Join-Path $repo '.toolbox-controls.json'))){return $true}
+    $helper=Join-Path (Split-Path $PSScriptRoot -Parent) 'ToolboxControls.ps1'
+    if(-not(Test-Path -LiteralPath $helper -PathType Leaf)){return $false}
+    if(-not(Get-Command Test-ToolboxModuleEnabled -ErrorAction SilentlyContinue)){. $helper}
+    return (Test-ToolboxModuleEnabled -Module power -RepoRoot $repo)
+}
+
 function Initialize-PowerNative {
     if (-not ('ToolboxPower.Native' -as [type])) {
         Add-Type -Path (Join-Path $PSScriptRoot 'PowerNative.cs') -ErrorAction Stop
@@ -198,6 +207,7 @@ function Restore-DisabledWakeDevices {
 }
 
 function Invoke-WakeBlock {
+    if (-not (Test-PowerPolicyFeatureEnabled)) { return }
     # 只有 config [wake] disable_devices = true（默认）才动设备唤醒能力。
     # 旧实现的缺陷不是“禁用”本身，而是：白名单恒为空（没法豁免任何设备）、
     # 禁用后不留档（卸载不恢复）、且 powercfg /devicedisablewake 是持久设置。
@@ -240,8 +250,9 @@ function Invoke-PowerPolicyTick {
         }
     }
     $script:LastTickUtc=$tickUtc
-    $caffeine = Test-CaffeineActive
-    if ($DryRun) { Set-DesiredPowerPolicy (Get-DesiredPowerPolicy $caffeine); return }
+    $moduleEnabled = Test-PowerPolicyFeatureEnabled
+    $caffeine = $moduleEnabled -and (Test-CaffeineActive)
+    if ($DryRun) { if($moduleEnabled){Set-DesiredPowerPolicy (Get-DesiredPowerPolicy $caffeine)}; return }
     $snapshot = [ToolboxPower.Native]::GetSnapshot()
     foreach ($event in [ToolboxPower.Native]::DrainEvents()) { Write-Log "[原生通知] $event" }
     $source = [ToolboxPower.Native]::PowerSource()
@@ -249,11 +260,11 @@ function Invoke-PowerPolicyTick {
     if ($caffeine) { [void][ToolboxPower.Native]::Hold($reset) }
     else { [ToolboxPower.Native]::Release() }
     # Never send SC_MONITORPOWER: it suspended this machine despite the SYSTEM hold.
-    Set-DesiredPowerPolicy (Get-DesiredPowerPolicy $caffeine $snapshot.Lid)
-    $signature = "$caffeine|$source|$($snapshot.Lid)|$($snapshot.LidCallbacks)|$($snapshot.PowerCallbacks)|$($snapshot.DisplayCallbacks)"
+    if($moduleEnabled){Set-DesiredPowerPolicy (Get-DesiredPowerPolicy $caffeine $snapshot.Lid)}
+    $signature = "$moduleEnabled|$caffeine|$source|$($snapshot.Lid)|$($snapshot.LidCallbacks)|$($snapshot.PowerCallbacks)|$($snapshot.DisplayCallbacks)"
     if ($signature -ne $script:LastStatusSignature -or ([DateTime]::UtcNow - $script:LastStatusUtc).TotalSeconds -ge 20) {
         $status = [ordered]@{ version=2; pid=$PID; updatedUtc=[DateTime]::UtcNow.ToString('o');
-            caffeine=$caffeine; powerSource=$source; native=$snapshot; requestBalance=[ToolboxPower.Native]::RequestBalance;
+            caffeine=$caffeine; moduleEnabled=$moduleEnabled; powerSource=$source; native=$snapshot; requestBalance=[ToolboxPower.Native]::RequestBalance;
             displayMethod='video-idle'; maxLoopGapSeconds=[math]::Round($script:MaxLoopGapSeconds,3);
             largeLoopGapCount=$script:LargeLoopGapCount; scheme="$([ToolboxPower.Native]::ActiveScheme())" }
         foreach($key in $script:ResidentIdentity.Keys){$status[$key]=$script:ResidentIdentity[$key]}
@@ -289,7 +300,7 @@ function Start-LidPolicyLoop {
         $lastWakeBlock=[DateTime]::MinValue
         while (-not (Test-Path -LiteralPath $script:StopFile)) {
             Invoke-PowerPolicyTick
-            if (([DateTime]::UtcNow-$lastWakeBlock).TotalMinutes -ge 5) {
+            if ((Test-PowerPolicyFeatureEnabled) -and ([DateTime]::UtcNow-$lastWakeBlock).TotalMinutes -ge 5) {
                 Assert-LenovoDisabled
                 try { Invoke-WakeBlock } catch { Write-Log "[唤醒检查] $($_.Exception.Message)" }
                 $lastWakeBlock=[DateTime]::UtcNow
@@ -300,7 +311,7 @@ function Start-LidPolicyLoop {
         if ($acquired) {
             [ToolboxPower.Native]::Release()
             [ToolboxPower.Native]::StopNotifications()
-            try { Set-DesiredPowerPolicy (Get-DesiredPowerPolicy $false) } catch { Write-Log "[恢复失败] $($_.Exception.Message)" }
+            try { if(Test-PowerPolicyFeatureEnabled){Set-DesiredPowerPolicy (Get-DesiredPowerPolicy $false)} } catch { Write-Log "[恢复失败] $($_.Exception.Message)" }
             Write-Log '[退出] 请求已释放，恢复 Caffeine 关闭策略'
             try { $mutex.ReleaseMutex() } catch {}
         }

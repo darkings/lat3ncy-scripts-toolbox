@@ -4,7 +4,9 @@
 
 各工具的细节写在 `tools/*/README.md`，这里只给总览和常用命令。
 
-更新已有安装时，先看 [安装、更新与回滚](docs/RELEASING.md)；当前合并范围与验收记录见 [2026-11-21 发布候选](docs/releases/2026-11-21-reliability.md)。
+更新已有安装时，先看 [安装、更新与回滚](docs/RELEASING.md)；当前范围与验收记录见 [2026-11-22 文本工作流候选](docs/releases/2026-11-22-text-workflow.md)。[2026-11-21 基础可靠性记录](docs/releases/2026-11-21-reliability.md)保留为历史。
+
+翻译面板的“更多操作”提供失败重试、切换中英目标、朗读原文和设置。也可在 Raycast 运行 **Toolbox Settings**，打开 [工具箱设置中心](tools/settings/README.md)：翻译、朗读、OCR、音频切换、主题/壁纸/背光、电源与唤醒、氛围灯、截图与录屏均在同一窗口按分类管理；翻译与朗读分别集中在独立页面，支持自动保存、当前页恢复默认及本机厂商密钥输入。需要重新应用的配置在左栏底部显示重载；自动保存不执行系统或硬件操作。长文需显式开启，最多 20000 字符、200 段、120 秒，关闭面板取消任务。腾讯鉴权失败后冷却五分钟，期间继续 Google 保底，凭证/腾讯配置变化后重新尝试。详见 [翻译](tools/translate/README.md)。
 
 ## 快速开始
 
@@ -66,13 +68,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ahk\tests\run-tests.ps
 
 ## 快捷键
 
-改键只编辑 `ahk/shortcuts.ahk`；`ahk/hotkey-router.ahk` 负责校验和注册，`ahk/features/` 只实现功能。两个功能抢占同一快捷键会在启动时报错，不会静默覆盖。
+在工具箱设置的“功能与快捷键”中选择组合键和主键，可独立开关功能/快捷键；默认仍来自 `ahk/shortcuts.ahk`。`ahk/hotkey-router.ahk` 负责校验和注册，`ahk/features/` 只实现功能。启用项冲突会拒绝保存，实际注册失败保留原绑定。
 
 | 快捷键 | 功能 |
 | --- | --- |
 | `CapsLock` | 短按切中/英（记住，切窗口后恢复）；250–500ms 松开取消；长按进大写 |
 | `Caps + S` | 朗读选中文字，再按一次打断 |
 | `Caps + F` | 划词翻译（无选区则译剪贴板），光标处弹译文面板 |
+| `Caps + I` | 框选截图并翻译；识别期间再次按下取消任务 |
 | `Caps + G` | Google 搜索选中文字 |
 | `Caps + O` | 打开选中的文件、目录或 URL |
 | `Caps + E` | 在资源管理器中定位选中目标 |
@@ -84,7 +87,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\ahk\tests\run-tests.ps
 | `Caps + D` | 切换音频输出 `G27Q2 ↔ AirPods`（自动连接） |
 | `Ctrl + V` | 智能粘贴：剪贴板是图片时存成本地 PNG，其余原样透传 |
 | `Alt` + 反引号 / `Shift + Alt` + 反引号 | 同一应用窗口间正 / 反向循环（Zed 走项目切换） |
-| 无快捷键 | 快速左右摇鼠标 → 指针临时放大（1.4s 后恢复）**已暂时停用**：`FindMouse.Enabled := false`，改回 `true` 即恢复 |
+| 无快捷键 | 快速左右摇鼠标 → 指针临时放大（1.4s 后恢复），可在功能设置中开关 |
 
 ## 工具
 
@@ -109,6 +112,7 @@ Raycast 里添加 `tools/raycast-scripts` 目录即可用，可逐个绑 Hotkey�
 | `restart-autohotkey.ps1` | 重启本工具箱的 `main.ahk` |
 | `screenshot.ps1` / `record-screen.ps1` | 截图 / 录屏框选 |
 | `screenshot-ocr.ps1` | 屏幕区域 OCR（RapidOCR（默认，走 `ocr/.venv314`）或 `system`；引擎见 `ocr/config.toml`） |
+| `screenshot-translate.ps1` | 截图翻译，与 Caps+I 使用同一流程 |
 | `toggle-rgb.ps1` | 开关风扇 + 键盘灯 |
 | `next-wallpaper.ps1` | 换成图池里的下一张壁纸（同时设锁屏） |
 
@@ -127,15 +131,31 @@ Raycast 里添加 `tools/raycast-scripts` 目录即可用，可逐个绑 Hotkey�
 
 ```powershell
 python .\tools\tts\install-deps.py                 # 朗读
-python .\tools\raycast-scripts\ocr\install-deps.py # RapidOCR（全局 Python ≤3.14 时）
+python .\tools\raycast-scripts\ocr\install-deps.py # OCR 的锁定 Python 3.14 环境，需要 uv
+python .\tools\raycast-scripts\ocr\install-deps.py --check # 只检查版本和实际导入
 ```
 
-RapidOCR 的 onnxruntime wheel 滞后最新 Python 一个小版本；全局 Python 过新时用专用 3.14 venv（`screenshot-ocr.ps1` 会自动优先使用，详见 `ocr/config.toml` 注释）：
+OCR 依赖固定在专用 `.venv314`，使用 `requirements.lock` 的版本及 SHA-256，避免全局 Python 升级影响原生包。安装器不会更改 OCR 模式或模型配置；可用 `--mobile-models` 显式下载原有的哈希校验模型。仅安装/检查依赖不会加载模型或读取剪贴板。
 
-```powershell
-uv venv --python 3.14 .\tools\raycast-scripts\ocr\.venv314
-uv pip install --python .\tools\raycast-scripts\ocr\.venv314\Scripts\python.exe rapidocr-onnxruntime pillow pyperclip
-```
+## 截图翻译与译文朗读
+
+按 `Caps+I` 或运行 Raycast 的 **Screenshot Translate**，在 Windows 截图工具中框选区域。识别后面板显示原文并自动翻译；完成后可点标题栏的播放按钮 **朗读译文**（面板内 `Alt+R`），再次点按 **停止朗读**。复制按钮仍复制译文，原文可选中后复制。
+
+截图翻译使用本地 RapidOCR，要求上述锁定环境；原有独立 OCR 命令仍按自己的 `ocr` 模式工作。翻译沿用现有引擎、凭证和字数上限；失败时保留识别原文，朗读按钮保持禁用。文字通过任务文件交付，不用剪贴板中转，不模拟快捷键；Windows 截图工具自身仍会将截图放入系统剪贴板。
+
+截图识别阶段再次按 `Caps+I` 取消当前任务；未完成截图约 30 秒后静默取消，OCR 进程组硬预算 90 秒。翻译阶段沿用 14 秒预算，关面板或开始新翻译会取消旧请求。关闭或替换面板会停止该面板发起的朗读，但不会停止后来独立发起的 Caps+S 朗读。停止与完成后清理任务文件，进程异常退出留下的文件在后续启动核验旧 PID/创建时间后回收。
+
+朗读沿用既有本地/在线策略；点击播放才开始朗读，不自动播放译文。翻译会将识别出的文本发送给所选翻译服务。
+
+划词和截图翻译共用语言设置：在 `tools/translate/config.toml` 顶层设置 `source_language = "auto"`、`target_language = "zh"` 可固定译为中文；目标改成 `en` 固定译英文，两项均为 `auto` 保留原有中英互译。每次请求读取，无需重载；同语种直接返回原文。完整选项见 [翻译说明](tools/translate/README.md#配置)。
+
+腾讯云首选、Google 保底：顶层设置 `fallback_without_credentials = true` 和 `fallback_on_auth_error = true`，缺密钥或鉴权失败时使用 Google。回退成功不发系统通知，只记录后台诊断；密钥恢复后自动优先腾讯。完整回退顺序见 [翻译引擎与回退](tools/translate/README.md#引擎与回退)。
+
+统一设置采用 WinUI 左侧菜单、右侧配置，覆盖八个模块及其功能开关；“功能与快捷键”支持独立开关、AHK 键位自定义和恢复当前默认，固定 CapsLock 基础键。常规页可隐藏主托盘并手动刷新运行状态/版本，图标随任务栏深浅主题切换黑白。入口、生效时机与配置保护见 [工具箱设置中心](tools/settings/README.md)。
+
+固定图片的连续联动验收入口为 `python tools/validation/text_workflow_smoke.py --ahk <AHK-v2路径>`，默认不联网、不播放声音，会替换并关闭当前翻译面板；覆盖真实 OCR、翻译进程、面板回传及失败/取消清理。显式 `--online` 才使用现有引擎发送固定测试文本，操作及验收边界见 [联动探针](tools/validation/README.md#连续联动探针)。
+
+## 主题、RGB 与设备
 
 主题调度的五个计划任务用脚本注册，不要手写 `schtasks /create`：
 

@@ -32,6 +32,7 @@
 ; ============================================================
 
 class CapsLockIme {
+    static FeatureEnabled := true
     static HoldThreshold := 500
     static TapMaxMs := 250
     static ChordImeLockoutMs := 180
@@ -93,6 +94,8 @@ class CapsLockIme {
         this._exitingCaps := false
         this._downTick := A_TickCount
         this._lastReleaseAction := ""
+        if !this.FeatureEnabled
+            return
         this.CaptureImeTarget()
 
         ; 大写已开启时，再按 CapsLock 立即退出，不参与短按/长按判断。
@@ -105,6 +108,7 @@ class CapsLockIme {
         }
 
         SetTimer this.LongPressCallback, 0
+
         SetTimer this.LongPressCallback, -this.HoldThreshold
     }
 
@@ -114,6 +118,15 @@ class CapsLockIme {
 
         this._pressed := false
         SetTimer this.LongPressCallback, 0
+
+        if !this.FeatureEnabled {
+            if !this._chordUsed
+                this.ToggleNativeCaps()
+            this._chordUsed := false
+            this._longPressTriggered := false
+            this._exitingCaps := false
+            return
+        }
 
         holdMs := Max(0, A_TickCount - this._downTick)
         shouldToggleIme := (
@@ -144,6 +157,8 @@ class CapsLockIme {
 
     ; 500ms 到点时由 Timer 调用，因此不会等待 CapsLock 松开。
     static HandleLongPress(*) {
+        if !this.FeatureEnabled
+            return
         if (
             !this._pressed
             || this._chordUsed
@@ -157,13 +172,18 @@ class CapsLockIme {
         this.EnterCapsMode()
     }
 
+    static ToggleNativeCaps() {
+        SetCapsLockState GetKeyState("CapsLock", "T") ? "Off" : "On"
+    }
+
     ; Router 在执行 CapsLock & key 功能前调用。
     static MarkChordUsed() {
         ; 正常情况下 key-down 已先执行；物理状态兜底可处理极端线程顺序。
         if !this._pressed && GetKeyState("CapsLock", "P") {
             this._pressed := true
             this._downTick := A_TickCount
-            this.CaptureImeTarget()
+            if this.FeatureEnabled
+                this.CaptureImeTarget()
         }
 
         if !this._pressed
@@ -307,7 +327,7 @@ class CapsLockIme {
     }
 
     static EnsureWindowWatcher() {
-        if this._watcherStarted || !this.PersistImeAcrossWindows
+        if this._watcherStarted || !this.PersistImeAcrossWindows || !this.FeatureEnabled
             return
         ; 只在生产入口 main.ahk 挂监视。契约测试、独立加载 stub
         ; 的 A_ScriptName 都不是 main.ahk；写死调用 IsToolboxTestMode()
@@ -325,7 +345,7 @@ class CapsLockIme {
     }
 
     static WatchForeground(*) {
-        if !this.PersistImeAcrossWindows
+        if !this.PersistImeAcrossWindows || !this.FeatureEnabled
             return
         if this.ShouldSkipImeRestore()
             return
@@ -339,6 +359,18 @@ class CapsLockIme {
         this._lastForegroundHwnd := hwnd
         this._restoreAttemptsLeft := this.ImeRestoreAttempts
         SetTimer this.RestoreCallback, -this.ImeRestoreDelayMs
+    }
+
+    static SetFeatureEnabled(enabled) {
+        this.FeatureEnabled := enabled
+        if !enabled {
+            SetTimer this.LongPressCallback, 0
+            SetTimer this.WindowWatchCallback, 0
+            SetTimer this.RestoreCallback, 0
+            this._watcherStarted := false
+            this._restoreAttemptsLeft := 0
+        } else
+            this.EnsureWindowWatcher()
     }
 
     static RestoreRememberedIme(*) {

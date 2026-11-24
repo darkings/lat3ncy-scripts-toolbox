@@ -13,6 +13,10 @@ public partial class HudApp : Application
 {
     public HudApp()
     {
+        // Application.Start defaults to exiting on the last XAML Window.
+        // Our resident HUD uses native HWNDs, so settings must not own its life.
+        DispatcherShutdownMode = Microsoft.UI.Xaml.DispatcherShutdownMode.OnExplicitShutdown;
+        HudLog.Line("application-shutdown=explicit");
         HudLog.Line("application-ctor");
         try
         {

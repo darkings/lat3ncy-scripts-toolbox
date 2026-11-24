@@ -1,5 +1,7 @@
 """Offline diagnostics contracts: privacy, bounded probes and runtime ownership."""
 import importlib.util
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -17,6 +19,20 @@ spec.loader.exec_module(doctor)
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_per_engine_tls_history_is_not_hidden_by_credentials_or_later_success(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'translation.log'
+            path.write_text(
+                '[2026-11-22 08:00:00] engine-route id=42 engine=tencent calls=0 failed=0 cached=0 skipped=1 elapsed_ms=0 kind=credentials\n'
+                '[2026-11-22 08:00:00] engine-route id=42 engine=google_gtx calls=1 failed=1 cached=0 skipped=0 elapsed_ms=5029 kind=tls\n'
+                '[2026-11-22 08:00:00] engine-route id=42 engine=mymemory calls=1 failed=0 cached=0 skipped=0 elapsed_ms=1100 kind=none\n'
+                '[2026-11-22 08:00:00] ok id=42 engine=mymemory cached=0 chars=8\n', encoding='utf-8')
+            summary = doctor.log_summary(path, 'translate')
+            self.assertEqual('mymemory', summary['lastTerminalEvent']['engine'])
+            self.assertEqual('tls', summary['lastEngineFailures']['google_gtx']['kind'])
+            self.assertEqual('credentials', summary['lastEngineRoutes']['tencent']['kind'])
+            self.assertNotIn('tencent', summary['lastEngineFailures'])
+
     def test_attention_probe_keeps_its_structured_findings_across_process_boundary(self):
         query = '''import importlib.util,json,sys
 spec=importlib.util.spec_from_file_location('fixture_doctor',sys.argv[1])
@@ -34,7 +50,8 @@ raise SystemExit(module.main())
         with tempfile.TemporaryDirectory() as folder:
             config = Path(folder)/'config.toml'
             config.write_text('engine="TMT"\nsecret_key="private-secret"\n', encoding='utf-8')
-            self.assertEqual({'status': 'ok', 'engine': 'tencent'}, doctor.config_summary(config, 'translate'))
+            self.assertEqual({'status': 'ok', 'engine': 'tencent', 'source_language': 'auto', 'target_language': 'auto',
+                              'fallback_without_credentials': False, 'fallback_on_auth_error': False, 'long_text_enabled': False}, doctor.config_summary(config, 'translate'))
             for text in ('engine="private-secret"', 'engine=["private-secret"]', 'engine="broken-private-secret'):
                 config.write_text(text, encoding='utf-8')
                 result = doctor.config_summary(config, 'translate')
@@ -42,6 +59,102 @@ raise SystemExit(module.main())
                 self.assertNotIn('private-secret', json.dumps(result))
             config.unlink()
             self.assertEqual({'status': 'default', 'engine': 'system'}, doctor.config_summary(config, 'ocr'))
+
+    def test_translation_languages_export_only_canonical_enums(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder)/'config.toml'
+            config.write_text('source_language=" EN "\ntarget_language="ZH-Hans"\nsecret_key="private-secret"\n', encoding='utf-8')
+            self.assertEqual({'status': 'ok', 'engine': 'tencent', 'source_language': 'en', 'target_language': 'zh',
+                              'fallback_without_credentials': False, 'fallback_on_auth_error': False, 'long_text_enabled': False}, doctor.config_summary(config, 'translate'))
+
+    def test_translation_fallback_policy_is_boolean_and_never_exports_invalid_values(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder)/'config.toml'
+            config.write_text('fallback_without_credentials=true\nfallback_on_auth_error=true\n', encoding='utf-8')
+            report = doctor.config_summary(config, 'translate')
+            self.assertIs(True, report['fallback_without_credentials'])
+            self.assertIs(True, report['fallback_on_auth_error'])
+            for field in ('fallback_without_credentials', 'fallback_on_auth_error'):
+                for value in ('"private-secret"', '1', '[]'):
+                    with self.subTest(field=field, value=value):
+                        config.write_text(f'{field}={value}\n', encoding='utf-8')
+                        report = doctor.config_summary(config, 'translate')
+                        self.assertEqual({'status': 'invalid', 'reason': 'invalid-fallback-policy', 'field': field}, report)
+                        self.assertNotIn('private-secret', json.dumps(report))
+
+    def test_fallback_history_is_separate_from_delivery_and_only_accepts_fixed_enums(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder)/'log'
+            log.write_text('[2026-11-22 08:00:00] fallback preferred=tencent engine=google_gtx reason=credentials\n', encoding='utf-8')
+            report = doctor.log_summary(log, 'translate')
+            self.assertEqual({'atLocal': '2026-11-22 08:00:00', 'preferredEngine': 'tencent', 'engine': 'google_gtx', 'reason': 'credentials'}, report['lastFallbackEvent'])
+            self.assertNotIn('lastTerminalEvent', report)
+            self.assertNotIn('lastFailure', report)
+            with log.open('a', encoding='utf-8') as stream:
+                stream.write('[2026-11-22 08:00:01] ok id=1 engine=google_gtx cached=0 chars=12\n'
+                             '[2026-11-22 08:00:02] fail id=2 message=private-source diagnostic=auth detail=private-secret\n'
+                             '[2026-11-22 08:00:03] fallback preferred=private-secret engine=google_gtx reason=auth\n'
+                             '[2026-11-22 08:00:04] fallback preferred=tencent engine=google_gtx reason=private-source\n'
+                             '[2026-11-22 08:00:05] fallback preferred=google_gtx engine=google_gtx reason=timeout\n'
+                             '[2026-11-22 08:00:06] fallback preferred=tencent engine=google_gtx reason=auth detail=private-secret\n')
+            report = doctor.log_summary(log, 'translate')
+            self.assertEqual('2026-11-22 08:00:00', report['lastFallbackEvent']['atLocal'])
+            self.assertEqual('auth', report['lastFailure']['kind'])
+            self.assertEqual('fail', report['lastTerminalEvent']['status'])
+            self.assertNotIn('private-', json.dumps(report))
+
+    def test_delivery_and_launch_failures_keep_the_stage_without_exporting_exception_text(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder)/'log'
+            for line, stage in [('delivery-failed id=1 diagnostic=internal', 'delivery'),
+                                ('start-failed id=2 error=private-secret', 'launch')]:
+                with self.subTest(stage=stage):
+                    log.write_text('[2026-11-22 08:00:00] ok id=1 engine=identity cached=0 chars=4\n'
+                                   '[2026-11-22 08:01:00] '+line+'\n', encoding='utf-8')
+                    report = doctor.log_summary(log, 'translate')
+                    expected = {'atLocal': '2026-11-22 08:01:00', 'status': 'fail', 'kind': 'internal', 'stage': stage}
+                    self.assertEqual(expected, report['lastTerminalEvent'])
+                    self.assertEqual(expected, report['lastFailure'])
+                    self.assertNotIn('private-secret', json.dumps(report))
+
+    def test_success_records_report_engine_cache_and_presentation_without_partial_token_matches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder)/'log'
+            for status, suffix, presentation in [('ok', ' chars=8', 'panel'), ('ok-popup', '', 'popup')]:
+                with self.subTest(status=status):
+                    log.write_text(f'[2026-11-22 08:00:00] {status} id=1 engine=google_gtx cached=1{suffix}\n'
+                                   '[2026-11-22 08:01:00] ok id=2 engine=google_gtx-private-secret cached=0 chars=3\n'
+                                   '[2026-11-22 08:02:00] ok id=3 engine=google_gtx cached=private-secret chars=3\n', encoding='utf-8')
+                    report = doctor.log_summary(log, 'translate')
+                    self.assertEqual({'atLocal': '2026-11-22 08:00:00', 'status': 'ok', 'engine': 'google_gtx', 'cached': True,
+                                      'presentation': presentation}, report['lastTerminalEvent'])
+                    self.assertNotIn('lastFailure', report)
+                    self.assertNotIn('private-secret', json.dumps(report))
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows diagnostic entry point')
+    def test_plain_summary_displays_fallback_policy_and_history(self):
+        report = {'status': 'ok', 'residents': {},
+                  'modules': {'translate': {'status': 'ok'}},
+                  'configs': {'translate': {'status': 'ok', 'engine': 'tencent', 'fallback_without_credentials': True, 'fallback_on_auth_error': True}},
+                  'logs': {'translate': {'path': 'fixture.log', 'status': 'available',
+                      'lastTerminalEvent': {'atLocal': '2026-11-22 08:01:00', 'status': 'fail', 'stage': 'delivery'},
+                      'lastFallbackEvent': {'atLocal': '2026-11-22 08:00:00', 'preferredEngine': 'tencent', 'engine': 'google_gtx', 'reason': 'credentials'}}}}
+        with patch.object(doctor, 'collect', return_value=report), patch.object(sys, 'argv', ['doctor.py']), redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(0, doctor.main())
+        self.assertIn('missing credentials=True; auth error=True', output.getvalue())
+        self.assertIn('tencent -> google_gtx (credentials)', output.getvalue())
+        self.assertIn('stage=delivery', output.getvalue())
+
+    def test_invalid_translation_language_exports_field_but_never_raw_value(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder)/'config.toml'
+            for field in ('source_language', 'target_language'):
+                for value in ('"private-secret"', '"ja"', 'true', '[]', '42'):
+                    with self.subTest(field=field, value=value):
+                        config.write_text(f'{field}={value}\n', encoding='utf-8')
+                        result = doctor.config_summary(config, 'translate')
+                        self.assertEqual({'status': 'invalid', 'reason': 'unsupported-language', 'field': field}, result)
+                        self.assertNotIn('private-secret', json.dumps(result))
 
     def test_log_exports_fixed_events_and_keeps_failure_separate_from_latest_success(self):
         with tempfile.TemporaryDirectory() as folder:

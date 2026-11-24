@@ -1,5 +1,11 @@
 ﻿$ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot '..\ToolboxControls.ps1')
+
+function Test-ThemeFeatureEnabled {
+  return (Test-ToolboxModuleEnabled -Module theme -RepoRoot (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent))
+}
+
 function Get-ThemeConfig
 {
   # 进程内记忆化：每个脚本进程都会调用一次，实测解析约 75ms。

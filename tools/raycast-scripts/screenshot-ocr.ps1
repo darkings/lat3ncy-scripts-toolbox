@@ -16,6 +16,8 @@
 #               识别后弹系统 Toast。框选不再被 ONNX 冷启动挡住。
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\settings.ps1')
+if(-not(Test-ToolboxRaycastCommandEnabled -Command 'screenshot-ocr')){exit 0}
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 . (Join-Path $PSScriptRoot 'ocr\OcrHost.ps1')
 . (Join-Path $PSScriptRoot '..\ToolboxControls.ps1')

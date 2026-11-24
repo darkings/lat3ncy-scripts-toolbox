@@ -13,6 +13,8 @@
 # 本文件必须保存为 UTF-8 with BOM，否则 Windows PowerShell 5.1 会按系统 ANSI 误读中文。
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\settings.ps1')
+if(-not(Test-ToolboxRaycastCommandEnabled -Command 'toggle-rgb')){exit 0}
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 trap {

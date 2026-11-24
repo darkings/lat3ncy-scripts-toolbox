@@ -13,6 +13,7 @@ internal sealed class ModuleConfigurationForm
     public StackPanel Root { get; } = new() { Spacing = 8, Padding = new Thickness(24, 12, 24, 20) };
     public string Revision { get; private set; }
     public string Effect { get; }
+    internal ToggleSwitch? HeaderToggle { get; }
     readonly List<Field> _fields = new();
     readonly Dictionary<string, Expander> _searchGroups = new();
     public bool HasChanges { get; private set; }
@@ -36,6 +37,12 @@ internal sealed class ModuleConfigurationForm
         foreach (JsonElement spec in data.GetProperty("fields").EnumerateArray())
         {
             string key = spec.GetProperty("key").GetString()!;
+            if (data.GetProperty("module").GetString() == "raycast" && key == "general.enabled")
+            {
+                var header = new Field(spec.Clone(), owner, MarkEdited, headerOnly: true); _fields.Add(header);
+                HeaderToggle = (ToggleSwitch)header.Input; AutomationProperties.SetAutomationId(HeaderToggle, "module_raycast_enabled");
+                continue;
+            }
             string group = key.Contains('.') ? key[..key.LastIndexOf('.')] : "general";
             if (group != previous)
             {
@@ -58,7 +65,7 @@ internal sealed class ModuleConfigurationForm
     {
         Field? field = _fields.FirstOrDefault(item => item.Key == key);
         if (field == null) return null;
-        _searchGroups[key].IsExpanded = true;
+        if (_searchGroups.TryGetValue(key, out var group)) group.IsExpanded = true;
         return field.Input;
     }
     public void AcceptUnchanged() => HasChanges = false;
@@ -73,7 +80,7 @@ internal sealed class ModuleConfigurationForm
 
     static string GroupLabel(string group) => group switch
     {
-        "general" => "常规", "screenshot" => "截图", "record" => "录屏", "cache" => "缓存", "tencent" => "腾讯云", "aliyun" => "阿里云",
+        "general" => "常规", "commands" => "日常命令", "maintenance" => "维护命令", "screenshot" => "截图", "record" => "录屏", "cache" => "缓存", "tencent" => "腾讯云", "aliyun" => "阿里云",
         "models.default" => "标准 OCR 模型", "models.mobile" => "轻量 OCR 模型", "preferred" => "首选设备与匹配",
         "behavior" => "运行行为", "tts" => "朗读联动", "schedule" => "自动切换时间", "mode_settings" => "深浅色联动",
         "wallpaper" => "桌面与锁屏壁纸", "theme_settings" => "Windows 主题", "cursor" => "鼠标指针方案",
@@ -102,12 +109,13 @@ internal sealed class ModuleConfigurationForm
         };
     }
 
-    public object? ReadRequest()
+    public object? ReadRequest(bool fromDefaults = false)
     {
         var changes = new Dictionary<string, object?>();
         foreach (Field field in _fields)
         {
             if (!field.TryRead(out object? value, out bool changed)) { HudLog.Line("settings-editor-invalid key=" + field.Key); return null; }
+            if (fromDefaults) changed = field.ReadDefaultOverride(ref value);
             if (changed) changes[field.Key] = value;
         }
         return new { revision = Revision, changes };
@@ -142,7 +150,7 @@ internal sealed class ModuleConfigurationForm
         public string Key { get; }
         public Border Root { get; }
 
-        public Field(JsonElement spec, AppWindow? owner, Action edited)
+        public Field(JsonElement spec, AppWindow? owner, Action edited, bool headerOnly = false)
         {
             _spec = spec; _editedAction = edited; Key = spec.GetProperty("key").GetString()!;
             _readonly = spec.GetProperty("readonly").GetBoolean();
@@ -221,7 +229,7 @@ internal sealed class ModuleConfigurationForm
             string hint = spec.GetProperty("help").GetString() ?? "";
             if (_readonly) hint = "兼容项，只读。" + hint;
             var content = new StackPanel { Spacing = 6 };
-            content.Children.Add(SettingsUi.Row(label.Replace("（每行一个）", "").Replace("（JSON 对象）", ""), editor, hint));
+            if (!headerOnly) content.Children.Add(SettingsUi.Row(label.Replace("（每行一个）", "").Replace("（JSON 对象）", ""), editor, hint));
             content.Children.Add(_error); Root = SettingsUi.Card(content);
             string detail = hint + " 配置键：" + Key;
             if (spec.GetProperty("minimum").ValueKind != JsonValueKind.Null)
@@ -269,6 +277,13 @@ internal sealed class ModuleConfigurationForm
         }
         public bool IsNonDefault => !_readonly && (!TryRead(out object? value, out _, false)
             || !JsonElement.DeepEquals(value == null ? _spec.GetProperty("value") : JsonSerializer.SerializeToElement(value), _spec.GetProperty("default")));
+        public bool ReadDefaultOverride(ref object? value)
+        {
+            if (_readonly) return false;
+            JsonElement current = value == null ? _spec.GetProperty("value") : JsonSerializer.SerializeToElement(value);
+            value = current.Clone();
+            return !JsonElement.DeepEquals(current, _spec.GetProperty("default"));
+        }
         public void AcceptCommitted(JsonElement data)
         {
             bool valid = TryRead(out object? current, out _, false);

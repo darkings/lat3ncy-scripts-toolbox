@@ -15,6 +15,20 @@ def field(key, label, default, *, choices=None, minimum=None, maximum=None, help
 
 
 MODULES = {
+    'raycast': dict(title='Raycast 脚本', path='tools/raycast-scripts/config.toml',
+        effect='自动保存，下次调用脚本时生效。仅控制仓库内 Raycast 入口，不更改 AHK、Raycast 快捷键或底层功能配置。打开工具箱设置始终可用。', fields=[
+        field('general.enabled', '启用 Raycast 脚本', True),
+        field('commands.screenshot', '截图', True, help='复制、等待时间与额外目录共用“截图与录屏”设置。'),
+        field('commands.record_screen', '录屏', True, help='复制、等待时间与额外目录共用“截图与录屏”设置。'),
+        field('commands.screenshot_ocr', '截图识别', True, help='引擎和模型共用“截图识别”设置。'),
+        field('commands.screenshot_translate', '截图翻译', True, help='共用截图识别、翻译与朗读功能的设置和总开关。'),
+        field('commands.next_wallpaper', '下一张壁纸', True, help='目录和锁屏联动共用“主题、壁纸与背光”设置。'),
+        field('commands.toggle_rgb', '切换灯光', True, help='设备与效果共用“氛围灯”设置；临时熄灯与功能总开关不同。'),
+        field('maintenance.restart_autohotkey', '重启工具箱', True, help='允许从 Raycast 手动重启 AHK/HUD；保存此项不会重启。'),
+        field('maintenance.reload_ime_hud', '重建界面与定位器', True, help='需同时启用“重启工具箱”；保存此项不会编译或停止进程。'),
+        field('maintenance.diagnose_ime_hud_anchor', '诊断光标定位', True, help='默认只读；命令的 Restart 参数仍是单独的显式操作。'),
+        field('maintenance.fix_rdp_clipboard_prompt', '远程桌面剪贴板修复入口', True, help='仅控制命令是否可用，不修改系统策略或触发提权。'),
+    ]),
     'capture': dict(title='截图与录屏', path='tools/raycast-scripts/capture/config.toml',
         effect='自动保存，下次从 Raycast 截图或录屏时生效。额外目录只复制成品文件，Windows 原保存位置不变。', fields=[
         field('screenshot.enabled', '启用截图入口', True),

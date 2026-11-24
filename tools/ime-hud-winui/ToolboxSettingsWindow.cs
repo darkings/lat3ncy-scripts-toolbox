@@ -39,7 +39,8 @@ internal sealed class ToolboxSettingsWindow : Window
     readonly Dictionary<string, bool> _moduleOriginals = new();
     readonly Dictionary<string, string> _moduleRevisions = new();
     readonly HashSet<string> _pending = new();
-    readonly HashSet<string> _resetPreferences = new();
+    readonly Dictionary<string, long> _resetPreferences = new();
+    long _resetGeneration;
     readonly Action? _controlsChanged;
     readonly bool _readOnlyProbe;
     readonly DispatcherQueueTimer _debounce;
@@ -111,6 +112,7 @@ internal sealed class ToolboxSettingsWindow : Window
         AddNavigationItem("朗读设置", "tts", Symbol.Volume);
         AddNavigationItem("截图识别", "ocr", Symbol.Camera);
         AddNavigationItem("截图与录屏", "capture", Symbol.Video);
+        AddNavigationItem("Raycast 脚本", "raycast", Symbol.AllApps);
         AddNavigationItem("音频切换", "audio", Symbol.Switch);
         AddNavigationItem("主题、壁纸与背光", "theme", Symbol.Pictures);
         AddNavigationItem("电源与唤醒", "power", Symbol.Clock);
@@ -185,7 +187,7 @@ internal sealed class ToolboxSettingsWindow : Window
             if (_closed || _module != item.Page || generation != _searchNavigation) return;
             if (!target.IsLoaded) { _status.Text = "设置控件尚未就绪，可稍后重试搜索。"; return; }
             if (target is Control control && control.IsEnabled) control.Focus(FocusState.Programmatic);
-            if (item.Kind != "module")
+            if (item.Kind != "module" && !_pageActions.Children.Contains(target))
             {
                 // Expansion and editor focus can each request scrolling. Correct
                 // after layout settles so the target stays clear of the footer.
@@ -289,6 +291,7 @@ internal sealed class ToolboxSettingsWindow : Window
                         var activity = new CaptureActivitySettingsForm(_lifetime.Token).Root;
                         panel.Children.Add(activity); _searchSections["capture:capture_activity"] = activity.Children.OfType<Expander>().Single();
                     }
+                    if (page == "raycast") panel.Children.Add(CreateRaycastLinks());
                 }
             }
             }
@@ -305,12 +308,31 @@ internal sealed class ToolboxSettingsWindow : Window
     void RebuildModuleSwitch()
     {
         _pageActions.Children.Clear();
+        if (_module == "raycast" && _moduleForms.GetValueOrDefault("raycast")?.HeaderToggle is { } header)
+        {
+            ToolTipService.SetToolTip(header, "启用或关闭仓库内的 Raycast 命令；打开设置始终可用");
+            _pageActions.Children.Add(header); return;
+        }
         if (!_moduleValues.TryGetValue(_module, out bool value)) return;
         string page = _module; var toggle = SettingsUi.Toggle(value);
         AutomationProperties.SetName(toggle, "启用" + _pageTitle.Text); AutomationProperties.SetAutomationId(toggle, "module_" + page + "_enabled");
         ToolTipService.SetToolTip(toggle, "启用或关闭此功能，自动保存");
         toggle.Toggled += (_, _) => { _moduleValues[page] = toggle.IsOn; Edited(page); };
         _pageActions.Children.Add(toggle);
+    }
+    Expander CreateRaycastLinks()
+    {
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(SettingsUi.Hint("脚本使用同一份功能配置。这里的入口开关仅控制 Raycast，不关闭 AHK；下面打开已有设置页继续配置。"));
+        foreach (var (page, label) in new[] { ("capture", "截图与录屏"), ("ocr", "截图识别"), ("translate", "翻译设置"),
+            ("tts", "朗读设置"), ("theme", "壁纸与主题"), ("rgb", "灯光与设备"), ("general", "诊断与维护") })
+        {
+            var button = new Button { Content = "设置" }; string destination = page;
+            AutomationProperties.SetName(button, "Raycast 相关设置：" + label); button.Click += (_, _) => SelectModule(destination);
+            content.Children.Add(SettingsUi.Card(SettingsUi.Row(label, button)));
+        }
+        return new Expander { Header = "相关功能设置", Content = content, HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(24, 0, 24, 20) };
     }
     void Edited(string page)
     {
@@ -333,7 +355,7 @@ internal sealed class ToolboxSettingsWindow : Window
         try
         {
             _controlForms.GetValueOrDefault(page)?.RestoreDefaults();
-            if (_preferenceForms.TryGetValue(page, out var preferences)) { preferences.RestoreDefaults(); _resetPreferences.Add(page); }
+            if (_preferenceForms.TryGetValue(page, out var preferences)) { preferences.RestoreDefaults(); _resetPreferences[page] = ++_resetGeneration; }
             _moduleForms.GetValueOrDefault(page)?.RestoreDefaults();
             if (_moduleValues.ContainsKey(page)) _moduleValues[page] = true;
             RebuildModuleSwitch(); UpdateDefault(); _defaultsPreviewed = true;
@@ -434,14 +456,14 @@ internal sealed class ToolboxSettingsWindow : Window
             string previous = controls.Revision; var data = await PreferencesBridge.RunControlsAsync(controls.ReadRequest(), _lifetime.Token);
             RetargetControls(previous, data.GetProperty("revision").GetString()!); controls.AcceptCommitted(data); _controlsChanged?.Invoke();
         }
-        if (_preferenceForms.TryGetValue(page, out var prefs) && (prefs.HasChanges || _resetPreferences.Contains(page)))
+        if (_preferenceForms.TryGetValue(page, out var prefs) && (prefs.HasChanges || _resetPreferences.ContainsKey(page)))
         {
-            bool reset = _resetPreferences.Contains(page);
+            bool reset = _resetPreferences.TryGetValue(page, out long generation);
             object request = prefs.ReadRequest(reset) ?? throw new InvalidOperationException("invalid_field");
             string previous = prefs.Revision; var data = await PreferencesBridge.RunAsync(request, _lifetime.Token);
             _suppress = true; try { prefs.AcceptCommitted(data); } finally { _suppress = false; }
             foreach (var form in _preferenceForms.Values) form.RetargetRevision(previous, prefs.Revision);
-            if (reset) _resetPreferences.Remove(page);
+            if (reset && _resetPreferences.GetValueOrDefault(page) == generation) _resetPreferences.Remove(page);
         }
         if (_moduleForms.TryGetValue(page, out var config) && config.HasChanges)
         {
@@ -604,6 +626,17 @@ internal sealed class ToolboxSettingsWindow : Window
         SelectModule("translate"); await _moduleLoad;
         await VerifySaveRecoveryAsync();
         await VerifyInFlightEditsAsync();
+        await VerifyQueuedDefaultsAsync();
+        SelectModule("raycast"); await _moduleLoad;
+        _moduleForms["raycast"].SetProbeValue("general.enabled", false);
+        _moduleForms["raycast"].SetProbeValue("commands.next_wallpaper", false);
+        if (!await FlushAsync() || _moduleForms["raycast"].HeaderToggle?.IsOn != false) throw new InvalidOperationException("native_raycast_save_failed");
+        var raycast = await PreferencesBridge.RunConfigurationAsync("raycast", null, _lifetime.Token);
+        if (raycast.GetProperty("fields").EnumerateArray().Single(item => item.GetProperty("key").GetString() == "general.enabled").GetProperty("value").GetBoolean())
+            throw new InvalidOperationException("native_raycast_header_reverted");
+        await RestoreDefaultsAsync();
+        if (_moduleForms["raycast"].IsNonDefault || _moduleForms["raycast"].HeaderToggle?.IsOn != true) throw new InvalidOperationException("native_raycast_defaults_failed");
+        SelectModule("translate"); await _moduleLoad;
         _preferenceForms["translate"].SetProbeValue("target_language", "zh");
         _moduleForms["translate"].SetProbeValue("timeout_s", 8);
         var closed = new TaskCompletionSource(); Closed += (_, _) => closed.TrySetResult();
@@ -673,6 +706,45 @@ internal sealed class ToolboxSettingsWindow : Window
         if (!fixture.Contains("ISOLATED_NATIVE_ID_B") || !fixture.Contains("ISOLATED_NATIVE_SECRET_B"))
             throw new InvalidOperationException("native_save_late_credential_readback");
     }
+    async Task VerifyQueuedDefaultsAsync()
+    {
+        var written = new TaskCompletionSource(); var resume = new TaskCompletionSource();
+        var resetWritten = new TaskCompletionSource(); var resetResume = new TaskCompletionSource();
+        try
+        {
+            // Hold a real module write so the first reset is queued. A later choice
+            // equal to the old committed value must still survive the reset.
+            PreferencesBridge.ProbeAfterWrite = () => { written.TrySetResult(); return resume.Task; };
+            _moduleForms["translate"].SetProbeValue("timeout_s", 8); _debounce.Stop();
+            Task<bool> blocking = FlushAsync(); await written.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Task firstReset = RestoreDefaultsAsync();
+            _preferenceForms["translate"].SetProbeValue("target_language", "en"); _debounce.Stop();
+            PreferencesBridge.ProbeAfterWrite = () => { resetWritten.TrySetResult(); return resetResume.Task; };
+            resume.TrySetResult(); await resetWritten.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var data = await PreferencesBridge.RunAsync(null, _lifetime.Token);
+            if (data.GetProperty("values").GetProperty("translate").GetProperty("target_language").GetString() != "en")
+                throw new InvalidOperationException("native_queued_reset_lost_edit");
+            // Queue another reset before the first reset response is accepted. It
+            // must clear the newer override, rather than persist an explicit default.
+            Task secondReset = RestoreDefaultsAsync(); _debounce.Stop();
+            PreferencesBridge.ProbeAfterWrite = null; resetResume.TrySetResult();
+            if (!await blocking) throw new InvalidOperationException("native_reset_blocker_failed");
+            await Task.WhenAll(firstReset, secondReset);
+            if (!await FlushBeforeActionAsync()) throw new InvalidOperationException("native_reset_flush_failed");
+            data = await PreferencesBridge.RunAsync(null, _lifetime.Token);
+            using var overlay = JsonDocument.Parse(File.ReadAllText(Path.Combine(PreferencesBridge.ProbeTools!, "..", ".toolbox-state", "preferences.json")));
+            if (overlay.RootElement.GetProperty("values").TryGetProperty("translate", out _)
+                || _resetPreferences.ContainsKey("translate") || _preferenceForms["translate"].HasChanges || _restore.Visibility != Visibility.Collapsed)
+                throw new InvalidOperationException("native_second_reset_not_consumed");
+            if (data.GetProperty("values").GetProperty("translate").GetProperty("target_language").GetString() != "auto"
+                || data.GetProperty("values").GetProperty("tts").GetProperty("rate").GetString() != "+5%")
+                throw new InvalidOperationException("native_reset_changed_other_page");
+            if (!(await PreferencesBridge.RunCredentialsAsync(null, _lifetime.Token)).GetProperty("providers")[0].GetProperty("fields")[1].GetProperty("configured").GetBoolean())
+                throw new InvalidOperationException("native_reset_erased_credentials");
+            HudLog.Line("settings-reset-probe=passed queued-edit+second-reset+unpin-default+other-page+credentials scope=isolated");
+        }
+        finally { PreferencesBridge.ProbeAfterWrite = null; resume.TrySetResult(); resetResume.TrySetResult(); }
+    }
     async Task VerifySaveRecoveryAsync()
     {
         // Two genuine CAS failures on an isolated controls file, viewed from an unrelated
@@ -719,7 +791,7 @@ internal sealed class ToolboxSettingsWindow : Window
     }
     internal async Task VerifyModulePagesAsync()
     {
-        foreach (string page in new[] { "translate", "tts", "ocr", "capture", "audio", "theme", "power", "rgb", "general", "hotkeys" })
+        foreach (string page in new[] { "translate", "tts", "ocr", "capture", "raycast", "audio", "theme", "power", "rgb", "general", "hotkeys" })
         {
             SelectModule(page); await _moduleLoad;
             if (!_pages.ContainsKey(page)) throw new InvalidOperationException("module_load_failed");
@@ -728,7 +800,7 @@ internal sealed class ToolboxSettingsWindow : Window
         }
         SelectModule("translate"); await _moduleLoad;
         await VerifySearchAsync();
-        HudLog.Line("settings-module-pages=passed count=10 merged=translate+tts credentials=metadata-only");
+        HudLog.Line("settings-module-pages=passed count=11 merged=translate+tts credentials=metadata-only");
     }
     async Task VerifySearchAsync()
     {
@@ -737,7 +809,8 @@ internal sealed class ToolboxSettingsWindow : Window
         foreach (var (page, kind, target) in new[] {
             ("tts","field","cache.max_files"), ("tts","preference","rate"), ("hotkeys","control","binding_SpeakSelectedText"),
             ("translate","credential","tencent"), ("theme","module","module_theme_enabled"),
-            ("general","section","maintenance"), ("capture","section","capture_activity"), ("general","control","tray_visible") })
+            ("general","section","maintenance"), ("capture","section","capture_activity"), ("general","control","tray_visible"),
+            ("raycast","module","module_raycast_enabled"), ("raycast","field","general.enabled"), ("raycast","field","commands.next_wallpaper") })
         {
             var item = catalog.Single(entry => entry.Page == page && entry.Kind == kind && entry.Target == target);
             await RevealSearchAsync(item);
@@ -745,7 +818,7 @@ internal sealed class ToolboxSettingsWindow : Window
         }
         if (SettingsSearch.Match(catalog,"朗读快捷键").FirstOrDefault()?.Target != "binding_SpeakSelectedText") throw new InvalidOperationException("settings_search_ranking_failed");
         SelectModule("translate"); await _moduleLoad;
-        HudLog.Line("settings-search=passed metadata+8-targets+ranking scope=read-only");
+        HudLog.Line("settings-search=passed metadata+11-targets+ranking scope=read-only");
     }
     internal async Task VerifyNavigationLayoutAsync()
     {

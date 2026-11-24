@@ -9,6 +9,8 @@
 # @raycast.icon 🖼️
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\settings.ps1')
+if(-not(Test-ToolboxRaycastCommandEnabled -Command 'next-wallpaper')){exit 0}
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 trap {

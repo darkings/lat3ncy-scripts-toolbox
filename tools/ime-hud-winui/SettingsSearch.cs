@@ -75,7 +75,7 @@ internal sealed class SettingsSearch
     }
     internal static IReadOnlyList<SettingsSearchItem> Parse(JsonElement data)
     {
-        var pages = new HashSet<string> { "general","hotkeys","translate","tts","ocr","capture","audio","theme","power","rgb" };
+        var pages = new HashSet<string> { "general","hotkeys","translate","tts","ocr","capture","raycast","audio","theme","power","rgb" };
         var kinds = new HashSet<string> { "page","module","field","preference","control","credential","section" };
         var result = new List<SettingsSearchItem>();
         foreach (var item in data.GetProperty("items").EnumerateArray().Take(512))

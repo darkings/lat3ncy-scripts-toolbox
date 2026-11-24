@@ -15,7 +15,7 @@ internal static class SettingsAutosaveProbe
         foreach (string file in new[] { "toolbox_preferences.py", "toolbox_configuration.py", "configuration_schema.py", "toolbox_controls.py", "toolbox_credentials.py", "toolbox_reload.py", "toolbox_capture_activity.py", "toolbox_settings_search.py" })
             File.Copy(Path.Combine(source.FullName, "tools", file), Path.Combine(tools, file));
         File.Copy(Path.Combine(source.FullName, "ahk", "shortcuts.ahk"), Path.Combine(root, "ahk", "shortcuts.ahk"));
-        foreach (string module in new[] { "translate", "tts", "theme-scheduler", "power-policy", "rgb", "audio-switcher", "raycast-scripts/ocr", "raycast-scripts/capture" })
+        foreach (string module in new[] { "translate", "tts", "theme-scheduler", "power-policy", "rgb", "audio-switcher", "raycast-scripts/ocr", "raycast-scripts/capture", "raycast-scripts" })
         { string directory = Path.Combine(tools, module); Directory.CreateDirectory(directory); File.WriteAllText(Path.Combine(directory, "config.toml"), "# isolated native autosave fixture\n"); }
         PreferencesBridge.ProbeTools = tools;
         int code = 1;

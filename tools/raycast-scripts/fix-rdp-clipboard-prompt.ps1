@@ -29,6 +29,8 @@ ASCII only on purpose (PowerShell 5.1 parses BOM-less files as ANSI).
 #>
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '_lib\settings.ps1')
+if(-not(Test-ToolboxRaycastCommandEnabled -Command 'fix-rdp-clipboard-prompt')){exit 0}
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 
 trap {

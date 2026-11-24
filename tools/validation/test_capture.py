@@ -128,6 +128,7 @@ if($result -or @(Get-EventSubscriber).Count -ne $before){throw 'timeout leaked s
 
     def test_disabled_entries_cannot_launch_protocol_or_inject_keys(self):
         lib=self.repo/'tools/raycast-scripts/_lib';lib.mkdir()
+        shutil.copy(ROOT/'tools/raycast-scripts/_lib/settings.ps1',lib/'settings.ps1')
         (lib/'notify.ps1').write_text("function Start-Process {throw 'native action blocked'}\nfunction Add-Type {throw 'native input blocked'}\nfunction Show-SystemToast {throw 'toast blocked'}\n",encoding='ascii')
         (self.capture/'config.toml').write_text('[screenshot]\nenabled=false\n[record]\nenabled=false\n',encoding='ascii')
         for name in ('screenshot.ps1','record-screen.ps1'):

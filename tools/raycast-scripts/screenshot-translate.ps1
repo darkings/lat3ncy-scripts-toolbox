@@ -6,6 +6,8 @@
 # @raycast.packageName Lat3ncy Toolbox
 # @raycast.description Capture a region, translate it, then optionally read the translation
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot '_lib\settings.ps1')
+if(-not(Test-ToolboxRaycastCommandEnabled -Command 'screenshot-translate')){exit 0}
 . (Join-Path $PSScriptRoot '..\startup\ToolboxProcess.ps1')
 . (Join-Path $PSScriptRoot '_lib\notify.ps1')
 try {

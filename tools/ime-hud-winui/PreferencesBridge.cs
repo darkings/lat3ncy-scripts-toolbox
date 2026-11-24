@@ -21,7 +21,7 @@ internal static class PreferencesBridge
 
     public static Task<JsonElement> RunConfigurationAsync(string module, object? request, CancellationToken cancellation)
     {
-        if (module is not ("translate" or "tts" or "ocr" or "audio" or "theme" or "power" or "rgb" or "capture"))
+        if (module is not ("translate" or "tts" or "ocr" or "audio" or "theme" or "power" or "rgb" or "capture" or "raycast"))
             throw new ArgumentException("settings_unavailable");
         return RunHelperAsync("toolbox_configuration.py", request, cancellation, new[] { "--module", module }, 262144);
     }

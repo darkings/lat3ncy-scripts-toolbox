@@ -1,3 +1,12 @@
+## 2026-11-24 Raycast 面板设置与功能检查
+
+- [x] 用户澄清后撤回按分类调用设置的 CLI/协议改动，在原设置面板加入 Raycast 脚本分类；总开关与十条入口独立启停，设置入口始终保留，复用相关功能原配置。
+- [x] 新配置只存布尔值，不改 AHK/Raycast 客户端键位；维护入口保存不执行命令。六项隔离回归覆盖复合维护依赖、每条入口、总开关、缺失/错误/重复/超限配置及正文前拦截。
+- [x] 原生十一页、搜索、自动保存、总开关 TOML 持久化及默认恢复通过；修复排队恢复默认丢失后续编辑及连续重置请求被旧回包清除。
+- [x] HUD 重建入口复用仓库/创建时间停止校验；诊断不再建议按名全局停止。其他功能离线检查及实际验收边界记录于 tools/settings/FUNCTION-REVIEW.md。
+- [x] 最终干净候选 offline/helpers/full 三阶段通过（277 项 Python、308 个源码/资产一致）；原生四类探测通过。Computer Use 验证总开关、单入口、默认恢复、维护分组及共享参数导航，测试改动已还原。
+- 已部署源戳 44fb94185c8d4ddef14e4b65b21cc824c51fd203c5040a2d075c3b8ab2c658c8。证据 .tmp/validation/20261124-raycast-complete/、.tmp/raycast-settings-native-tests.log、.tmp/raycast-settings-final-tests.log、.tmp/raycast-settings-deploy.log、.tmp/raycast-final-provenance.json。精确提交 CI 以草稿 PR #3 最终记录为准，不合并。
+
 ## 2026-11-23 保存期间编辑与关闭等待
 
 - [x] 隔离原生测试复现旧代码在关闭保存期间漏掉后续输入（native_close_dropped_late_edit），未改动个人配置。

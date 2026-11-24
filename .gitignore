@@ -12,6 +12,7 @@ __pycache__/
 !/tools/*/README.md
 !/tools/ime-hud-winui/Assets/README.md
 !/tools/settings/RAYCAST-SETTINGS.md
+!/tools/settings/FUNCTION-REVIEW.md
 !/resources/cursors/README.md
 !/resources/icons/README.md
 !/findings.md

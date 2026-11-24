@@ -8,7 +8,7 @@ from configuration_schema import MODULES
 from toolbox_controls import FEATURES
 
 PAGES = {'general':'常规','hotkeys':'功能与快捷键','translate':'翻译设置','tts':'朗读设置','ocr':'截图识别',
-         'capture':'截图与录屏','audio':'音频切换','theme':'主题、壁纸与背光','power':'电源与唤醒','rgb':'氛围灯'}
+         'capture':'截图与录屏','raycast':'Raycast 脚本','audio':'音频切换','theme':'主题、壁纸与背光','power':'电源与唤醒','rgb':'氛围灯'}
 BASICS = {
     'translate': [('engine','首选翻译引擎'),('source_language','原文语言'),('target_language','目标语言'),
                   ('fallback_without_credentials','未配置密钥时使用 Google 保底'),('fallback_on_auth_error','鉴权失败时静默使用 Google 保底'),('long_text_enabled','长文分段翻译')],

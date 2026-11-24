@@ -57,7 +57,7 @@ internal sealed class PreferenceSettingsForm
     }
     public object? ReadRequest(bool reset = false)
     {
-        object? draft = _form.ReadRequest(); if (draft == null) return null;
+        object? draft = _form.ReadRequest(fromDefaults: reset); if (draft == null) return null;
         JsonElement changes = JsonSerializer.SerializeToElement(draft).GetProperty("changes");
         var values = new Dictionary<string, object>();
         foreach (var field in changes.EnumerateObject())
@@ -67,7 +67,7 @@ internal sealed class PreferenceSettingsForm
             else values[field.Name] = field.Value.Clone();
         }
         return new { revision = Revision, base_revision = BaseRevision, reset_section = reset ? _section : null,
-            changes = new Dictionary<string, object> { [_section] = reset ? new Dictionary<string, object>() : values } };
+            changes = new Dictionary<string, object> { [_section] = values } };
     }
     public void RestoreDefaults() => _form.RestoreDefaults();
     public void AcceptCommitted(JsonElement data) { BaseRevision = data.GetProperty("base_revision").GetString()!; _form.AcceptCommitted(Project(data, _section)); }

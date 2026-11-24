@@ -1,5 +1,7 @@
 # 2026-11-21 桌面工具链与可靠性候选
 
+> 历史发布记录，保留当时的验证边界。当前功能和更新步骤见[最新更新](2026-11-24-toolbox.md)及[安装指南](../RELEASING.md)。
+
 分支 `codex/reliability-baseline-20261120`，目标 `main`；当前合并状态以 [PR #2](https://github.com/darkings/lat3ncy-scripts-toolbox/pull/2) 为准。本文记录候选范围与合并前验证，未创建正式 tag 或 GitHub Release。
 
 ## 相对 main 的范围
@@ -16,7 +18,7 @@
 | 此前功能 | PowerPolicy/Caffeine 托盘与盖子/显示策略、主题调度缓存与配置、光标放大与 ThinkPad 键盘灯、Raycast 脚本调整及旧 Codex Switch Script Command 形态移除 |
 | 音频与 RGB | 异步任务句柄、超时、协议/重连等失败路径修复；真实建链和设备矩阵仍单独验收 |
 
-评审依据为 [初次评审](../../REVIEW.md)、[二次评审](../../REVIEW-SECOND-PASS.md)，具体进展和历史环境限制在 `progress.md` 与模块文档。
+评审依据为 [初次评审](../../REVIEW.md)、[二次评审](../../REVIEW-SECOND-PASS.md)，会话进度日志仅保留本机；当前范围见[最新更新](2026-11-24-toolbox.md)与模块文档。
 
 ## 安装与兼容性
 

@@ -15,18 +15,17 @@ __pycache__/
 !/tools/settings/FUNCTION-REVIEW.md
 !/resources/cursors/README.md
 !/resources/icons/README.md
-!/findings.md
-!/progress.md
-!/task_plan.md
 !/REVIEW.md
 !/REVIEW-SECOND-PASS.md
-# Only the release guide and this candidate record are published; other docs stay local.
+# Public guides, roadmap and curated release records; other docs stay local.
 /docs/*
 !/docs/RELEASING.md
+!/docs/ROADMAP.md
 !/docs/releases/
 /docs/releases/*
 !/docs/releases/2026-11-21-reliability.md
 !/docs/releases/2026-11-22-text-workflow.md
+!/docs/releases/2026-11-24-toolbox.md
 
 # 运行日志
 **/*.log
@@ -85,3 +84,20 @@ tools/raycast-scripts/ocr/.debug.log
 tools/raycast-scripts/ocr/.toast-*.ps1
 tools/raycast-scripts/ocr/.venv314/
 tools/raycast-scripts/ocr/.cache/
+
+# Local session notes and machine-specific verification; keep files on disk.
+/findings.md
+/progress.md
+/task_plan.md
+/tools/power-policy/VALIDATION.md
+/.local/
+/docs/local/
+
+# IDE state, crash dumps and interrupted atomic publication files.
+.vs/
+*.user
+*.suo
+*.pdb
+*.dmp
+*.stackdump
+*.deploy-tmp

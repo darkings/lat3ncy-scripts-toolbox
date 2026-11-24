@@ -86,7 +86,9 @@ try {
 class HudRebuildTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.repo = Path(self.temp.name) / 'repo with spaces 测试'
+        # PS5.1 expands the runner's RUNNER~1 temporary directory when it sets
+        # PSScriptRoot. Model the same absolute checkout in command-line fixtures.
+        self.repo = (Path(self.temp.name) / 'repo with spaces 测试').resolve()
         for name in (*ARTIFACTS, 'shared/notify/AnchorLocator.cs', 'tools/ime-hud-winui/App.cs',
                      'tools/audio-switcher/audio-switcher.exe', 'tools/power-policy/config.toml'):
             path = self.repo / name; path.parent.mkdir(parents=True, exist_ok=True)
@@ -283,9 +285,9 @@ function Stop-Process {param($InputObject,[switch]$Force,$ErrorAction)
 }
 if($Scenario -eq 'ahk-reused'){$global:ahk.StartTime=$when.AddSeconds(1)}
 if($Scenario -eq 'foreign-window'){[ToolboxReleaseHudProbe]::OwnerPid=99999}
-$failed=$false
-try{Stop-ToolboxReleaseRuntime $Repo}catch{$failed=$true}
-@{failed=$failed;trace=$global:trace;quit=[ToolboxReleaseHudProbe]::LastQuit;disposed=$global:disposed}|ConvertTo-Json -Compress
+$failed=$false;$message=''
+try{Stop-ToolboxReleaseRuntime $Repo}catch{$failed=$true;$message=$_.Exception.Message}
+@{failed=$failed;message=$message;trace=$global:trace;quit=[ToolboxReleaseHudProbe]::LastQuit;disposed=$global:disposed}|ConvertTo-Json -Compress
 ''', encoding='ascii')
         for scenario in ('success', 'ahk-reused', 'cim-reused', 'hud-reused', 'foreign-window'):
             with self.subTest(scenario=scenario):

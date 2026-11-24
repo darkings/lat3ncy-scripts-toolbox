@@ -1,3 +1,13 @@
+## 2026-11-24 HUD 重建发布事务
+
+- [x] PR #4 已按用户要求合并，合并提交 67556f3f92ff1e1d0821d95ecc12147386ba022b；本批在独立分支继续，保留四份原有私有 TOML 改动。
+- [x] 新统一入口在独立目录构建/验证 HUD 与 anchor，复用正式备份、安装和失败恢复事务；候选在停止前后重验，发布范围排除音频助手与个人配置。
+- [x] 普通 AHK 重启共享发布锁；修复 PS7 到 PS5.1 的模块环境继承，并加强进程句柄/创建身份与定向 QUIT 校验。
+- [x] 实际 PlanOnly 完成来源/产物及两个 self-test，预览四个产物差异，生产 AHK/HUD 保持运行；候选日志保留但不发布。
+- [x] 首轮干净候选 offline/helpers/full 通过（311 项 Python）；受控实际部署成功，AHK 42508、HUD 38240、光标助手 37652，HUD PING 与 Caffeine 注册正常。324 个生产产物与候选一致，七份个人配置及音频 exe 未变。
+- [x] 补齐源码指纹的相对路径/8.3 路径归一化；14 项新增回归通过。最终干净候选及精确提交 CI 结果见本批草稿 PR；不自动合并。
+- 证据 .tmp/hud-rebuild-plan-final.log、.tmp/hud-rebuild-tests.log、.tmp/hud-rebuild-deploy.log、.tmp/hud-rebuild-deployment-verification.json。失败恢复只在隔离文件/进程桩中验证，不在生产制造故障；部署产生的本机 anchor exe 差异保留，不纳入源码提交。
+
 ## 2026-11-24 RGB 归属与 Caffeine 图标
 
 - [x] RGB 统一绝对脚本路径、PID 创建 FILETIME、Hi75 父子及固定任务归属；跨会话控制/硬件互斥体，仓库范围退出请求与目标身份校验。

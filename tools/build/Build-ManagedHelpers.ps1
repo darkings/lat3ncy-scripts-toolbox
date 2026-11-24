@@ -1,7 +1,10 @@
 # Builds into a fresh isolated directory; never replaces production helpers.
 [CmdletBinding()]
-param([string]$OutputDirectory)
+param([string]$OutputDirectory,
+    [ValidateSet('anchor-locator','audio-switcher')]
+    [Alias('Component')][string[]]$SelectedComponents=@('anchor-locator','audio-switcher'))
 $ErrorActionPreference='Stop'
+if(-not $SelectedComponents.Count -or @($SelectedComponents | Select-Object -Unique).Count -ne $SelectedComponents.Count){throw 'Invalid managed component selection'}
 $repo=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 . (Join-Path $PSScriptRoot 'ManagedBuild.Core.ps1')
 if(-not $OutputDirectory){$OutputDirectory=Join-Path $repo ('.tmp\managed-builds\'+[guid]::NewGuid().ToString('N'))}
@@ -15,6 +18,7 @@ foreach($component in @(
     @{Name='anchor-locator';Source='shared\notify\AnchorLocator.cs';References=@('UIAutomationClient','UIAutomationTypes','WindowsBase')},
     @{Name='audio-switcher';Source='tools\audio-switcher\AudioSwitcher.cs';References=@()}
 )){
+    if($component.Name -notin $SelectedComponents){continue}
     $source=Join-Path $repo $component.Source
     $before=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
     $binary=Join-Path $output ($component.Name+'.exe')
@@ -35,6 +39,7 @@ foreach($probe in @(
     @{Name='anchor-locator';Arguments='--self-test'},
     @{Name='audio-switcher';Arguments='--controls-self-test'}
 )){
+if($probe.Name -notin $SelectedComponents){continue}
 $info=[Diagnostics.ProcessStartInfo]::new()
 $info.FileName=Join-Path $output ($probe.Name+'.exe');$info.Arguments=$probe.Arguments
 $info.UseShellExecute=$false;$info.CreateNoWindow=$true
@@ -51,4 +56,4 @@ if(Get-Command git.exe -ErrorAction SilentlyContinue){$value=& git.exe -C $repo 
 $manifest=[ordered]@{Version=1;CreatedUtc=[DateTime]::UtcNow.ToString('o');GitHead=$head;SourceIdentity='exact file hashes; Git HEAD alone does not identify a dirty working tree';Compiler=@{Path=$compiler;Sha256=(Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash;Version=[Diagnostics.FileVersionInfo]::GetVersionInfo($compiler).FileVersion};Components=$components}
 $manifestPath=Join-Path $output 'managed-build.json'
 [IO.File]::WriteAllText($manifestPath,($manifest | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($true))
-Test-ToolboxManagedBuild -RepoRoot $repo -ManifestPath $manifestPath | ConvertTo-Json -Depth 4
+Test-ToolboxManagedBuild -RepoRoot $repo -ManifestPath $manifestPath -ExpectedComponents $SelectedComponents | ConvertTo-Json -Depth 4

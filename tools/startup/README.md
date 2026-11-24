@@ -45,6 +45,25 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Deploy-Too
 
 部署与电源重载持有当前仓库专属的内核互斥体；看门狗暂缓巡检。部署进程崩溃后互斥体自动释放，不依赖可能遗留的维护文件。不要在发布期间手工启动同一仓库入口。
 
+## 从源码重建 HUD 与锚点
+
+Raycast 的 Reload IME HUD 现在调用统一入口；普通 Restart AutoHotkey 也遵守同一仓库发布锁。重建需要 .NET SDK 和 Windows .NET Framework 编译器，缺失或构建失败时保留当前运行实例。
+
+```powershell
+# 真正构建并运行合成 self-test，仅预览，不停止或替换当前实例
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Rebuild-ToolboxHud.ps1 -PlanOnly
+# 构建、验证、备份、统一部署 HUD + anchor，重启并检查运行链路
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Rebuild-ToolboxHud.ps1
+```
+
+构建进入全新的 `.tmp/hud-rebuilds/<guid>/`，只选择 anchor 助手，不编译或发布音频助手。WinUI 输出也直接进入该候选目录，绝不向生产 `out` 执行 publish。构建前后核对源码指纹，记录每个候选产物的 SHA-256；self-test 产生的日志不会发布。Windows PowerShell 子进程使用自己的系统模块目录，避免继承 PowerShell 7 的不兼容模块路径。
+
+完整候选验证后，复用 `Deployment.Core.ps1` 的备份、逐文件替换与失败恢复事务。候选在停止前和停止后再次校验；生产产物也需读回哈希并通过 self-test。AHK 进程持有创建身份已核对的句柄，HUD 退出消息只发给已验证的窗口所属 PID，最终确认实例标记、HUD PING 和光标助手归属。
+
+发布范围严格限定 `shared/notify/anchor-locator.exe` 与 `tools/ime-hud-winui/out/` 内的产物。备份位于 `.tmp/releases/hud-<guid>/`，其 manifest 的路径相对仓库根；与旧的单独 HUD 发布备份范围不同，不能交给旧入口的 `-RollbackRelease`。替换或运行检查失败时，自动恢复本次写入且未被后续写入改变的文件并重启原运行链路；冲突时保留较新文件和备份，报告错误，需审阅现场。构建目录与备份均保留作证据，不自动清除。恢复产物不会回退工作区源码或个人配置。
+
+故障回归在临时仓库中执行真实文件替换/备份/恢复，运行进程为桩；覆盖构建、候选/安装自检、部分写入、源文件漂移、后续写入冲突、发布锁、PID 变化与跨宿主模块路径。它们不代表曾在生产实例上制造故障。
+
 ## 重载 PowerPolicy
 
 ```powershell

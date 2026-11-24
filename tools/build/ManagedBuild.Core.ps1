@@ -25,14 +25,17 @@ function Get-ToolboxBuildFile {
 }
 
 function Test-ToolboxManagedBuild {
-    param([string]$RepoRoot,[string]$ManifestPath)
+    param([string]$RepoRoot,[string]$ManifestPath,
+        [ValidateSet('anchor-locator','audio-switcher')]
+        [string[]]$ExpectedComponents=@('anchor-locator','audio-switcher'))
     $manifest=Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if($manifest.Version -ne 1 -or @($manifest.Components).Count -ne 2){throw 'Unsupported managed build manifest'}
+    if(-not $ExpectedComponents.Count -or @($ExpectedComponents | Select-Object -Unique).Count -ne $ExpectedComponents.Count -or
+        $manifest.Version -ne 1 -or @($manifest.Components).Count -ne $ExpectedComponents.Count){throw 'Unsupported managed build manifest'}
     $output=Split-Path ([IO.Path]::GetFullPath($ManifestPath)) -Parent
     $expected=@{'anchor-locator'='shared\notify\AnchorLocator.cs';'audio-switcher'='tools\audio-switcher\AudioSwitcher.cs'}
     $seen=@{}
     foreach($entry in $manifest.Components){
-        if(-not $expected.ContainsKey([string]$entry.Name) -or $seen.ContainsKey([string]$entry.Name) -or
+        if($entry.Name -notin $ExpectedComponents -or -not $expected.ContainsKey([string]$entry.Name) -or $seen.ContainsKey([string]$entry.Name) -or
            $entry.SourcePath -ine $expected[[string]$entry.Name] -or $entry.OutputPath -ine ($entry.Name+'.exe')){throw 'Unexpected/duplicate managed component'}
         $seen[[string]$entry.Name]=$true
         $source=Get-ToolboxBuildFile $RepoRoot $entry.SourcePath

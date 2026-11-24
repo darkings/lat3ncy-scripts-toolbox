@@ -32,7 +32,9 @@ class RaycastCatalogTests(unittest.TestCase):
         self.assertNotIn('Test-ToolboxRaycastCommandEnabled', (ROOT / 'tools/raycast-scripts/toolbox-settings.ps1').read_text('utf-8-sig'))
         reload = (ROOT / 'tools/raycast-scripts/reload-ime-hud.ps1').read_text('utf-8-sig')
         self.assertNotIn('Stop-Process', reload)
-        self.assertIn('Stop-ToolboxOwnedHudProcess -Repo $repositoryRoot', reload)
+        self.assertIn('Rebuild-ToolboxHud.ps1', reload)
+        self.assertNotIn('dotnet publish', reload)
+        self.assertNotIn('build-anchor-locator.ps1', reload)
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows PowerShell policy consumer')

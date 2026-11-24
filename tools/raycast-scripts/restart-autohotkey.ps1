@@ -157,6 +157,12 @@ function Stop-ToolboxImeHud
   Stop-ToolboxOwnedHudProcess -Repo $repositoryRoot
 }
 
+# Serialize the mutation window with Deploy-Toolbox and the composite rebuild.
+$restartLease=[Threading.Mutex]::new($false,((Get-ToolboxInstanceName $mainScript)+'-Deployment'))
+$restartOwned=$false
+try {
+  try{$restartOwned=$restartLease.WaitOne(0)}catch [Threading.AbandonedMutexException]{$restartOwned=$true}
+  if(-not $restartOwned){throw 'Another deployment is running for this checkout'}
 $toolboxProcesses = Get-ToolboxAutoHotkeyProcess
 Stop-ToolboxImeHud
 
@@ -225,3 +231,5 @@ $processIds = ($pids | Sort-Object -Unique) -join ', '
 if (-not $processIds) { $processIds = '已由实例标记确认（CIM 不可用）' }
 # silent 会关 Raycast 窗口。成功也走系统 Toast，不再弹共享 HUD / stdout。
 Show-SystemToast -Title '✓ AutoHotkey + IME HUD 已重载' -Message ("AHK PID: {0}" -f $processIds) | Out-Null
+
+} finally {if($restartOwned){$restartLease.ReleaseMutex()};$restartLease.Dispose()}

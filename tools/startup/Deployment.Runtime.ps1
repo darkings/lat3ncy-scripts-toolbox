@@ -7,6 +7,13 @@ function Invoke-ToolboxReleaseProcess {
     $info.FileName=$Exe
     $info.Arguments=($Arguments | ForEach-Object {ConvertTo-ToolboxCommandLineArgument $_}) -join ' '
     $info.UseShellExecute=$false;$info.CreateNoWindow=$true
+    if([IO.Path]::GetFileName($Exe) -ieq 'powershell.exe'){
+        # A .NET child does not receive pwsh's Windows PowerShell compatibility
+        # cleanup. Never inherit PS7-only module paths into a PS5.1 worker.
+        $info.EnvironmentVariables['PSMODULEPATH']=(
+            (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\Modules')+';'+
+            (Join-Path $env:ProgramFiles 'WindowsPowerShell\Modules'))
+    }
     $info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
     $process=[Diagnostics.Process]::Start($info)
     $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
@@ -44,12 +51,14 @@ public static class ToolboxReleaseHudProbe {
   IntPtr hwnd=FindWindow("Lat3ncyImeHudWinUi","Lat3ncyImeHudWinUi");uint pid;
   if(hwnd==IntPtr.Zero)return 0;GetWindowThreadProcessId(hwnd,out pid);return (int)pid;
  }
- public static bool Ping(int expectedPid) {
+ public static bool Ping(int expectedPid) { return Send(expectedPid,"PING"); }
+ public static bool Quit(int expectedPid) { return Send(expectedPid,"QUIT"); }
+ static bool Send(int expectedPid,string command) {
   IntPtr hwnd=FindWindow("Lat3ncyImeHudWinUi","Lat3ncyImeHudWinUi");uint pid;
   if(hwnd==IntPtr.Zero)return false;
   GetWindowThreadProcessId(hwnd,out pid);if(pid!=expectedPid)return false;
-  IntPtr buffer=Marshal.StringToHGlobalUni("PING");
-  try {CopyData data=new CopyData{Id=new IntPtr(1),Size=10,Data=buffer};IntPtr result;
+  IntPtr buffer=Marshal.StringToHGlobalUni(command);
+  try {CopyData data=new CopyData{Id=new IntPtr(1),Size=(command.Length+1)*2,Data=buffer};IntPtr result;
    return SendMessageTimeout(hwnd,0x4a,IntPtr.Zero,ref data,2,2500,out result)!=IntPtr.Zero&&result!=IntPtr.Zero;
   } finally {Marshal.FreeHGlobal(buffer);}
  }
@@ -57,28 +66,62 @@ public static class ToolboxReleaseHudProbe {
 '@
 }
 
+function Assert-ToolboxReleaseProcessIdentity {
+    param($Process,[int]$ExpectedPid,[long]$ExpectedTicks,[string]$ExpectedName,[switch]$CimPrecision)
+    if($Process -is [Diagnostics.Process]){[void]$Process.Handle}
+    $ticks=$Process.StartTime.ToUniversalTime().ToFileTimeUtc()
+    $matches=if($CimPrecision){[Math]::Floor([decimal]$ticks/10) -eq [Math]::Floor([decimal]$ExpectedTicks/10)}else{$ticks -eq $ExpectedTicks}
+    if($Process.Id -ne $ExpectedPid -or $Process.HasExited -or $Process.ProcessName -ine $ExpectedName -or -not $matches){
+        throw 'Release process identity changed'
+    }
+}
+
 function Stop-ToolboxReleaseRuntime {
     param([string]$Repo)
     $runtime=Get-ToolboxReleaseRuntime $Repo
-    Initialize-ToolboxHudProbe
-    $owner=[ToolboxReleaseHudProbe]::Owner()
-    if($owner -ne 0 -and $owner -notin @($runtime.Hud | ForEach-Object {$_.Id})){
-        throw 'HUD window belongs to another checkout; refusing to stop it'
-    }
-    foreach($proc in $runtime.Ahk){
-        $live=Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ProcessId)" -ErrorAction Stop
-        if(-not $live -or $live.CreationDate -ne $proc.CreationDate -or
-           -not(Test-ToolboxMainScriptCommandLine $live.CommandLine (Join-Path $Repo 'ahk\main.ahk'))){throw 'AHK identity changed'}
-        $process=Get-Process -Id $proc.ProcessId -ErrorAction Stop
-        try {Stop-Process -InputObject $process -Force -ErrorAction Stop
+    $ahkHandles=[Collections.Generic.List[object]]::new()
+    $hudTicks=@{}
+    try {
+        Initialize-ToolboxHudProbe
+        $owner=[ToolboxReleaseHudProbe]::Owner()
+        if($owner -ne 0 -and $owner -notin @($runtime.Hud | ForEach-Object {$_.Id})){
+            throw 'HUD window belongs to another checkout; refusing to stop it'
+        }
+        # Hold all verified handles before stopping any resident. A recycled PID
+        # cannot become the target between the CIM check and Stop-Process.
+        foreach($proc in $runtime.Ahk){
+            $process=Get-Process -Id $proc.ProcessId -ErrorAction Stop
+            $ahkHandles.Add([pscustomobject]@{Process=$process;Snapshot=$proc})
+            Assert-ToolboxReleaseProcessIdentity $process $proc.ProcessId $proc.CreationDate.ToUniversalTime().ToFileTimeUtc() ([IO.Path]::GetFileNameWithoutExtension($proc.Name)) -CimPrecision
+        }
+        foreach($hud in $runtime.Hud){
+            [void]$hud.Handle
+            $hudTicks[$hud.Id]=$hud.StartTime.ToUniversalTime().ToFileTimeUtc()
+        }
+        foreach($entry in $ahkHandles){
+            $proc=$entry.Snapshot;$process=$entry.Process
+            $live=Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ProcessId)" -ErrorAction Stop
+            if(-not $live -or $live.CreationDate -ne $proc.CreationDate -or
+                -not(Test-ToolboxMainScriptCommandLine $live.CommandLine (Join-Path $Repo 'ahk\main.ahk'))){throw 'AHK identity changed'}
+            Assert-ToolboxReleaseProcessIdentity $process $proc.ProcessId $proc.CreationDate.ToUniversalTime().ToFileTimeUtc() ([IO.Path]::GetFileNameWithoutExtension($proc.Name)) -CimPrecision
+            Stop-Process -InputObject $process -Force -ErrorAction Stop
             if(-not $process.WaitForExit(5000)){throw 'AHK did not exit'}
-        } finally {$process.Dispose()}
-    }
-    foreach($hud in $runtime.Hud){
-        try {
-            Invoke-ToolboxReleaseProcess $hud.Path @('--quit') 10000
-            if(-not $hud.WaitForExit(5000)){$hud.Kill();if(-not $hud.WaitForExit(3000)){throw 'HUD did not exit'}}
-        } finally {$hud.Dispose()}
+        }
+        foreach($hud in $runtime.Hud){
+            if($hud.HasExited){continue}
+            Assert-ToolboxReleaseProcessIdentity $hud $hud.Id $hudTicks[$hud.Id] 'ImeHudWinUi'
+            # Do not launch an unguarded --quit forwarder: the global receiver
+            # may have changed checkout since preflight. Send only to this PID.
+            $null=[ToolboxReleaseHudProbe]::Quit($hud.Id)
+            if(-not $hud.WaitForExit(5000)){
+                Assert-ToolboxReleaseProcessIdentity $hud $hud.Id $hudTicks[$hud.Id] 'ImeHudWinUi'
+                $hud.Kill()
+                if(-not $hud.WaitForExit(3000)){throw 'HUD did not exit'}
+            }
+        }
+    } finally {
+        foreach($entry in $ahkHandles){$entry.Process.Dispose()}
+        foreach($hud in $runtime.Hud){$hud.Dispose()}
     }
 }
 

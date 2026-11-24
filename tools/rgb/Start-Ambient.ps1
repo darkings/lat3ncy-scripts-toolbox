@@ -22,6 +22,7 @@ try {
 }
 
 $root = $PSScriptRoot
+. (Join-Path $PSScriptRoot 'RgbRuntime.ps1')
 . (Join-Path $PSScriptRoot '..\ToolboxControls.ps1')
 if(-not(Test-ToolboxModuleEnabled -Module rgb -RepoRoot (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent))){return}
 $ambientPy = Join-Path $root "ambient.py"
@@ -63,15 +64,6 @@ function Write-AmbientHost {
     Write-Host "[ambient] $Message" -ForegroundColor $Color
 }
 
-function Get-AmbientPythonProcesses {
-    # 只认命令行里带 ambient.py 的解释器，避免误杀 hi75.py / 其它 python
-    Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.CommandLine -and
-            $_.CommandLine -match '(?i)[\\/]ambient\.py(\s|"|$)'
-        }
-}
-
 function Get-AmbientPythonwExe {
     # 计划任务的 PATH 可能没有 Scoop shim，必须解析成绝对路径。
     # 用 pythonw：无控制台窗口；-u 让 print 立刻进日志。
@@ -97,7 +89,12 @@ if (-not (Test-Path -LiteralPath $ambientPy -PathType Leaf)) {
     exit 1
 }
 
-$existing = @(Get-AmbientPythonProcesses)
+$lease=Enter-RgbOperation
+try {
+$snapshot=Get-RgbProcessSnapshot -RgbRoot $root
+Assert-RgbSnapshot $snapshot Start
+$null=Get-RgbOwnedTask -RgbRoot $root
+$existing = @($snapshot.Processes | Where-Object {$_.Role -eq 'ambient'})
 if ($existing.Count -gt 0) {
     $pids = ($existing | ForEach-Object { $_.ProcessId }) -join ", "
     Write-AmbientHost "already running PID $pids (reuse, not restarting)" "Green"
@@ -144,3 +141,4 @@ if (-not $Wait -and $Host.Name -eq "ConsoleHost") {
 }
 
 exit 0
+} finally {Exit-RgbOperation $lease}

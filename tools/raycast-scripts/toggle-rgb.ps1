@@ -25,6 +25,7 @@ trap {
 
 $repositoryRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $rgbRoot = Join-Path $repositoryRoot 'tools\rgb'
+. (Join-Path $rgbRoot 'RgbRuntime.ps1')
 $ambientPy = Join-Path $rgbRoot 'ambient.py'
 $startScript = Join-Path $rgbRoot 'Start-Ambient.ps1'
 . (Join-Path $repositoryRoot 'tools\ToolboxControls.ps1')
@@ -32,20 +33,8 @@ if(-not(Test-ToolboxModuleEnabled -Module rgb -RepoRoot $repositoryRoot)){return
 $stateDir = Join-Path $env:LOCALAPPDATA 'lat3ncy-toolbox'
 $disabledFlag = Join-Path $stateDir 'rgb-disabled.flag'
 
-function Get-AmbientPythonProcesses {
-  # 只认命令行里带 ambient.py 的解释器，避免误杀 hi75.py / --lights-off
-  @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.CommandLine -and
-        $_.CommandLine -match '(?i)[\\/]ambient\.py(\s|"|$)' -and
-        $_.CommandLine -notmatch '(?i)--lights-off'
-      })
-}
-
 function Test-AmbientRunning {
-  # 函数输出会被拆管道：1 个进程时变成单个 CimInstance，.Count 是 $null。
-  # 必须在调用处再包一层 @()，否则关灯会误走 --lights-off、开灯会误调 Start-Ambient。
-  return (@(Get-AmbientPythonProcesses).Count -gt 0)
+  return (@($ambientSnapshot.Processes | Where-Object {$_.Role -eq 'ambient'}).Count -gt 0)
 }
 
 function Get-ToolboxPythonExe {
@@ -85,20 +74,30 @@ function Invoke-LightsOffOnce {
   $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
   $proc = New-Object System.Diagnostics.Process
   $proc.StartInfo = $psi
-  if (-not $proc.Start()) {
-    throw "failed to start $python --lights-off"
+  try {
+    if (-not $proc.Start()) {
+      throw "failed to start $python --lights-off"
+    }
+    if (-not $proc.WaitForExit(12000)) {
+      try { $proc.Kill() } catch {}
+      throw 'ambient.py --lights-off timed out'
+    }
+    return ($proc.ExitCode -eq 0)
+  } finally {
+    $proc.Dispose()
   }
-  if (-not $proc.WaitForExit(8000)) {
-    try { $proc.Kill() } catch {}
-    throw 'ambient.py --lights-off timed out'
-  }
-  return ($proc.ExitCode -eq 0)
 }
 
 function Show-RgbResult {
   param([Parameter(Mandatory = $true)][string]$Text)
   # 开关灯结果静默执行，夜间避免刺眼 Toast
 }
+
+$lease=Enter-RgbOperation
+try {
+$ambientSnapshot=Get-RgbProcessSnapshot -RgbRoot $rgbRoot
+Assert-RgbSnapshot $ambientSnapshot Toggle
+$null=Get-RgbOwnedTask -RgbRoot $rgbRoot
 
 if (-not (Test-Path -LiteralPath $stateDir)) {
   New-Item -ItemType Directory -Path $stateDir | Out-Null
@@ -141,3 +140,4 @@ if (-not (Test-AmbientRunning)) {
 }
 Show-RgbResult -Text 'RGB 灯光已开启'
 exit 0
+} finally {Exit-RgbOperation $lease}

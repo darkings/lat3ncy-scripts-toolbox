@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param([Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{32}$')][string]$RequestId)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ReloadSupport.ps1')
@@ -53,20 +53,14 @@ try {
                     & (Join-Path $themeRoot 'Update-ThemeSchedule.ps1') -Strict | Out-Null
                 }
                 rgb {
+                    . (Join-Path $repo 'tools\rgb\RgbRuntime.ps1')
+                    $failureReason='busy'
+                    $rgbLease=Enter-RgbOperation
+                    try {
                     $failureReason='ownership'
-                    $task = Get-ScheduledTask -TaskName 'RGB-Ambient' -TaskPath '\' -ErrorAction Stop
-                    Assert-SettingsTaskOwner $task (Join-Path $repo 'tools\rgb\ambient.py')
-                    $failureReason='operation_failed'
-                    if ([string]$task.State -eq 'Running') {
-                        Stop-ScheduledTask -TaskName 'RGB-Ambient' -TaskPath '\' -ErrorAction Stop
-                        $deadline=[DateTime]::UtcNow.AddSeconds(15)
-                        do { Start-Sleep -Milliseconds 250; $task=Get-ScheduledTask -TaskName 'RGB-Ambient' -TaskPath '\' } while ([string]$task.State -eq 'Running' -and [DateTime]::UtcNow -lt $deadline)
-                        if ([string]$task.State -eq 'Running') { throw 'reload-rgb-stop' }
-                        Start-ScheduledTask -TaskName 'RGB-Ambient' -TaskPath '\' -ErrorAction Stop
-                        Start-Sleep -Seconds 2
-                        if ([string](Get-ScheduledTask -TaskName 'RGB-Ambient' -TaskPath '\').State -ne 'Running') { throw 'reload-rgb-start' }
-                    }
+                    Restart-RgbOwnedTask (Join-Path $repo 'tools\rgb')
                     # An idle task reads the saved config on its next normal start.
+                    } finally {Exit-RgbOperation $rgbLease}
                 }
             }
             $completed += $action

@@ -1,5 +1,10 @@
 """Offline subprocess/TCP tests. Never enumerate HID, capture screens or connect to SDK."""
 import importlib.util
+import argparse
+from contextlib import nullcontext, redirect_stderr
+import io
+import json
+import tempfile
 from pathlib import Path
 import socket
 import struct
@@ -9,7 +14,7 @@ import threading
 import time
 import types
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 ROOT = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("toolbox_ambient", ROOT / "ambient.py")
@@ -20,6 +25,45 @@ with patch.dict(sys.modules, {"numpy": types.SimpleNamespace(), "hi75": fake_hid
     spec.loader.exec_module(ambient)
 from openrgb.network import NetworkClient
 from openrgb import utils
+
+
+class EntryGuardTests(unittest.TestCase):
+    def test_disabled_feature_starts_no_writer_or_controller(self):
+        with patch.object(sys, 'argv', ['ambient.py']), patch.object(ambient, 'module_enabled', return_value=False), patch.object(ambient, 'hardware_writer') as writer, patch.object(ambient, '_run') as run:
+            self.assertEqual(0, ambient.main()); writer.assert_not_called(); run.assert_not_called()
+
+    def test_busy_or_unverified_writer_never_reaches_capture_or_controllers(self):
+        RgbBusy = ambient.RgbBusy
+        with patch.object(sys, 'argv', ['ambient.py']), patch.object(ambient, 'module_enabled', return_value=True), patch.object(ambient, 'hardware_writer', side_effect=RgbBusy('rgb-writer-busy')), patch.object(ambient, '_run') as run:
+            self.assertEqual(2, ambient.main()); run.assert_not_called()
+        with patch.object(sys, 'argv', ['ambient.py']), patch.object(ambient, 'module_enabled', return_value=True), patch.object(ambient, 'hardware_writer', return_value=nullcontext()), patch.object(ambient, 'verify_hardware_admission', side_effect=RgbBusy('rgb-owner-unavailable')), patch.object(ambient, '_run') as run:
+            self.assertEqual(2, ambient.main()); run.assert_not_called()
+
+    def test_conflicting_modes_fail_before_any_hardware_guard(self):
+        for flags in (['--dry-run','--lights-off'], ['--bench','0','--list-devices'], ['--lights-off','--list-devices'], ['--bench-capture']):
+            with patch.object(sys, 'argv', ['ambient.py', *flags]), patch.object(ambient, 'hardware_writer') as writer, patch.object(ambient, '_run') as run, redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error: ambient.main()
+                self.assertEqual(2, error.exception.code); writer.assert_not_called(); run.assert_not_called()
+
+    def test_zero_benchmark_is_synthetic_without_capture_or_devices(self):
+        args=argparse.Namespace(config='isolated-missing.toml',fps=None,no_openrgb=False,no_hi75=False,list_devices=False,lights_off=False,bench=0,bench_capture=False)
+        with patch.object(ambient, 'load_config', return_value={}), patch.object(ambient, 'np', types.SimpleNamespace(zeros=Mock(return_value=MagicMock()), uint8='unused')), patch.object(ambient, 'process_frame', return_value=(None,(1,2,3),1)), patch.object(ambient.time, 'perf_counter', side_effect=[0,1]), patch.object(ambient, 'create_capture') as capture, patch.object(ambient, '_build_controllers') as controllers:
+            self.assertEqual(0, ambient._run(args)); capture.assert_not_called(); controllers.assert_not_called()
+        with patch.object(sys, 'argv', ['ambient.py','--bench','0']), patch.object(ambient, 'hardware_writer', return_value=nullcontext()) as writer, patch.object(ambient, 'verify_hardware_admission') as admission, patch.object(ambient, '_run', return_value=0):
+            self.assertEqual(0, ambient.main()); writer.assert_called_once_with(enabled=False); admission.assert_not_called()
+
+    def test_own_quit_request_does_not_consume_legacy_or_foreign_flags(self):
+        from rgb_runtime import quit_flag_name
+        reader=ambient.quit_requested
+        with tempfile.TemporaryDirectory() as directory, patch.object(ambient, '_state_dir', return_value=Path(directory)):
+            state=Path(directory); legacy=state/'rgb-quit.flag';foreign=state/quit_flag_name(state/'other-rgb')
+            legacy.write_text('keep');foreign.write_text('keep')
+            self.assertFalse(ambient.consume_quit_request())
+            data={'version':1,'id':'a'*32,'expires_utc':int(time.time())+10,'targets':[{'pid':81001,'start_ticks':'123456'}]}
+            ambient.quit_request_flag().write_text(json.dumps(data))
+            with patch.object(ambient, 'quit_requested', side_effect=lambda path: reader(path,identity=(81001,'123456'))):
+                self.assertTrue(ambient.consume_quit_request())
+            self.assertTrue(legacy.exists());self.assertTrue(foreign.exists());self.assertTrue(ambient.quit_request_flag().exists())
 
 
 class HelperProtocolTests(unittest.TestCase):

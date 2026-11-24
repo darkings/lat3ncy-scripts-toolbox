@@ -94,13 +94,13 @@ class CaffeineIndicator {
         text := Trim(text, " `t`r`n" Chr(0xFEFF))
         if (SubStr(text, 1, 1) != "{" || SubStr(text, -1) != "}")
             throw Error("Invalid Coffee state")
-        rest := Trim(SubStr(text, 2, -1))
+        rest := Trim(SubStr(text, 2, -1), " `t`r`n")
         pattern := '^"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*("(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9A-Fa-f]{4})*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)\s*(,|$)'
         while (rest != "") {
             if !RegExMatch(rest, pattern, &m) || values.Has(m[1])
                 throw Error("Invalid Coffee state")
             values[m[1]] := Trim(m[2], '"')
-            rest := LTrim(SubStr(rest, m.Len + 1))
+            rest := LTrim(SubStr(rest, m.Len + 1), " `t`r`n")
             if (m[3] = "," && rest = "")
                 throw Error("Invalid Coffee state")
         }

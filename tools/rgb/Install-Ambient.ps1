@@ -21,6 +21,8 @@ try {
 }
 
 $root = $PSScriptRoot
+. (Join-Path $root 'RgbRuntime.ps1')
+. (Join-Path $root '..\ToolboxControls.ps1')
 $taskName = "RGB-Ambient"
 $ambientPy = Join-Path $root "ambient.py"
 $startScript = Join-Path $root "Start-Ambient.ps1"
@@ -93,22 +95,23 @@ if (-not (Test-AmbientAdmin)) {
     Invoke-AmbientElevatedSelf
 }
 
+$lease=Enter-RgbOperation
+try {
+Assert-RgbSnapshot (Get-RgbProcessSnapshot $root) $(if($Unregister){'Stop'}else{'Install'})
+$null=Get-RgbOwnedTask $root
+
 if ($Unregister) {
-    $ErrorActionPreference = "Continue"
     Write-AmbientHost "removing task $taskName"
-    try {
-        schtasks /end /tn $taskName 2>$null | Out-Null
-    } catch {
+    if (Test-Path -LiteralPath $stopScript -PathType Leaf) {
+        & $stopScript
+        if ($LASTEXITCODE -ne 0) {throw 'rgb-stop-failed'}
     }
-    $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    $existing = Get-RgbOwnedTask $root
     if ($existing) {
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+        Unregister-ScheduledTask -TaskName $taskName -TaskPath '\' -Confirm:$false
         Write-AmbientHost "task removed" "Green"
     } else {
         Write-AmbientHost "task not found" "Yellow"
-    }
-    if (Test-Path -LiteralPath $stopScript -PathType Leaf) {
-        & $stopScript
     }
     exit 0
 }
@@ -149,16 +152,16 @@ $settings = New-ScheduledTaskSettingsSet `
 
 $description = "RGB Ambient - desktop color to fans and keyboard (pythonw, no console)"
 
-$existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+$existing = Get-RgbOwnedTask $root
 if ($existing) {
     Write-AmbientHost "update task $taskName -> $pythonw"
-    Set-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null
+    Set-ScheduledTask -TaskName $taskName -TaskPath '\' -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null
 } else {
     Write-AmbientHost "create task $taskName -> $pythonw"
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description $description | Out-Null
+    Register-ScheduledTask -TaskName $taskName -TaskPath '\' -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description $description | Out-Null
 }
 
-$task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+$task = Get-RgbOwnedTask $root
 if (-not $task) {
     Write-AmbientHost "task create failed" "Red"
     exit 1
@@ -167,19 +170,22 @@ Write-AmbientHost "task ready ($($task.State))" "Green"
 
 Write-AmbientHost "starting now"
 try {
-    schtasks /run /tn $taskName | Out-Null
+    if(Test-ToolboxModuleEnabled -Module rgb -RepoRoot (Split-Path (Split-Path $root -Parent) -Parent)){
+        $null=Get-RgbOwnedTask $root
+        Start-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop
+    } else {Write-AmbientHost 'RGB is disabled; task installed without starting devices.' 'Yellow'}
 } catch {
     Write-AmbientHost "schtasks /run failed: $($_.Exception.Message)" "Yellow"
 }
 
 Start-Sleep -Seconds 2
-$info = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
+$info = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath '\' -ErrorAction SilentlyContinue
 if ($info) {
     Write-AmbientHost "last result=$($info.LastTaskResult) last run=$($info.LastRunTime)"
 }
 
-$running = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -match '(?i)[\\/]ambient\.py(\s|"|$)' })
+$snapshot=Get-RgbProcessSnapshot $root
+$running=@($snapshot.Processes | Where-Object {$_.Role -eq 'ambient'})
 if ($running.Count -gt 0) {
     $pids = ($running | ForEach-Object { $_.ProcessId }) -join ", "
     Write-AmbientHost "python running PID $pids" "Green"
@@ -196,3 +202,4 @@ Write-Host " Stop : powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\
 Write-Host " Log  : Get-Content .\tools\rgb\logs\ambient.out.log -Tail 20 -Wait" -ForegroundColor Cyan
 Write-Host " Remove: powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\rgb\Install-Ambient.ps1 -Unregister" -ForegroundColor Cyan
 Write-Host "--------------------------------------------------------------" -ForegroundColor Cyan
+} finally {Exit-RgbOperation $lease}

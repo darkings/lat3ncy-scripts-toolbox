@@ -43,6 +43,7 @@ from hi75 import (  # noqa: E402
     open_hi75,
     send_feature_reports,
 )
+from rgb_runtime import RgbBusy, hardware_writer, quit_flag_name, quit_requested, verify_hardware_admission
 
 CONFIG_PATH = ROOT / "config.toml"
 LOG_DIR = ROOT / "logs"
@@ -50,7 +51,6 @@ LOG_DIR = ROOT / "logs"
 DEFAULT_OPENRGB_MATCH = ("gigabyte", "b550", "ds3h")
 # Raycast 开关灯 / Stop-Ambient 优雅退出。不放仓库目录，避免进 git。
 LIGHTS_DISABLED_NAME = "rgb-disabled.flag"
-QUIT_REQUEST_NAME = "rgb-quit.flag"
 
 
 def _state_dir() -> Path:
@@ -66,7 +66,7 @@ def lights_disabled_flag() -> Path:
 
 
 def quit_request_flag() -> Path:
-    return _state_dir() / QUIT_REQUEST_NAME
+    return _state_dir() / quit_flag_name(Path(__file__).absolute().parent)
 
 
 def lights_are_disabled() -> bool:
@@ -74,15 +74,8 @@ def lights_are_disabled() -> bool:
 
 
 def consume_quit_request() -> bool:
-    """Stop-Ambient 会写这个文件；读到就删，避免下次启动立刻退出。"""
-    path = quit_request_flag()
-    if not path.is_file():
-        return False
-    try:
-        path.unlink()
-    except OSError:
-        pass
-    return True
+    """只响应未过期且匹配本进程创建身份的请求；由生产者清理，多个目标均可读取。"""
+    return quit_requested(quit_request_flag())
 
 
 def install_windows_shutdown_watch(on_shutdown: Any) -> None:
@@ -1358,6 +1351,26 @@ def main() -> int:
         help="一次性推 Direct 全黑后退出；Ambient 已在跑时不要调用",
     )
     args = ap.parse_args()
+    if args.bench_capture and args.bench is None:
+        ap.error('--bench-capture requires --bench')
+    if ((args.lights_off or args.list_devices) and (args.dry_run or args.bench is not None)
+            or args.lights_off and args.list_devices):
+        ap.error('device commands cannot be combined with another execution mode')
+    physical = not args.dry_run and args.bench is None
+    if physical and not (args.lights_off or args.list_devices) and not module_enabled('rgb'):
+        print('[ambient] RGB feature disabled; not starting')
+        return 0
+    try:
+        with hardware_writer(enabled=physical):
+            if physical:
+                verify_hardware_admission(Path(__file__).absolute().parent)
+            return _run(args)
+    except RgbBusy as error:
+        print('[ambient] ' + str(error))
+        return 2
+
+
+def _run(args: argparse.Namespace) -> int:
 
     cfg_path = Path(args.config)
     cfg = load_config(cfg_path if cfg_path.is_file() else CONFIG_PATH)
@@ -1382,7 +1395,7 @@ def main() -> int:
     if args.lights_off:
         return run_lights_off(cfg)
 
-    if args.bench:
+    if args.bench is not None:
         n = max(1, args.bench)
         if args.bench_capture:
             cap, backend = create_capture(cfg)

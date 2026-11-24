@@ -41,9 +41,21 @@ PawnIO（winget）
 * `Start-OpenRGB.ps1` — 6742 已监听则直接退出；否则启动系统服务
 * `Stop-OpenRGB.ps1` — 停止系统服务（日常 ambient 不要调用）
 * `Start-Ambient.ps1` — 无窗口拉起 `pythonw ambient.py` 后立刻返回；不再 `powershell -Wait`（那会弹出 SDK/PID 那几行）；已在跑则复用
-* `Stop-Ambient.ps1` — 先写 `rgb-quit.flag` 让 ambient 推 Direct 全黑再退出；失败才强杀。不碰 OpenRGB
+* `Stop-Ambient.ps1` — 先写本仓库的 `rgb-quit-<scope>.flag` 让 ambient 推 Direct 全黑再退出；失败才强杀。不碰 OpenRGB
 * `Install-Ambient.ps1` — 登录任务 `RGB-Ambient`（直接 `pythonw`，+15s 等 DWM；注册任务需要提权）
 * `../raycast-scripts/toggle-rgb.ps1` — Raycast 单切换。只动 `%LOCALAPPDATA%\lat3ncy-toolbox\rgb-disabled.flag`，不杀 Ambient、不停 OpenRGB 服务
+
+## 进程归属与并发
+
+启动、停止、安装、设置重载和 Raycast 切换共用跨会话控制互斥体；硬件写入者另持全局互斥体，覆盖退出时推黑及一次性设备命令。其他 checkout、遗留孤立 Hi75、无法读取的元数据或占用时拒绝操作，不把未知状态当作未运行。不会启动或停止 OpenRGB 服务。离线合成帧 bench 与 dry-run 不占写入锁。
+
+停止依据绝对脚本路径、PID 创建 FILETIME 和父子身份；最终终止前再次核对并持有已验证进程对象。固定任务 `\RGB-Ambient` 也必须属于本仓库，外部同名任务不更新、不停止。设置重载复用相同的停止链路并重新检查归属后启动。
+
+退出请求使用 `rgb-quit-<scope>.flag`（仓库绝对路径哈希，PowerShell/Python 一致展开已存在的 Windows 8.3 短路径前缀），包含请求 ID、有效期和每个目标的 PID/创建时间；新进程、过期请求和其他仓库不会响应。旧的全局 `rgb-quit.flag` 不再读写或删除。旧版常驻可能不识别新请求，超时后仅终止已验证的本仓库进程；不能据此保证旧程序一定完成推黑。`rgb-disabled.flag` 仍保留当前用户的全黑偏好。
+
+直接运行 `ambient.py` 也在打开抓屏/设备之前执行归属预检。`hi75.py` 单独维护命令和外部 OpenRGB 客户端不参与本仓库锁，勿与 Ambient 同时手动控制设备。路径无法证明一致时保守拒绝，不自动接管外部实例。
+
+测试：`python -S -m unittest discover -s tools/rgb -p 'test_*.py' -v` 与 `python -S -m unittest discover -s tools/validation -p test_rgb_ownership.py -v`。只使用隔离元数据、进程桩和唯一测试互斥体，不连接 SDK/HID、不抓屏、不修改系统任务；真实灯光和跨用户会话的设备效果另行验收。
 
 ## 一次性准备
 
@@ -90,7 +102,7 @@ Raycast 只有一个 `toggle-rgb.ps1`。旗标：
 * **开灯**：删旗标。Ambient 下一帧取色后立刻推灯，不等下一次明显色差。
 * **Direct 全黑必须 keepalive**：Hi75 `0x08` 约 1 秒不刷新会掉回板载彩虹，不是自动关灯。
 * **拔插键盘**：`hi75.exe --serve` 没插键盘时约 50ms 轮询；只等 Col06，不抢先打开 Col05。设备在但 Col06 未就绪先短重试，打不开才 1/2/4/8/16/30s 退避。成功后立刻发 `0x84` 握手并连发 Direct。关灯状态下插上强制 Direct `#000000`，不重放掉线前的彩色。USB 上电到 HID 打开之前的板载灯效无法用软件完全挡住，只能把闪灯压到枚举完成之后立刻盖住。
-* **正常停止**：`Stop-Ambient.ps1` 先写 `rgb-quit.flag`，ambient `finally` 推黑再退出。
+* **正常停止**：`Stop-Ambient.ps1` 先写本仓库的 `rgb-quit-<scope>.flag`，ambient `finally` 推黑再退出。
 * **正常关机**：隐藏顶层窗口收 `WM_QUERYENDSESSION`，尽量先推黑。突然断电 / 硬断电软件发不出 HID，只能靠 BIOS。
 * **BIOS 兜底**：开启 `ErP Ready`，关闭 `RGB lighting in S5` / `LEDs in sleep/shutdown`。Windows 快速启动也可能让硬件停在类似 S4。
 * **不要停 OpenRGB 服务**，也不要改主题调度器。

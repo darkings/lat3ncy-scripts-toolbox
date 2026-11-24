@@ -25,6 +25,14 @@ ReviewRegressions() {
         AssertEqual(true, ticks > 0, "indicator reads process creation FILETIME")
         stateFile := root "\state.json"
         good := '{"pid":' pid ',"startTicks":' ticks ',"startTime":1,"durationSeconds":null}'
+        pretty := "{`r`n`t" SubStr(good, 2, -1) "`r`n}"
+        pretty := StrReplace(pretty, ",", ",`r`n`t")
+        AssertEqual(String(pid), CaffeineIndicator.ReadState(pretty)["pid"], "Coffee parser accepts JSON CRLF and tabs")
+        AssertThrows(() => CaffeineIndicator.ReadState("{`n" Chr(34) "pid" Chr(34) ":1,`n}"), "Invalid Coffee state", "multiline trailing comma remains rejected")
+        controls := "{`r`n  " Chr(34) "version" Chr(34) ": 1,`r`n  " Chr(34) "feature_CaffeineIndicator_enabled" Chr(34) ": true`r`n}"
+        AssertEqual(true, ToolboxControls.FeatureEnabled("CaffeineIndicator", ToolboxControls.Parse(controls)), "pretty settings preserve enabled Caffeine indicator")
+        controls := StrReplace(controls, ": true", ": false")
+        AssertEqual(false, ToolboxControls.FeatureEnabled("CaffeineIndicator", ToolboxControls.Parse(controls)), "pretty settings preserve disabled Caffeine indicator")
         FileAppend good, stateFile, "UTF-8-RAW"
         AssertEqual(true, CaffeineIndicator.IsActive(), "valid Coffee state is active")
         FileAppend "stop", root "\stop.flag"

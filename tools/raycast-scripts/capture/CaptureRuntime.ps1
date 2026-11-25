@@ -160,15 +160,20 @@ function Wait-ToolboxCaptureStable {
     return $false
 }
 function Copy-ToolboxCaptureExtra {
-    param([string]$Source,[string]$Directory,[string]$Repo,[scriptblock]$IsCurrent)
+    param([string]$Source,[string]$Directory,[string]$Repo,[scriptblock]$IsCurrent,[string]$Mode='Screenshot',[string]$NameTemplate='')
     if(-not $Directory -or -not (& $IsCurrent)){return $null}
     $directoryPath=[Environment]::ExpandEnvironmentVariables($Directory)
     if(-not [IO.Path]::IsPathRooted($directoryPath)){$directoryPath=Join-Path $Repo $directoryPath}
     $directoryPath=[IO.Path]::GetFullPath($directoryPath)
     if([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Source)).TrimEnd('\') -ieq $directoryPath.TrimEnd('\')){return $Source}
     [void][IO.Directory]::CreateDirectory($directoryPath)
-    $stem=[IO.Path]::GetFileNameWithoutExtension($Source);$extension=[IO.Path]::GetExtension($Source)
-    $destination=Join-Path $directoryPath ($stem+'-'+[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,8)+$extension)
+    $extension=[IO.Path]::GetExtension($Source)
+    $template=if($NameTemplate){$NameTemplate}else{'{mode}-{yyyyMMdd}-{HHmmss}-{guid8}'}
+    $stamp=[DateTime]::UtcNow;$guid=[guid]::NewGuid().ToString('N')
+    $name=$template.Replace('{mode}',$Mode.ToLowerInvariant()).Replace('{yyyyMMdd}',$stamp.ToString('yyyyMMdd')).Replace('{HHmmss}',$stamp.ToString('HHmmss')).Replace('{guid8}',$guid.Substring(0,8)).Replace('{guid}',$guid)
+    if($name -match '[\\/:*?"<>|]' -or $name.Contains('..') -or $name.Length -gt 128){throw 'capture-name-template'}
+    $destination=Join-Path $directoryPath ($name+$extension)
+    if([IO.File]::Exists($destination)){$destination=Join-Path $directoryPath ($name+'-'+$guid.Substring(0,6)+$extension)}
     $temporary=$destination+'.tmp';$inputStream=$null;$outputStream=$null
     try{
         $inputStream=[IO.File]::Open($Source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
@@ -187,13 +192,13 @@ function Copy-ToolboxCaptureExtra {
 }
 function Complete-ToolboxCapture {
     param([string]$Path,$Options,[string]$Repo,[string]$Mode,[scriptblock]$IsCurrent)
-    $result=@{state='stopped';clipboard='not_attempted';extra_copy='not_attempted'}
+    $result=@{state='stopped';clipboard='not_attempted';extra_copy='not_attempted';extra_path=''}
     if(-not $Options.CopyToClipboard){$result.clipboard='off'}
     if(-not $Options.ExtraDirectory){$result.extra_copy='off'}
     if(-not (& $IsCurrent)){return $result}
     # Copy and clipboard are independent: a bad optional directory cannot prevent paste.
     if($Options.ExtraDirectory){
-        try{if(Copy-ToolboxCaptureExtra $Path $Options.ExtraDirectory $Repo $IsCurrent){$result.extra_copy='success'}}catch{$result.extra_copy='failed'}
+        try{$copied=Copy-ToolboxCaptureExtra $Path $Options.ExtraDirectory $Repo $IsCurrent -Mode $Mode -NameTemplate $Options.NameTemplate;if($copied){$result.extra_copy='success';$result.extra_path=$copied}else{$result.extra_copy='failed'}}catch{$result.extra_copy='failed'}
     }
     if($Options.CopyToClipboard){try{Invoke-ToolboxCaptureCommit $Repo {
         if(& $IsCurrent){Copy-CaptureFileToClipboard -Path $Path -Mode $Mode;$result.clipboard='success'}
@@ -202,4 +207,11 @@ function Complete-ToolboxCapture {
     if($outcomes -contains 'failed'){$result.state=if($outcomes -contains 'success'){'partial'}else{'failed'}}
     elseif($outcomes -notcontains 'not_attempted'){$result.state='completed'}
     return $result
+}
+
+function Invoke-ToolboxCaptureAfterAction {
+    param([string]$Path,[ValidateSet('none','open','reveal')][string]$Action)
+    if($Action -eq 'none' -or -not (Test-Path -LiteralPath $Path -PathType Leaf)){return $false}
+    if($Action -eq 'open'){Start-Process -FilePath $Path;return $true}
+    Start-Process -FilePath 'explorer.exe' -ArgumentList ('/select,"'+$Path+'"');return $true
 }

@@ -35,7 +35,7 @@ if(-not(Test-ToolboxRaycastCommandEnabled -Command 'fix-rdp-clipboard-prompt')){
 
 trap {
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { 'Fix RDP Clipboard Prompt' }
-  Show-SystemToast -Title "x $cmdName failed" -Message $_.Exception.Message | Out-Null
+  Show-ToolboxFailureToast -Title "x $cmdName failed" -Message $_.Exception.Message | Out-Null
   exit 1
 }
 
@@ -66,6 +66,6 @@ foreach ($stale in @('fPromptForClipboardRedirection', 'fPromptForWebAuthRedirec
   } catch { }
 }
 
-Show-SystemToast -Title 'OK RDP warning rolled back' -Message (
+Show-ToolboxSuccessToast -Title 'OK RDP warning rolled back' -Message (
   "RedirectionWarningDialogVersion=1 written. Reconnect; if the warning is still there, reboot once."
 ) | Out-Null

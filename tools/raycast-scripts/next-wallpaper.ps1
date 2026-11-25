@@ -15,7 +15,7 @@ if(-not(Test-ToolboxRaycastCommandEnabled -Command 'next-wallpaper')){exit 0}
 
 trap {
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { 'Raycast 脚本' }
-  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  Show-ToolboxFailureToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
   exit 1
 }
 

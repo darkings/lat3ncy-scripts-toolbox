@@ -236,7 +236,7 @@ if($env:PSMODULEPATH -ne 'INCOMPATIBLE_FIXTURE_MODULE_PATH'){throw 'parent envir
         scripts = self.repo / 'tools/raycast-scripts'; (scripts / '_lib').mkdir(parents=True)
         startup = self.repo / 'tools/startup'; startup.mkdir()
         (scripts / '_lib/settings.ps1').write_text('function Test-ToolboxRaycastCommandEnabled {return $true}')
-        (scripts / '_lib/notify.ps1').write_text("function Show-SystemToast {param($Title,$Message) [IO.File]::WriteAllText((Join-Path $env:LAT3NCY_HUD_FIXTURE 'notified'),'yes')}")
+        (scripts / '_lib/notify.ps1').write_text("function Show-SystemToast {param($Title,$Message) [IO.File]::WriteAllText((Join-Path $env:LAT3NCY_HUD_FIXTURE 'notified'),'yes')}\nfunction Show-ToolboxFailureToast {param($Title,$Message) Show-SystemToast $Title $Message}\nfunction Show-ToolboxSuccessToast {param($Title,$Message) Show-SystemToast $Title $Message}")
         (startup / 'Deployment.Runtime.ps1').write_text(r'''function Invoke-ToolboxReleaseProcess {
  param($Exe,[string[]]$Arguments,$TimeoutMs)
  if($Exe -ine (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -or $TimeoutMs -ne 600000){throw 'wrong worker'}

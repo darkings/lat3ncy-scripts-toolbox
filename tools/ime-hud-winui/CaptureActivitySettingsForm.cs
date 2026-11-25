@@ -10,7 +10,7 @@ internal sealed class CaptureActivitySettingsForm
     public StackPanel Root { get; } = new() { Spacing = 8, Padding = new Thickness(24, 0, 24, 20) };
     readonly Button _refresh = new() { Content = "刷新处理结果", HorizontalAlignment = HorizontalAlignment.Left };
     readonly StackPanel _rows = new() { Spacing = 8 };
-    readonly TextBlock _summary = SettingsUi.Hint("查看最近一次工具箱处理结果；不包含图片、视频、文件名或路径。未发现新文件时，无法单独判断是否取消或未保存。");
+    readonly TextBlock _summary = SettingsUi.Hint("查看最近一次工具箱处理结果；列表不含图片、视频、文件名或路径。仅在有可用结果文件时可打开、复制或定位。");
     readonly CancellationToken _lifetime;
     public CaptureActivitySettingsForm(CancellationToken lifetime)
     {
@@ -30,7 +30,7 @@ internal sealed class CaptureActivitySettingsForm
         {
             var data = await PreferencesBridge.RunCaptureActivityAsync(_lifetime);
             if (_lifetime.IsCancellationRequested) return;
-            _summary.Text = "最近一次工具箱处理结果；刷新可查看变化。不记录内容、文件名或路径。";
+            _summary.Text = "最近一次工具箱处理结果；刷新可查看变化，列表不显示文件名或路径。";
             _rows.Children.Clear();
             foreach (var item in data.GetProperty("items").EnumerateArray())
             {
@@ -43,12 +43,41 @@ internal sealed class CaptureActivitySettingsForm
                     content.Children.Add(SettingsUi.Hint("剪贴板：" + Outcome(item.GetProperty("clipboard").GetString()!) + " · 额外目录：" + Outcome(item.GetProperty("extra_copy").GetString()!)));
                 if (DateTimeOffset.TryParse(item.GetProperty("updated_utc").GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
                     content.Children.Add(SettingsUi.Hint("更新时间（北京时间）：" + time.ToOffset(TimeSpan.FromHours(8)).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)));
+                string mode = item.GetProperty("mode").GetString()!;
+                bool hasFile = item.TryGetProperty("has_file", out var file) && file.GetBoolean();
+                content.Children.Add(ActionButtons(mode, hasFile));
                 _rows.Children.Add(SettingsUi.Card(content));
             }
         }
         catch (OperationCanceledException) { }
         catch { if (!_lifetime.IsCancellationRequested) _summary.Text = "暂时无法读取处理记录，可稍后刷新。"; }
         finally { _refresh.IsEnabled = true; }
+    }
+
+    StackPanel ActionButtons(string mode, bool hasFile)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        foreach (var (action, label) in new[] { ("open", "打开结果"), ("copy", "复制结果"), ("reveal", "定位结果") })
+        {
+            var button = new Button { Content = label, IsEnabled = hasFile, HorizontalAlignment = HorizontalAlignment.Left };
+            AutomationProperties.SetName(button, label + (mode == "Screenshot" ? "截图" : "录屏"));
+            button.Click += async (_, _) => await RunActionAsync(mode, action);
+            panel.Children.Add(button);
+        }
+        return panel;
+    }
+    async Task RunActionAsync(string mode, string action)
+    {
+        try
+        {
+            await PreferencesBridge.RunCaptureRecentActionAsync(mode, action, _lifetime);
+            if (!_lifetime.IsCancellationRequested) _summary.Text = action switch
+            {
+                "open" => "已尝试打开最近结果。", "copy" => "已尝试把最近结果放入剪贴板。", _ => "已尝试在资源管理器中定位最近结果。",
+            };
+        }
+        catch (OperationCanceledException) { }
+        catch { if (!_lifetime.IsCancellationRequested) _summary.Text = "最近结果不可用或无法执行该操作，请刷新后重试。"; }
     }
     static string Outcome(string state) => state switch { "off" => "已关闭", "success" => "完成", "failed" => "失败", "pending" => "等待处理", _ => "未执行" };
     internal static string StateLabel(string state, string reason) => (state, reason) switch

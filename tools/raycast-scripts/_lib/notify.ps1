@@ -81,6 +81,35 @@ function Start-ToolboxNotifyProcess
   return ($exitCode -eq 0)
 }
 
+function Get-ToolboxNotifyMode
+{
+  if (Get-Command -Name Get-ToolboxRaycastNotifyMode -ErrorAction SilentlyContinue)
+  {
+    return Get-ToolboxRaycastNotifyMode
+  }
+  return 'success'
+}
+
+function Show-ToolboxSuccessToast
+{
+  param(
+    [string] $Title = 'Lat3ncy Toolbox',
+    [string] $Message = ''
+  )
+  if ((Get-ToolboxNotifyMode) -cne 'success') { return $false }
+  return Show-SystemToast -Title $Title -Message $Message
+}
+
+function Show-ToolboxFailureToast
+{
+  param(
+    [string] $Title = 'Lat3ncy Toolbox',
+    [string] $Message = ''
+  )
+  if ((Get-ToolboxNotifyMode) -ceq 'silent') { return $false }
+  return Show-SystemToast -Title $Title -Message $Message
+}
+
 function Show-SystemToast
 {
   param(

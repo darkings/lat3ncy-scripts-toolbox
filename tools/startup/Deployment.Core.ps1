@@ -86,6 +86,53 @@ function Assert-ToolboxReleaseBackup {
     }
 }
 
+function Get-ToolboxReleaseRestorePlan {
+    param([string]$ReleaseDirectory,[string]$ExpectedTarget)
+    Assert-ToolboxReleaseBackup $ReleaseDirectory $ExpectedTarget
+    $manifest=Get-Content -LiteralPath (Join-Path $ReleaseDirectory 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $entries=@();$conflicts=@()
+    foreach($entry in $manifest.Files){
+        $path=Join-ToolboxReleasePath $ExpectedTarget $entry.Relative
+        $exists=Test-Path -LiteralPath $path -PathType Leaf
+        $current=if($exists){(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}else{''}
+        # A committed release is at AfterHash; an already-restored one is at
+        # BeforeHash. Any other bytes belong to a later writer.
+        if($current -cne [string]$entry.AfterHash -and $current -cne [string]$entry.BeforeHash){
+            $conflicts+=[string]$entry.Relative
+            $action='conflict'
+        } elseif($current -ceq [string]$entry.BeforeHash){$action='already-prior'}
+        else {$action='restore'}
+        $entries+=[pscustomobject]@{Relative=[string]$entry.Relative;Action=$action;CurrentHash=$current;
+            InstalledHash=[string]$entry.AfterHash;BackupHash=[string]$entry.BeforeHash}
+    }
+    return [pscustomobject]@{Release=$ReleaseDirectory;Entries=@($entries);Conflicts=@($conflicts)}
+}
+
+function Assert-ToolboxReleaseRestorable {
+    param([string]$ReleaseDirectory,[string]$ExpectedTarget)
+    $plan=Get-ToolboxReleaseRestorePlan $ReleaseDirectory $ExpectedTarget
+    if($plan.Conflicts.Count){throw "Rollback conflict: $($plan.Conflicts -join ', '); scene preserved"}
+    return $plan
+}
+
+function Assert-ToolboxReleaseInstalled {
+    param([string]$ReleaseDirectory,[string]$ExpectedTarget,[switch]$VerifyBackupState)
+    Assert-ToolboxReleaseBackup $ReleaseDirectory $ExpectedTarget
+    $manifest=Get-Content -LiteralPath (Join-Path $ReleaseDirectory 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach($entry in $manifest.Files){
+        $path=Join-ToolboxReleasePath $ExpectedTarget $entry.Relative
+        $expected=if($VerifyBackupState){[string]$entry.BeforeHash}else{[string]$entry.AfterHash}
+        if($entry.Existed){
+            if(-not(Test-Path -LiteralPath $path -PathType Leaf) -or
+               (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne $expected){
+                throw "Release installation verification failed: $($entry.Relative)"
+            }
+        } elseif(Test-Path -LiteralPath $path -PathType Leaf){
+            throw "Release installation left an unexpected file: $($entry.Relative)"
+        }
+    }
+}
+
 function Restore-ToolboxRelease {
     param([string]$ReleaseDirectory,[string]$ExpectedTarget)
     Assert-ToolboxReleaseBackup $ReleaseDirectory $ExpectedTarget

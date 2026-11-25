@@ -1,5 +1,34 @@
+; Injected tray backend: records visual operations without registering shell icons.
+class FakeCaffeineTray {
+    static Added := [], Removed := [], Swapped := []
+    static Reset() {
+        this.Added := []
+        this.Removed := []
+        this.Swapped := []
+    }
+    static Add(id, path, tip) {
+        this.Added.Push([id, path, tip])
+        return true
+    }
+    static Remove(id) {
+        this.Removed.Push(id)
+        return true
+    }
+    static SetIcon(id, path) {
+        this.Swapped.Push([id, path])
+        return true
+    }
+}
+
+global TrayIconActions := []
+TrayRecordIcon(action, uid, hIcon, tip) {
+    TrayIconActions.Push(action)
+    return true
+}
+
 ; Included by run-tests.ahk after its assertion helpers; production startup is disabled.
 ReviewRegressions() {
+    global TrayIconActions
     ; Exercise the actual renderer/anchor call chain, not just source strings.
     try {
         AssertEqual(true, NotifyRenderer.Show("popup", "", "Anchor contract regression", 100), "popup renders through anchor adapter")
@@ -47,6 +76,58 @@ ReviewRegressions() {
         FileDelete stateFile
         FileAppend SubStr(good, 1, -1), stateFile, "UTF-8-RAW"
         AssertEqual(false, CaffeineIndicator.IsActive(), "partial Coffee state is inactive")
+
+        ; Tray icon state must follow the same Coffee state as the power policy.
+        oldHost := CaffeineIndicator.Host
+        oldShowing := CaffeineIndicator.Showing
+        oldStarted := CaffeineIndicator.Started
+        try {
+            FakeCaffeineTray.Reset()
+            CaffeineIndicator.Host := FakeCaffeineTray
+            CaffeineIndicator.Started := true
+            CaffeineIndicator.Showing := false
+            FileDelete stateFile
+            FileAppend good, stateFile, "UTF-8-RAW"
+            CaffeineIndicator.Poll()
+            AssertEqual(true, CaffeineIndicator.Showing, "active Coffee shows tray icon")
+            AssertEqual(1, FakeCaffeineTray.Added.Length, "active poll adds one icon")
+            AssertEqual(CaffeineIndicator.IconId, FakeCaffeineTray.Added[1][1], "tray icon uses caffeine id")
+            AssertEqual(CaffeineIndicator.IconPath(), FakeCaffeineTray.Added[1][2], "tray icon matches current theme")
+            CaffeineIndicator.Poll()
+            AssertEqual(1, FakeCaffeineTray.Added.Length, "steady active state does not re-add icon")
+            colorBuf := Buffer(40, 0)
+            StrPut("ImmersiveColorSet", colorBuf, "UTF-16")
+            CaffeineIndicator.OnSettingChange(0, colorBuf.Ptr, 0x001A, 0)
+            AssertEqual(1, FakeCaffeineTray.Swapped.Length, "theme change swaps tray icon")
+            AssertEqual(CaffeineIndicator.IconPath(), FakeCaffeineTray.Swapped[1][2], "theme swap uses current icon path")
+            FileAppend "stop", root "\stop.flag", "UTF-8-RAW"
+            CaffeineIndicator.Poll()
+            AssertEqual(false, CaffeineIndicator.Showing, "stopped Coffee hides tray icon")
+            AssertEqual(1, FakeCaffeineTray.Removed.Length, "inactive poll removes icon")
+            FileDelete root "\stop.flag"
+        } finally {
+            CaffeineIndicator.Host := oldHost
+            CaffeineIndicator.Showing := oldShowing
+            CaffeineIndicator.Started := oldStarted
+        }
+
+        ; Explorer restart: TrayHost re-registers existing icons with NIM_ADD.
+        oldItems := TrayHost.Items
+        oldOverride := TrayHost.SendIconOverride
+        oldActions := TrayIconActions
+        try {
+            TrayIconActions := []
+            TrayHost.Items := Map()
+            TrayHost.Items["caffeine"] := {uid: 7, hIcon: 0, path: "x", tip: "t"}
+            TrayHost.SendIconOverride := TrayRecordIcon
+            TrayHost.OnTaskbarCreated()
+            AssertEqual(1, TrayIconActions.Length, "explorer restart re-registers tray icon")
+            AssertEqual(TrayHost.NIM_ADD, TrayIconActions[1], "explorer restart uses NIM_ADD")
+        } finally {
+            TrayHost.Items := oldItems
+            TrayHost.SendIconOverride := oldOverride
+            TrayIconActions := oldActions
+        }
 
         clockFile := root "\caret.txt"
         ImeHud._caretServerFile := clockFile

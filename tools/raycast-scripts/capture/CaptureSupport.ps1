@@ -2,8 +2,8 @@
 function Get-ToolboxCaptureOptions {
     param([ValidateSet('Screenshot','Record')][string]$Mode,
           [string]$Repo=(Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent))
-    $sections=@{screenshot=@{enabled=$true;copy_to_clipboard=$true;wait_timeout_s=180;extra_directory=''};record=@{enabled=$true;copy_to_clipboard=$true;wait_timeout_s=1800;extra_directory=''}}
-    $result=@{Valid=$true;Enabled=$false;CopyToClipboard=$true;WaitTimeoutSeconds=180;ExtraDirectory=''}
+    $sections=@{screenshot=@{enabled=$true;copy_to_clipboard=$true;wait_timeout_s=180;extra_directory='';name_template='{mode}-{yyyyMMdd}-{HHmmss}-{guid8}';after_action='none'};record=@{enabled=$true;copy_to_clipboard=$true;wait_timeout_s=1800;extra_directory='';name_template='{mode}-{yyyyMMdd}-{HHmmss}-{guid8}';after_action='none'}}
+    $result=@{Valid=$true;Enabled=$false;CopyToClipboard=$true;WaitTimeoutSeconds=180;ExtraDirectory='';NameTemplate='{mode}-{yyyyMMdd}-{HHmmss}-{guid8}';AfterAction='none'}
     try {
         $path=Join-Path $Repo 'tools\raycast-scripts\capture\config.toml'
         if(Test-Path -LiteralPath $path){
@@ -14,7 +14,7 @@ function Get-ToolboxCaptureOptions {
                 if($line -cmatch '^\s*\[(screenshot|record)\]\s*(?:#.*)?$'){
                     $section=$Matches[1];if(-not $seen.Add('['+$section+']')){throw 'capture-duplicate'};continue
                 }
-                if(-not $section -or $line -cnotmatch '^\s*(enabled|copy_to_clipboard|wait_timeout_s|extra_directory)\s*=\s*(true|false|\d+|"(?:[^"\\]|\\.)*"|''[^'']*'')\s*(?:#.*)?$'){throw 'capture-config-syntax'}
+                if(-not $section -or $line -cnotmatch '^\s*(enabled|copy_to_clipboard|wait_timeout_s|extra_directory|name_template|after_action)\s*=\s*(true|false|\d+|"(?:[^"\\]|\\.)*"|''[^'']*'')\s*(?:#.*)?$'){throw 'capture-config-syntax'}
                 $key=$Matches[1];$literal=$Matches[2]
                 if(-not $seen.Add($section+'.'+$key)){throw 'capture-duplicate'}
                 if($literal.StartsWith("'")){$value=$literal.Substring(1,$literal.Length-2)}
@@ -23,6 +23,11 @@ function Get-ToolboxCaptureOptions {
                 elseif($key -eq 'wait_timeout_s'){
                     $minimum=if($section -eq 'record'){30}else{5};$maximum=if($section -eq 'record'){86400}else{3600}
                     if(($value -isnot [int] -and $value -isnot [long]) -or $value -lt $minimum -or $value -gt $maximum){throw 'capture-config-range'}
+                }elseif($key -eq 'name_template'){
+                    if($value -isnot [string] -or $value.Length -gt 128 -or $value -match '[\x00-\x1F/\\:*?"<>|]' -or $value.Contains('..')){throw 'capture-config-template'}
+                    foreach($token in [regex]::Matches($value,'\{[^}]*\}')){if($token.Value -cnotin @('{mode}','{yyyyMMdd}','{HHmmss}','{guid8}','{guid}')){throw 'capture-config-template'}}
+                }elseif($key -eq 'after_action'){
+                    if($value -isnot [string] -or $value -cnotin @('none','open','reveal')){throw 'capture-config-action'}
                 }elseif($value -isnot [string] -or $value.Length -gt 2048 -or $value -match '[\x00-\x1F]'){throw 'capture-config-path'}
                 $sections[$section][$key]=$value
             }
@@ -31,6 +36,7 @@ function Get-ToolboxCaptureOptions {
         . (Join-Path $Repo 'tools\ToolboxControls.ps1')
         $result.Enabled=$options.enabled -and (Test-ToolboxModuleEnabled -Module capture -RepoRoot $Repo)
         $result.CopyToClipboard=$options.copy_to_clipboard;$result.WaitTimeoutSeconds=$options.wait_timeout_s;$result.ExtraDirectory=$options.extra_directory
+        $result.NameTemplate=$options.name_template;$result.AfterAction=$options.after_action
     }catch{$result.Valid=$false;$result.Enabled=$false}
     return $result
 }
@@ -88,14 +94,17 @@ function Set-ToolboxCaptureResult {
           [ValidateSet('waiting','processing','completed','partial','failed','timeout','stopped','processing_disabled')][string]$State,
           [ValidateSet('none','launch_failed','watcher_failed','no_file','file_not_ready','module_disabled','internal')][string]$Reason='none',
           [ValidateSet('pending','off','success','failed','not_attempted')][string]$Clipboard='not_attempted',
-          [ValidateSet('pending','off','success','failed','not_attempted')][string]$ExtraCopy='not_attempted')
+          [ValidateSet('pending','off','success','failed','not_attempted')][string]$ExtraCopy='not_attempted',
+          [string]$FilePath='',[string]$ExtraPath='')
     # Correlate and publish under the same short commit lock as session replacement.
     Invoke-ToolboxCaptureCommit $Repo {
         $current=Read-ToolboxCaptureSession $Repo $Mode $SessionId -AllowExpired
         if(-not $current){return}
         if(-not $current.options.CopyToClipboard){$Clipboard='off'}
         if(-not $current.options.ExtraDirectory){$ExtraCopy='off'}
-        $result=@{version=1;id=$SessionId;mode=$Mode;state=$State;reason=$Reason;clipboard=$Clipboard;extra_copy=$ExtraCopy;updated_utc=[DateTime]::UtcNow.ToString('o')}
+        $safeFile=if($FilePath.Length -le 1024 -and $FilePath -notmatch '[\r\n]'){$FilePath}else{''}
+        $safeExtra=if($ExtraPath.Length -le 1024 -and $ExtraPath -notmatch '[\r\n]'){$ExtraPath}else{''}
+        $result=@{version=1;id=$SessionId;mode=$Mode;state=$State;reason=$Reason;clipboard=$Clipboard;extra_copy=$ExtraCopy;updated_utc=[DateTime]::UtcNow.ToString('o');file_path=$safeFile;extra_path=$safeExtra}
         $path=Join-Path $Repo ('.toolbox-state\capture-result-'+$Mode.ToLowerInvariant()+'.json')
         $temporary=$path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
         try{[IO.File]::WriteAllText($temporary,($result|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false));Move-Item -LiteralPath $temporary -Destination $path -Force}

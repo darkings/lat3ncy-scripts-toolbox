@@ -26,6 +26,12 @@ __pycache__/
 !/docs/releases/2026-11-21-reliability.md
 !/docs/releases/2026-11-22-text-workflow.md
 !/docs/releases/2026-11-24-toolbox.md
+!/docs/releases/2026-11-25-hud-rollback.md
+!/docs/releases/2026-11-25-raycast-options.md
+!/docs/releases/2026-11-25-config-transfer.md
+!/docs/releases/2026-11-25-caffeine-tray.md
+!/docs/releases/2026-11-25-maintenance-center.md
+!/docs/releases/2026-11-25-capture-results.md
 
 # 运行日志
 **/*.log

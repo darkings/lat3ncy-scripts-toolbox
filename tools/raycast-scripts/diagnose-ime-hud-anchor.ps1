@@ -33,6 +33,12 @@ $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot '_lib\settings.ps1')
 if(-not(Test-ToolboxRaycastCommandEnabled -Command 'diagnose-ime-hud-anchor')){exit 0}
 
+$diagnosticScope = Get-ToolboxRaycastDiagnosticScope
+function Write-DiagnosticDetail {
+  param([string]$Line)
+  if ($script:diagnosticScope -ceq 'full') { Write-Host $Line }
+}
+
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $hudExe = Join-Path $repo 'tools\ime-hud-winui\out\ImeHudWinUi.exe'
 $hudLog = Join-Path $env:TEMP 'ImeHudWinUi.log'
@@ -83,7 +89,7 @@ if ($ahk.Count -eq 0) {
 }
 if (Test-Path -LiteralPath $clientLog) {
   Write-Host ("client log: {0}" -f $clientLog)
-  Get-Content -LiteralPath $clientLog -Tail 8 | ForEach-Object { Write-Host "  $_" }
+  Get-Content -LiteralPath $clientLog -Tail 8 | ForEach-Object { Write-DiagnosticDetail "  $_" }
 } else {
   Write-Host 'client log: missing -> AHK is still the OLD client (old code never writes this log)'
   Write-Host '>> reload AHK: powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\raycast-scripts\restart-autohotkey.ps1'
@@ -103,11 +109,11 @@ if (-not (Test-Path -LiteralPath $hudLog)) {
   }
   $session = if ($all.Count -gt 0) { @($all[$sessionStart..($all.Count - 1)]) } else { @() }
   Write-Host ("session start line={0} session lines={1}" -f $sessionStart, $session.Count)
-  if ($session.Count -gt 0) { Write-Host ("  {0}" -f $session[0]) }
+  if ($session.Count -gt 0) { Write-DiagnosticDetail ("  {0}" -f $session[0]) }
 
   $interesting = $session | Select-String -Pattern 'build hud=|hud-message|place |anchor-degraded|move source=|copydata=' |
     Select-Object -Last 12
-  foreach ($l in $interesting) { Write-Host ("  {0}" -f $l.Line) }
+  foreach ($l in $interesting) { Write-DiagnosticDetail ("  {0}" -f $l.Line) }
 
   $hasBuild = [bool](($session | Select-String -Pattern 'build hud=anchor-source-1' | Measure-Object).Count -gt 0)
   $hasAnchor = [bool](($session | Select-String -Pattern 'hud-message ' | Measure-Object).Count -gt 0)
@@ -119,9 +125,9 @@ if (-not (Test-Path -LiteralPath $hudLog)) {
   Write-Host '=== 4) verdict ==='
   Write-Host ("new HUD build marker (build hud=anchor-source-1): {0}" -f $hasBuild)
   Write-Host ("new protocol log (hud-message ... anchor=):        {0}" -f $hasAnchor)
-  if ($lastPlace) { Write-Host ("last placement : {0}" -f $lastPlace.Line) }
-  if ($lastDegraded) { Write-Host ("degrade warning: {0}" -f $lastDegraded.Line) }
-  if ($lastMove) { Write-Host ("follow move    : {0}" -f $lastMove.Line) }
+  if ($lastPlace) { Write-DiagnosticDetail ("last placement : {0}" -f $lastPlace.Line) }
+  if ($lastDegraded) { Write-DiagnosticDetail ("degrade warning: {0}" -f $lastDegraded.Line) }
+  if ($lastMove) { Write-DiagnosticDetail ("follow move    : {0}" -f $lastMove.Line) }
   else { Write-Host 'follow move    : none (no "move source=" line)' }
 
   if (-not $hasBuild -or -not $hasAnchor) {

@@ -108,6 +108,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/power-policy/Resta
 | TTS Python 环境 | 使用所选源码版本的锁文件执行安装/检查 | HUD 回滚不回退包；旧 repo 环境保留但不会自动取代就绪的 profile 环境 |
 | 电源设置/设备恢复记录 | 使用现有 PowerPolicy 恢复/卸载入口 | 不属于 HUD 回滚；设备不可用时保留未成功恢复的记录 |
 
+复合发布（HUD＋anchor）不能交给旧的单目录回滚入口。使用专用入口列出、预览并恢复批次：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Restore-ToolboxHudRelease.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Restore-ToolboxHudRelease.ps1 -Preview '<release>'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Restore-ToolboxHudRelease.ps1 -RollbackRelease '<release>'
+```
+
+列表显示批次、创建时间、状态、HUD/anchor 源码指纹与备份完整性；预览按文件给出恢复动作与冲突。存在后来写入时回滚被拒绝并保留现场；实际回滚先保存当前字节，失败时恢复，成功也不改写原批次记录。
+
 ```powershell
 # 仅用于 Deploy-Toolbox 的单独 HUD 发布记录，不接受 hud-* 复合发布记录
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Deploy-Toolbox.ps1 `
@@ -122,6 +132,20 @@ python tools/diagnostics/doctor.py
 每次候选记录：提交 SHA、相对 `main` 的完整范围、对应 SHA 的 CI、干净 clone 报告、基础使用验收及剩余专项矩阵。草稿 PR 不等于合并或正式发布；本仓库没有自动发布安装包的流程。
 
 当前更新见 [2026-11-24 工具箱更新](releases/2026-11-24-toolbox.md)，后续方向见[更新计划](ROADMAP.md)。[文本工作流](releases/2026-11-22-text-workflow.md)和[基础可靠性](releases/2026-11-21-reliability.md)作为历史记录保留。本机配置、偏好文件、运行日志、模型、依赖环境和 `.tmp` 证据不作为发布附件；自动化报告只记录必要元数据。分享诊断使用 `doctor.py --bundle <新 ZIP 路径>`；`--output` 的普通本地报告仍含路径/PID，不应当作脱敏附件。
+
+## 配置备份与迁移
+
+非敏感设置可通过专用桥接导出为 JSON 备份，导入前先预览：
+
+```powershell
+python tools/toolbox_config_transfer.py --export > .tmp\settings-backup.json
+python tools/toolbox_config_transfer.py --preview .tmp\settings-backup.json
+python tools/toolbox_config_transfer.py --apply .tmp\settings-backup.json
+```
+
+导出只包含 `configuration_schema.py` 白名单字段、校验过的翻译/朗读偏好和非敏感功能开关/键位；任何疑似密钥字段、凭证文件、原始 TOML 与日志都不进入备份。预览逐项显示当前值与拟写入值，列出只读/未知字段的跳过说明，并检查备份后是否发生写入（revision 冲突）或键位冲突；存在冲突时不写入任何文件。旧版 `version = 0` 的分段字段列表会在读取时迁移到当前格式。
+
+导入按模块逐个保存并保留各文件原有的编码与注释；它不是多文件原子事务，中途失败会报告已完成的部分。恢复密钥、连接目标和凭证仍使用各自本机备份入口，不能用本备份代替。
 
 ## 提交范围
 

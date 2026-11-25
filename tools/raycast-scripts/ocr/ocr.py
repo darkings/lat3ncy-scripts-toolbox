@@ -283,7 +283,10 @@ def recognize(
     image: Image.Image,
     result_file: str | None = None,
     notify_on_done: bool = False,
+    notify_failure: bool | None = None,
 ) -> int:
+    if notify_failure is None:
+        notify_failure = notify_on_done
     text = extract_text(engine, image)
 
     if result_file is not None:
@@ -302,6 +305,8 @@ def recognize(
                 notify("✓ OCR 文本已复制", preview)
             else:
                 notify("! 未识别到文字", "所选区域内未检测到有效字符")
+        elif notify_failure and not text:
+            notify("! 未识别到文字", "所选区域内未检测到有效字符")
         try:
             write_result(result_file, text)
         except OSError as error:
@@ -335,6 +340,7 @@ def run_ocr_from_clipboard(
     inject_screenshot: bool = True,
     result_file: str | None = None,
     notify_on_done: bool = False,
+    notify_failure: bool | None = None,
 ) -> int:
     _debug(f"start session={_session_id()} inject={inject_screenshot} notify={notify_on_done} result={result_file}")
 
@@ -374,19 +380,31 @@ def run_ocr_from_clipboard(
     if notify_on_done:
         notify("OCR 识别中…", f"{image.width}×{image.height}，请稍候", wait=False)
 
-    return recognize(engine, image, result_file, notify_on_done=notify_on_done)
+    return recognize(engine, image, result_file, notify_on_done=notify_on_done,
+                     notify_failure=notify_failure)
 
 
 def main() -> int:
     global _SILENT_MODE
     inject_screenshot = "--no-screenshot" not in sys.argv
     result_file = None
-    notify_on_done = "--notify-on-done" in sys.argv
     args = sys.argv[1:]
     if "--result-file" in args:
         position = args.index("--result-file")
         if position + 1 < len(args):
             result_file = args[position + 1]
+    notify_mode = None
+    if '--notify-mode' in args:
+        position = args.index('--notify-mode')
+        if position + 1 < len(args) and args[position + 1] in ('success', 'failure', 'silent'):
+            notify_mode = args[position + 1]
+    if notify_mode is None:
+        legacy = '--notify-on-done' in sys.argv
+        notify_on_done = legacy
+        notify_failure = True if result_file is None else legacy
+    else:
+        notify_on_done = notify_mode == 'success'
+        notify_failure = notify_mode in ('success', 'failure')
 
     # Raycast detached 流程：通知由本脚本的 --notify-on-done 负责，
     # 其余 stderr/stdout 保持静默（Raycast 会把任何 stdout 当 HUD 弹出）。
@@ -404,6 +422,7 @@ def main() -> int:
             inject_screenshot=inject_screenshot,
             result_file=result_file,
             notify_on_done=notify_on_done,
+            notify_failure=notify_failure,
         )
         _debug(f"done exit={exit_code}")
         return exit_code
@@ -419,7 +438,7 @@ def main() -> int:
                 write_result(result_file, f"ERROR: {error_message}")
             except OSError as write_error:
                 _debug(f"error result write failed (ignored): {write_error}")
-        if notify_on_done:
+        if notify_failure:
             notify("× OCR 失败", error_message[:160])
         elif result_file is None:
             notify("OCR 失败", error_message)

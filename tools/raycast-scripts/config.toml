@@ -1,4 +1,4 @@
-# Raycast entry availability only. Feature options remain in their existing files.
+# Raycast entry availability and shared script options. Feature options remain in their existing files.
 # toolbox-settings.ps1 always remains available.
 [general]
 enabled = true
@@ -16,3 +16,11 @@ restart_autohotkey = true
 reload_ime_hud = true
 diagnose_ime_hud_anchor = true
 fix_rdp_clipboard_prompt = true
+
+# success: success and failure toasts; failure: failures only; silent: no toasts.
+[notify]
+mode = "success"
+
+# full: log excerpts and verdict; brief: verdict markers only.
+[diagnostics]
+scope = "full"

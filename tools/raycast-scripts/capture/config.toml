@@ -5,9 +5,13 @@ enabled = true
 copy_to_clipboard = true
 wait_timeout_s = 180
 extra_directory = ""
+name_template = "{mode}-{yyyyMMdd}-{HHmmss}-{guid8}"
+after_action = "none"
 
 [record]
 enabled = true
 copy_to_clipboard = true
 wait_timeout_s = 1800
 extra_directory = ""
+name_template = "{mode}-{yyyyMMdd}-{HHmmss}-{guid8}"
+after_action = "none"

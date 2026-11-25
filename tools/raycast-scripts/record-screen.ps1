@@ -16,7 +16,7 @@ if(-not(Test-ToolboxRaycastCommandEnabled -Command 'record-screen')){exit 0}
 trap {
   if($session -and $repositoryRoot){try{Set-ToolboxCaptureResult $repositoryRoot Record $session.id failed launch_failed}catch{}}
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
-  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  Show-ToolboxFailureToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
   exit 1
 }
 
@@ -57,7 +57,7 @@ Start-Sleep -Milliseconds 500
 if (-not (Get-Process -Name 'SnippingTool' -ErrorAction SilentlyContinue))
 {
   Set-ToolboxCaptureResult $repositoryRoot Record $session.id failed launch_failed
-  Show-SystemToast -Title '× 录屏失败' -Message '无法打开录屏工具' | Out-Null
+  Show-ToolboxFailureToast -Title '× 录屏失败' -Message '无法打开录屏工具' | Out-Null
   exit 1
 }
 

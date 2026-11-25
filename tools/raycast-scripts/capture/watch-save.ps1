@@ -39,5 +39,9 @@ if(-not (Wait-ToolboxCaptureStable $file.FullName $deadline $isCurrent)){
     exit 0
 }
 $outcome=Complete-ToolboxCapture $file.FullName $options $repo $Mode $isCurrent
-Set-ToolboxCaptureResult $repo $Mode $SessionId $outcome.state none $outcome.clipboard $outcome.extra_copy
+Set-ToolboxCaptureResult -Repo $repo -Mode $Mode -SessionId $SessionId -State $outcome.state -Reason none -Clipboard $outcome.clipboard -ExtraCopy $outcome.extra_copy -FilePath $file.FullName -ExtraPath $outcome.extra_path
+if($outcome.state -eq 'completed' -and $options.AfterAction -ne 'none'){
+    $target=if($outcome.extra_path){$outcome.extra_path}else{$file.FullName}
+    try{Invoke-ToolboxCaptureAfterAction -Path $target -Action $options.AfterAction | Out-Null}catch{}
+}
 exit 0

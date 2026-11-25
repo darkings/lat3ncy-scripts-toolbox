@@ -25,7 +25,7 @@ if(-not(Test-ToolboxModuleEnabled -Module ocr -RepoRoot (Split-Path (Split-Path 
 
 trap {
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
-  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  Show-ToolboxFailureToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
   # 已通过系统 Toast 统一提示，避免再触发 Raycast 自带的错误气泡
   exit 0
 }
@@ -91,7 +91,7 @@ if ($mode -eq 'rapidocr')
   $ocrScript = Join-Path $PSScriptRoot 'ocr\ocr.py'
   if (-not (Test-Path -LiteralPath $ocrScript -PathType Leaf))
   {
-    Show-SystemToast -Title '× OCR 失败' -Message 'OCR 脚本不存在' | Out-Null
+    Show-ToolboxFailureToast -Title '× OCR 失败' -Message 'OCR 脚本不存在' | Out-Null
     exit 0
   }
 
@@ -134,7 +134,7 @@ if ($mode -eq 'rapidocr')
   }
   if (-not $pythonExe)
   {
-    Show-SystemToast -Title '× OCR 失败' -Message '未找到 Python 运行环境' | Out-Null
+    Show-ToolboxFailureToast -Title '× OCR 失败' -Message '未找到 Python 运行环境' | Out-Null
     exit 0
   }
 
@@ -167,7 +167,8 @@ if ($mode -eq 'rapidocr')
   Write-OcrDebug ('ps1 mode=rapidocr user={0} python={1} result={2}' -f $env:USERNAME, $pythonExe, $resultFile)
 
   $prefixLine = if ($hostPrefix.Count) { ($hostPrefix -join ' ') + ' ' } else { '' }
-  $cmdLine = '"{0}" {1}"{2}" --no-screenshot --result-file "{3}" --notify-on-done' -f $pythonExe, $prefixLine, $ocrScript, $resultFile
+  $notifyMode = Get-ToolboxRaycastNotifyMode
+  $cmdLine = '"{0}" {1}"{2}" --no-screenshot --result-file "{3}" --notify-mode {4}' -f $pythonExe, $prefixLine, $ocrScript, $resultFile, $notifyMode
   $spawned = $false
   try
   {
@@ -190,7 +191,7 @@ if ($mode -eq 'rapidocr')
     } catch
     {
       Write-OcrDebug ('fallback threw: {0}' -f $_.Exception.Message)
-      Show-SystemToast -Title '× OCR 失败' -Message ('无法启动 OCR 进程：' + $_.Exception.Message) | Out-Null
+      Show-ToolboxFailureToast -Title '× OCR 失败' -Message ('无法启动 OCR 进程：' + $_.Exception.Message) | Out-Null
     }
   }
 

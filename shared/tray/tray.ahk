@@ -36,6 +36,7 @@ class TrayHost {
     static Inited := false
     static NextUid := 1
     static TaskbarCreatedMsg := 0
+    static SendIconOverride := 0  ; isolated test seam
 
     ; ---------------- 初始化 ----------------
     static Init() {
@@ -199,6 +200,8 @@ class TrayHost {
     }
 
     static SendIcon(action, uid, hIcon, tip) {
+        if (this.SendIconOverride)
+            return this.SendIconOverride.Call(action, uid, hIcon, tip)
         nid := this.MakeNid(uid, hIcon, tip)
         return DllCall("shell32\Shell_NotifyIconW", "UInt", action, "Ptr", nid, "Int") != 0
     }

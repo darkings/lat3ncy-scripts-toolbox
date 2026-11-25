@@ -15,7 +15,7 @@ if(-not(Test-ToolboxRaycastCommandEnabled -Command 'restart-autohotkey')){exit 0
 
 trap {
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
-  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  Show-ToolboxFailureToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
   exit 1
 }
 
@@ -230,6 +230,6 @@ $pids = foreach ($p in $reloadedProcesses) { if ($p.ProcessId) { $p.ProcessId } 
 $processIds = ($pids | Sort-Object -Unique) -join ', '
 if (-not $processIds) { $processIds = '已由实例标记确认（CIM 不可用）' }
 # silent 会关 Raycast 窗口。成功也走系统 Toast，不再弹共享 HUD / stdout。
-Show-SystemToast -Title '✓ AutoHotkey + IME HUD 已重载' -Message ("AHK PID: {0}" -f $processIds) | Out-Null
+Show-ToolboxSuccessToast -Title '✓ AutoHotkey + IME HUD 已重载' -Message ("AHK PID: {0}" -f $processIds) | Out-Null
 
 } finally {if($restartOwned){$restartLease.ReleaseMutex()};$restartLease.Dispose()}

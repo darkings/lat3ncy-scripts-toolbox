@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,7 +17,8 @@ import toolbox_configuration as config
 COMMANDS = ('screenshot', 'record-screen', 'screenshot-ocr', 'screenshot-translate', 'next-wallpaper', 'toggle-rgb')
 MAINTENANCE = ('restart-autohotkey', 'reload-ime-hud', 'diagnose-ime-hud-anchor', 'fix-rdp-clipboard-prompt')
 NAMES = COMMANDS + MAINTENANCE
-FIELDS = {'general.enabled', *('commands.' + x.replace('-', '_') for x in COMMANDS),
+FIELDS = {'general.enabled', 'notify.mode', 'diagnostics.scope',
+          *('commands.' + x.replace('-', '_') for x in COMMANDS),
           *('maintenance.' + x.replace('-', '_') for x in MAINTENANCE)}
 HOST = str(Path(os.environ.get('SystemRoot', 'C:/Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe')
 
@@ -25,7 +27,10 @@ class RaycastCatalogTests(unittest.TestCase):
     def test_public_catalog_covers_tracked_commands_except_always_available_settings(self):
         spec = config.MODULES['raycast']
         self.assertEqual(FIELDS, {f['key'] for f in spec['fields']})
-        self.assertTrue(all(f['type'] == 'bool' and f['default'] is True for f in spec['fields']))
+        self.assertTrue(all(f['type'] == 'bool' and f['default'] is True
+                            for f in spec['fields'] if f['type'] == 'bool'))
+        self.assertEqual({'notify.mode', 'diagnostics.scope'},
+                         {f['key'] for f in spec['fields'] if f['type'] == 'string'})
         tracked = subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', 'tools/raycast-scripts/*.ps1']).decode().splitlines()
         top = {Path(p).stem for p in tracked if len(Path(p).parts) == 3}
         self.assertEqual(set(NAMES) | {'toolbox-settings'}, top)
@@ -118,6 +123,90 @@ class RaycastPolicyTests(unittest.TestCase):
                 self.assertEqual(1, run.returncode); self.assertNotIn(b'Restart done', run.stdout)
             else:
                 self.assertEqual(0, run.returncode); self.assertIn(b'Restart done', run.stdout)
+
+
+@unittest.skipUnless(os.name == 'nt', 'Windows PowerShell option consumer')
+class RaycastScriptOptionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name) / 'repo with spaces'
+        self.scripts = self.repo / 'tools/raycast-scripts'
+        (self.scripts / '_lib').mkdir(parents=True)
+        for name in ('settings.ps1', 'notify.ps1'):
+            shutil.copyfile(ROOT / 'tools/raycast-scripts' / '_lib' / name, self.scripts / '_lib' / name)
+        self.path = self.scripts / 'config.toml'
+        self.probe = self.repo / 'options.ps1'
+        self.probe.write_text(
+            'param([string]$Helper,[string]$Notify,[string]$Repo)\n'
+            '. $Helper\n. $Notify\n'
+            'function Show-SystemToast { param([string]$Title,[string]$Message) Write-Host "TOAST:$Title"; return $true }\n'
+            '"MODE=" + (Get-ToolboxRaycastNotifyMode -RepoRoot $Repo)\n'
+            '"SCOPE=" + (Get-ToolboxRaycastDiagnosticScope -RepoRoot $Repo)\n'
+            '"SUCCESS=" + [bool](Show-ToolboxSuccessToast -Title ok -Message x)\n'
+            '"FAILURE=" + [bool](Show-ToolboxFailureToast -Title bad -Message x)\n',
+            encoding='ascii')
+
+    def run_probe(self):
+        run = subprocess.run([HOST, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(self.probe),
+                              str(self.scripts / '_lib' / 'settings.ps1'),
+                              str(self.scripts / '_lib' / 'notify.ps1'), str(self.repo)],
+                             capture_output=True, timeout=15)
+        self.assertEqual(0, run.returncode, run.stderr.decode(errors='replace'))
+        return run.stdout.decode()
+
+    def test_defaults_match_schema_and_committed_config(self):
+        spec = {f['key']: f for f in config.MODULES['raycast']['fields']}
+        self.assertEqual(['success', 'failure', 'silent'], spec['notify.mode']['choices'])
+        self.assertEqual(['brief', 'full'], spec['diagnostics.scope']['choices'])
+        raw = (ROOT / 'tools/raycast-scripts/config.toml').read_bytes()
+        parsed = tomllib.loads(raw.decode('utf-8-sig'))
+        self.assertEqual(spec['notify.mode']['default'], parsed['notify']['mode'])
+        self.assertEqual(spec['diagnostics.scope']['default'], parsed['diagnostics']['scope'])
+        result = self.run_probe()
+        self.assertIn('MODE=success', result)
+        self.assertIn('SCOPE=full', result)
+
+    def test_success_failure_and_silent_modes_match_runtime(self):
+        for mode, success, failure in (('success', 'True', 'True'), ('failure', 'False', 'True'), ('silent', 'False', 'False')):
+            self.path.write_bytes(config.render(b'', 'raycast', {
+                'notify.mode': mode, 'diagnostics.scope': 'brief'}))
+            result = self.run_probe()
+            self.assertIn('MODE=' + mode, result)
+            self.assertIn('SCOPE=brief', result)
+            self.assertIn('SUCCESS=' + success, result)
+            self.assertIn('FAILURE=' + failure, result)
+            self.assertEqual(int(success == 'True'), result.count('TOAST:ok'))
+            self.assertEqual(int(failure == 'True'), result.count('TOAST:bad'))
+
+    def test_invalid_option_values_fall_back_and_do_not_break_entry_gate(self):
+        self.path.write_text('[notify]\nmode = "loud"\n[diagnostics]\nscope = "tiny"\n')
+        result = self.run_probe()
+        self.assertIn('MODE=success', result)
+        self.assertIn('SCOPE=full', result)
+
+
+class RaycastOptionWiringTests(unittest.TestCase):
+    def test_entries_use_shared_wrappers_and_ocr_forwards_mode(self):
+        tracked = subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', 'tools/raycast-scripts/*.ps1']).decode().splitlines()
+        entries = [Path(p).stem for p in tracked if len(Path(p).parts) == 3]
+        for name in entries:
+            if name == 'toolbox-settings':
+                continue
+            source = (ROOT / 'tools/raycast-scripts' / (name + '.ps1')).read_text('utf-8-sig')
+            if name == 'diagnose-ime-hud-anchor':
+                self.assertIn('Get-ToolboxRaycastDiagnosticScope', source)
+                self.assertIn('Write-DiagnosticDetail', source)
+            else:
+                self.assertIn('Show-ToolboxFailureToast', source)
+                self.assertNotIn('Show-SystemToast -Title', source)
+        ocr_ps = (ROOT / 'tools/raycast-scripts/screenshot-ocr.ps1').read_text('utf-8-sig')
+        self.assertIn('--notify-mode {4}', ocr_ps)
+        ocr_py = (ROOT / 'tools/raycast-scripts/ocr/ocr.py').read_text('utf-8-sig')
+        self.assertIn("'--notify-mode' in args", ocr_py)
+        for helper in ('settings.ps1', 'notify.ps1'):
+            helper_text = (ROOT / 'tools/raycast-scripts/_lib' / helper).read_text('utf-8-sig')
+            self.assertIn('Get-ToolboxRaycastNotifyMode' if helper == 'settings.ps1' else 'Get-ToolboxNotifyMode', helper_text)
 
 
 if __name__ == '__main__': unittest.main()

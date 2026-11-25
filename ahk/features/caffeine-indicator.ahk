@@ -26,6 +26,7 @@ class CaffeineIndicator {
     static ConfigPath := ""
     static PollCallback := 0
     static SettingCallback := 0
+    static Host := 0  ; injectable tray backend for isolated tests
 
     ; ---------------- 生命周期 ----------------
     static Start() {
@@ -162,11 +163,26 @@ class CaffeineIndicator {
 
     ; ---------------- 显示 / 隐藏 ----------------
     static Show() {
-        return TrayHost.Add(this.IconId, this.IconPath(), this.TipText())
+        return this.TrayAdd(this.IconPath(), this.TipText())
     }
 
     static Hide() {
-        return TrayHost.Remove(this.IconId)
+        return this.TrayRemove()
+    }
+
+    static TrayAdd(path, tip) {
+        host := this.Host ? this.Host : TrayHost
+        return host.Add(this.IconId, path, tip)
+    }
+
+    static TrayRemove() {
+        host := this.Host ? this.Host : TrayHost
+        return host.Remove(this.IconId)
+    }
+
+    static TraySetIcon(path) {
+        host := this.Host ? this.Host : TrayHost
+        return host.SetIcon(this.IconId, path)
     }
 
     static TipText() {
@@ -201,7 +217,7 @@ class CaffeineIndicator {
             return 0
         }
         if (area = "ImmersiveColorSet") {
-            ok := TrayHost.SetIcon(this.IconId, this.IconPath())
+            ok := this.TraySetIcon(this.IconPath())
             this.Log("theme swap -> " (ok ? "OK" : "FAIL"))
         }
         return 0

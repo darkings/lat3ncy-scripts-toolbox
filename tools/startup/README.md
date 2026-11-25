@@ -60,6 +60,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/startup/Rebuild-To
 
 完整候选验证后，复用 `Deployment.Core.ps1` 的备份、逐文件替换与失败恢复事务。候选在停止前和停止后再次校验；生产产物也需读回哈希并通过 self-test。AHK 进程持有创建身份已核对的句柄，HUD 退出消息只发给已验证的窗口所属 PID，最终确认实例标记、HUD PING 和光标助手归属。
 
+复合发布的手动入口为 `Restore-ToolboxHudRelease.ps1`：无参数列出 `hud-*` 备份批次，`-Preview <release>` 查看逐文件恢复动作与冲突，`-RollbackRelease <release>` 恢复所选批次。列表会标注损坏或不兼容的备份；预览不改动任何文件。存在后来写入时拒绝回滚并保留现场，实际回滚先备份当前字节，失败可恢复；它不会回退工作区源码或个人配置。
+
 发布范围严格限定 `shared/notify/anchor-locator.exe` 与 `tools/ime-hud-winui/out/` 内的产物。备份位于 `.tmp/releases/hud-<guid>/`，其 manifest 的路径相对仓库根；与旧的单独 HUD 发布备份范围不同，不能交给旧入口的 `-RollbackRelease`。替换或运行检查失败时，自动恢复本次写入且未被后续写入改变的文件并重启原运行链路；冲突时保留较新文件和备份，报告错误，需审阅现场。构建目录与备份均保留作证据，不自动清除。恢复产物不会回退工作区源码或个人配置。
 
 故障回归在临时仓库中执行真实文件替换/备份/恢复，运行进程为桩；覆盖构建、候选/安装自检、部分写入、源文件漂移、后续写入冲突、发布锁、PID 变化与跨宿主模块路径。它们不代表曾在生产实例上制造故障。

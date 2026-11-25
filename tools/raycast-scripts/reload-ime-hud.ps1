@@ -16,7 +16,7 @@ if(-not(Test-ToolboxRaycastCommandEnabled -Command 'reload-ime-hud')){exit 0}
 
 trap {
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
-  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  Show-ToolboxFailureToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
   exit 1
 }
 
@@ -27,4 +27,4 @@ Invoke-ToolboxReleaseProcess -Exe $hostExe -TimeoutMs 600000 -Arguments @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
     (Join-Path $repositoryRoot 'tools\startup\Rebuild-ToolboxHud.ps1')
 )
-Show-SystemToast -Title '✓ IME HUD 已重载' -Message '构建与验证通过，HUD 和锚点助手已部署，运行检查正常。' | Out-Null
+Show-ToolboxSuccessToast -Title '✓ IME HUD 已重载' -Message '构建与验证通过，HUD 和锚点助手已部署，运行检查正常。' | Out-Null

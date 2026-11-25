@@ -264,7 +264,9 @@ internal sealed class ToolboxSettingsWindow : Window
                     {
                         var diagnostic = new DiagnosticSettingsForm(_lifetime.Token).Root;
                         var maintenance = new MaintenanceSettingsForm(_lifetime.Token, RunMaintenanceReloadAsync,
-                            module => _moduleValues.GetValueOrDefault(module) && !_reloading && !_startingReload, SelectModule).Root;
+                            module => _moduleValues.GetValueOrDefault(module) && !_reloading && !_startingReload, SelectModule,
+                            () => PreferencesBridge.RunMaintenanceCenterAsync(_lifetime.Token),
+                            () => PreferencesBridge.RequestMaintenanceCancelAsync(_lifetime.Token)).Root;
                         form.Root.Children.Add(diagnostic); form.Root.Children.Add(maintenance);
                         _searchSections["general:diagnostics"] = diagnostic; _searchSections["general:maintenance"] = maintenance;
                     }

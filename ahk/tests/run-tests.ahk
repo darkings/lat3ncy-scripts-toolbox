@@ -1,4 +1,4 @@
-﻿#Requires AutoHotkey v2.0
+#Requires AutoHotkey v2.0
 #Warn VarUnset, StdOut
 #Include ..\main.ahk
 
@@ -1280,7 +1280,7 @@ restartAhkSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\restart-a
 toggleRgbSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\toggle-rgb.ps1", "UTF-8")
 nextWallpaperSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\next-wallpaper.ps1", "UTF-8")
 AssertContains(restartAhkSource, "@raycast.mode silent", "restart AutoHotkey stays silent so Raycast closes")
-AssertContains(restartAhkSource, "Show-SystemToast -Title", "restart AutoHotkey success uses system toast")
+AssertContains(restartAhkSource, "Show-ToolboxSuccessToast -Title", "restart AutoHotkey success uses shared toast wrapper")
 AssertContains(restartAhkSource, "IME HUD 已重载", "restart AutoHotkey reports the IME HUD reload too")
 ; 常驻 HUD 跑的是旧 exe，不一起结束的话新协议永远不生效。
 AssertContains(restartAhkSource, "ImeHudWinUi.exe", "restart AutoHotkey also targets the resident IME HUD")
@@ -1294,7 +1294,7 @@ AssertNotContains(restartAhkSource, "Write-Output", "restart AutoHotkey does not
 reloadImeHudSource := FileRead(A_ScriptDir "\..\..\tools\raycast-scripts\reload-ime-hud.ps1", "UTF-8")
 AssertNotContains(reloadImeHudSource, "Write-Host", "reload IME HUD writes nothing to stdout")
 AssertNotContains(reloadImeHudSource, "Write-Output", "reload IME HUD does not use Write-Output either")
-AssertContains(reloadImeHudSource, "Show-SystemToast", "reload IME HUD reports through the system toast only")
+AssertContains(reloadImeHudSource, "Show-ToolboxSuccessToast", "reload IME HUD reports through the shared toast wrapper")
 AssertNotContains(restartAhkSource, "Show-ToolboxNotify", "restart AutoHotkey no longer uses shared HUD")
 AssertNotContains(restartAhkSource, "Write-Output `"✓ $successText`"", "restart AutoHotkey no longer falls back to stdout HUD")
 AssertContains(toggleRgbSource, "@raycast.mode silent", "toggle RGB stays silent so Raycast closes")

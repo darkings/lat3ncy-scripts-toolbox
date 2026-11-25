@@ -19,7 +19,7 @@ if(-not(Test-ToolboxRaycastCommandEnabled -Command 'toggle-rgb')){exit 0}
 
 trap {
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { 'Raycast 脚本' }
-  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  Show-ToolboxFailureToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
   exit 1
 }
 
@@ -119,7 +119,7 @@ if (-not $flagExists) {
       throw
     }
     if (-not $ok) {
-      Show-SystemToast -Title '× Toggle RGB Lights 执行失败' -Message '已记下关灯状态，但这次没推上全黑' | Out-Null
+      Show-ToolboxFailureToast -Title '× Toggle RGB Lights 执行失败' -Message '已记下关灯状态，但这次没推上全黑' | Out-Null
       exit 1
     }
   }

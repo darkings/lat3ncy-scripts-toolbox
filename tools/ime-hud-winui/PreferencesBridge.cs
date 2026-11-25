@@ -44,6 +44,19 @@ internal static class PreferencesBridge
     public static Task<JsonElement> RunCaptureActivityAsync(CancellationToken cancellation) =>
         RunHelperAsync("toolbox_capture_activity.py", null, cancellation, Array.Empty<string>(), 16384);
 
+    public static Task<JsonElement> RunCaptureRecentActionAsync(string mode, string action, CancellationToken cancellation)
+    {
+        if (mode is not ("Screenshot" or "Record") || action is not ("open" or "reveal" or "copy"))
+            throw new ArgumentException("settings_unavailable");
+        return RunHelperAsync("toolbox_capture_activity.py", new { mode, action }, cancellation, Array.Empty<string>(), 16384);
+    }
+
+    public static Task<JsonElement> RunMaintenanceCenterAsync(CancellationToken cancellation) =>
+        RunHelperAsync("maintenance_center.py", null, cancellation, Array.Empty<string>(), 16384);
+
+    public static Task<JsonElement> RequestMaintenanceCancelAsync(CancellationToken cancellation) =>
+        RunHelperAsync("maintenance_center.py", new { cancel = true }, cancellation, Array.Empty<string>(), 16384);
+
     public static Task<JsonElement> RunSearchCatalogAsync(CancellationToken cancellation) =>
         RunHelperAsync("toolbox_settings_search.py", null, cancellation, Array.Empty<string>(), 131072);
 

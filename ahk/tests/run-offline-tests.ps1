@@ -21,6 +21,7 @@ foreach($relative in @(
     'tools\startup\tests\PowerPolicyHeartbeat.Tests.ps1',
     'tools\startup\tests\Deployment.Tests.ps1',
     'tools\startup\tests\DeploymentLease.Tests.ps1',
+    'tools\startup\tests\HudReleaseRollback.Tests.ps1',
     'tools\build\tests\ManagedBuild.Tests.ps1',
     'tools\power-policy\tests\Recovery.Tests.ps1',
     'tools\theme-scheduler\tests\ThemeEntry.Tests.ps1'

@@ -26,5 +26,5 @@ public static class ToolboxTextCommand {
         throw 'Reload or start this toolbox before using Screenshot Translate'
     }
 } catch {
-    Show-SystemToast -Title 'Screenshot Translate unavailable' -Message 'Start or reload this toolbox, then try again.' | Out-Null
+    Show-ToolboxFailureToast -Title 'Screenshot Translate unavailable' -Message 'Start or reload this toolbox, then try again.' | Out-Null
 }

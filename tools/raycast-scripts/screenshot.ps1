@@ -16,7 +16,7 @@ if(-not(Test-ToolboxRaycastCommandEnabled -Command 'screenshot')){exit 0}
 trap {
   if($session -and $repositoryRoot){try{Set-ToolboxCaptureResult $repositoryRoot Screenshot $session.id failed launch_failed}catch{}}
   $cmdName = if ($MyInvocation.MyCommand.Name) { $MyInvocation.MyCommand.Name } else { "Raycast 脚本" }
-  Show-SystemToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
+  Show-ToolboxFailureToast -Title "× $cmdName 执行失败" -Message $_.Exception.Message | Out-Null
   exit 1
 }
 

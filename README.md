@@ -76,7 +76,7 @@ python tools/diagnostics/doctor.py
 | [工具箱设置](tools/settings/README.md) | 自动保存、功能开关、快捷键和密钥 |
 | [启动与维护](tools/startup/README.md) | 登录自启、看护、HUD 重建和电源重载 |
 | [诊断](tools/diagnostics/README.md) / [测试](tools/validation/README.md) | 排查问题和开发验证 |
-| [最新更新](docs/releases/2026-11-24-toolbox.md) | 已完成的改动与验证范围 |
+| [最新更新](docs/releases/2026-11-25-capture-results.md) | 已完成的改动与验证范围 |
 | [后续计划](docs/ROADMAP.md) | 下一阶段的更新方向 |
 
 模块细节：[翻译](tools/translate/README.md)、[朗读](tools/tts/README.md)、[灯光](tools/rgb/README.md)、[电源](tools/power-policy/README.md)。
